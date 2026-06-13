@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wolf-cryptobot"
+version = "1.0.0"
+description = "Modular crypto signal tracking bot with a REST API"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+    "apscheduler>=3.10",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+
+[tool.setuptools]
+packages = ["wolf", "wolf.state", "wolf.exchange", "wolf.detectors", "wolf.notify", "wolf.api"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

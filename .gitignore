@@ -1,0 +1,27 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environment
+.env
+.venv/
+venv/
+
+# Runtime state (atomic JSON store) — never commit live state
+state_data/
+*.tmp
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

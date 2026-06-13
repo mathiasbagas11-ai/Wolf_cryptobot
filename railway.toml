@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -m wolf.main"
+restartPolicyType = "always"
+restartPolicyMaxRetries = 10
+
+[nixpacks]
+pythonVersion = "3.11"
