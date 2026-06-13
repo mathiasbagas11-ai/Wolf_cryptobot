@@ -46,3 +46,24 @@ def test_volume_ratio_detects_spike():
     candles = [Candle(time=i, open=1, high=1, low=1, close=1, volume=10.0) for i in range(21)]
     candles.append(Candle(time=21, open=1, high=1, low=1, close=1, volume=50.0))
     assert math.isclose(ind.volume_ratio(candles, 20), 5.0, rel_tol=1e-6)
+
+
+def test_rsi_series_aligned_with_nan_lead():
+    vals = list(range(1, 30))
+    series = ind.rsi_series(vals, 14)
+    assert len(series) == len(vals)
+    assert all(math.isnan(x) for x in series[:14])
+    assert series[14] == 100.0  # strictly increasing -> RSI 100
+
+
+def test_bollinger_width_smaller_when_flat():
+    flat = [100.0] * 30
+    volatile = [100 + (10 if i % 2 else -10) for i in range(30)]
+    _, _, _, w_flat = ind.bollinger_bands(flat, 20)
+    _, _, _, w_vol = ind.bollinger_bands(volatile, 20)
+    assert w_flat < w_vol
+
+
+def test_bollinger_insufficient_data_nan():
+    _, _, _, w = ind.bollinger_bands([1, 2, 3], 20)
+    assert math.isnan(w)

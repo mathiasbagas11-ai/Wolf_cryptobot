@@ -48,8 +48,9 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/models.py` | Typed `Signal`/`Candle`/`Status` dataclasses & enums |
 | `wolf/state/store.py` | Atomic, thread-safe JSON store (the **only** persistence layer) |
 | `wolf/exchange/binance.py` | Binance REST client with narrow error handling |
-| `wolf/indicators.py` | Pure indicator functions (RSI, ATR, EMA, MACD…) |
-| `wolf/detectors/` | One detector per module (`momentum.py`, …) |
+| `wolf/indicators.py` | Pure indicator functions (RSI, ATR, EMA, MACD, Bollinger…) |
+| `wolf/structure.py` | Price-action helpers (swing points, liquidity sweep, RSI divergence) |
+| `wolf/detectors/` | One detector per module (`momentum`, `prepump`, `predump`, `scalp`, `swing`) |
 | `wolf/tracker.py` | Signal lifecycle engine + stats — the core |
 | `wolf/notify/telegram.py` | Telegram notifier + message builders |
 | `wolf/screener.py` | Thin orchestration (replaces the old 11k-line hub) |
@@ -58,6 +59,25 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/main.py` | Worker entrypoint |
 
 ---
+
+## Detectors
+
+Each detector implements the `Detector` contract (`evaluate(symbol, candles) ->
+SignalCandidate | None`) in its own module. The screener runs them all and keeps
+the highest-scoring candidate per symbol. Scoring/thresholds follow the original
+bot's design, re-expressed on a single candle series so each detector is pure
+and unit-tested.
+
+| Detector | Bias | Trigger | Threshold |
+|----------|------|---------|-----------|
+| `MOMENTUM` | both | Range breakout + RSI/MACD/volume confirmation | ≥65 |
+| `PREPUMP` | LONG | Bollinger squeeze + volume coil + momentum (pre-breakout accumulation) | ≥65 |
+| `PREDUMP` | SHORT | Bearish RSI divergence + over-extension + rejection (distribution) | ≥65 |
+| `SCALP` | both | Liquidity sweep (stop-hunt) + volume spike + RSI extreme | ≥60 |
+| `SWING` | both | Trend (EMA align) + pullback to EMA20 + rejection candle | ≥65 |
+
+Add a detector by writing one module and appending it to `default_detectors()`
+in `wolf/detectors/__init__.py` — nothing else changes.
 
 ## Signal lifecycle
 

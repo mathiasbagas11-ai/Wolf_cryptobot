@@ -15,6 +15,8 @@ from typing import Optional, Sequence
 
 from wolf.models import Candle
 
+__all__ = ["SignalCandidate", "Detector", "build_targets"]
+
 
 @dataclass
 class SignalCandidate:
@@ -50,3 +52,23 @@ class Detector(ABC):
 
     def _ready(self, candles: Sequence[Candle]) -> bool:
         return len(candles) >= self.min_candles
+
+
+def build_targets(
+    entry: float,
+    atr: float,
+    is_long: bool,
+    sl_mult: float = 1.5,
+    tp_mults: tuple[float, ...] = (1.5, 3.0),
+) -> tuple[float, float, list[dict]]:
+    """Build ``(sl, final_tp, tp_ladder)`` from ATR.
+
+    Shared by every detector so TP/SL sizing is consistent and defined once.
+    """
+    if is_long:
+        sl = entry - atr * sl_mult
+        ladder = [{"level": i + 1, "price": entry + atr * m} for i, m in enumerate(tp_mults)]
+    else:
+        sl = entry + atr * sl_mult
+        ladder = [{"level": i + 1, "price": entry - atr * m} for i, m in enumerate(tp_mults)]
+    return sl, ladder[-1]["price"], ladder

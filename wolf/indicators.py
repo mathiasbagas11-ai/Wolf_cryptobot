@@ -82,6 +82,75 @@ def atr(candles: Sequence[Candle], period: int = 14) -> float:
     return sum(trs[-period:]) / period
 
 
+def rsi_series(values: Sequence[float], period: int = 14) -> list[float]:
+    """RSI at every bar (aligned to ``values``); leading bars are NaN.
+
+    Useful for divergence detection where the RSI trajectory matters, not just
+    its latest value.
+    """
+    n = len(values)
+    out = [float("nan")] * n
+    if n <= period:
+        return out
+    gains = 0.0
+    losses = 0.0
+    for i in range(1, period + 1):
+        delta = values[i] - values[i - 1]
+        if delta >= 0:
+            gains += delta
+        else:
+            losses -= delta
+    avg_gain = gains / period
+    avg_loss = losses / period
+
+    def _rsi(g: float, l: float) -> float:
+        if l == 0:
+            return 100.0
+        return 100 - (100 / (1 + g / l))
+
+    out[period] = _rsi(avg_gain, avg_loss)
+    for i in range(period + 1, n):
+        delta = values[i] - values[i - 1]
+        gain = max(delta, 0.0)
+        loss = max(-delta, 0.0)
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+        out[i] = _rsi(avg_gain, avg_loss)
+    return out
+
+
+def bollinger_bands(
+    values: Sequence[float], period: int = 20, mult: float = 2.0
+) -> tuple[float, float, float, float]:
+    """Return ``(upper, middle, lower, width)`` for the latest bar.
+
+    ``width`` is ``(upper - lower) / middle`` — a normalised band width used to
+    detect a volatility *squeeze* (consolidation before a breakout). All NaN if
+    there is insufficient data.
+    """
+    if len(values) < period or period <= 0:
+        nan = float("nan")
+        return (nan, nan, nan, nan)
+    window = list(values[-period:])
+    mid = sum(window) / period
+    variance = sum((v - mid) ** 2 for v in window) / period
+    std = variance ** 0.5
+    upper = mid + mult * std
+    lower = mid - mult * std
+    width = (upper - lower) / mid if mid else float("nan")
+    return (upper, mid, lower, width)
+
+
+def bb_width_series(values: Sequence[float], period: int = 20, mult: float = 2.0) -> list[float]:
+    """Normalised Bollinger band width at every bar (leading bars NaN)."""
+    n = len(values)
+    out = [float("nan")] * n
+    for i in range(period - 1, n):
+        _, _, _, width = bollinger_bands(values[: i + 1], period, mult)
+        out[i] = width
+    return out
+
+
 def macd(
     values: Sequence[float],
     fast: int = 12,

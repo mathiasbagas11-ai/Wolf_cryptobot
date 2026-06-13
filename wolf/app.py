@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from wolf.config import Settings
-from wolf.detectors import MomentumBreakoutDetector
+from wolf.detectors import default_detectors
 from wolf.exchange import BinanceClient
 from wolf.notify import TelegramNotifier
 from wolf.screener import Screener
@@ -40,8 +40,7 @@ def build_application(settings: Settings | None = None) -> Application:
     )
     notifier = TelegramNotifier(settings.telegram, timeout=settings.http_timeout)
     tracker = Tracker(store, client, settings.tracker, notify=notifier.on_event)
-    detectors = [MomentumBreakoutDetector()]
-    screener = Screener(client, tracker, detectors, notifier=notifier)
+    screener = Screener(client, tracker, default_detectors(), notifier=notifier)
 
     return Application(
         settings=settings,

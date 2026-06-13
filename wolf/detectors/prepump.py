@@ -1,0 +1,107 @@
+"""Pre-pump detector.
+
+Looks for quiet accumulation *before* a breakout up — the spirit of the old
+``detect_prepump``, expressed on a single candle series:
+
+* **Bollinger squeeze** — band width compressed near its recent minimum
+  (consolidation precedes expansion).               (30 pts)
+* **Volume coil** — a fresh volume spike after a quiet stretch.   (25 pts)
+* **OI/PA proxy → momentum** — rising RSI from neutral + bullish MACD. (20 pts)
+* **Money flow** — bullish RSI divergence (hidden accumulation).  (15 pts)
+* **Trend context** — price above its EMA50.                      (10 pts)
+
+Funding-rate and open-interest inputs from the original are intentionally left
+out of the candle-only contract; they can be layered in by a richer detector
+without touching this one. Threshold mirrors the original ≥65.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Optional, Sequence
+
+from wolf import indicators as ind
+from wolf import structure as struct
+from wolf.detectors.base import Detector, SignalCandidate, build_targets
+from wolf.models import Candle
+
+
+class PrePumpDetector(Detector):
+    name = "PREPUMP"
+    min_candles = 60
+
+    def __init__(self, score_threshold: int = 65, squeeze_ratio: float = 1.15) -> None:
+        self.score_threshold = score_threshold
+        # Current BB width must be within this multiple of the recent minimum.
+        self.squeeze_ratio = squeeze_ratio
+
+    def evaluate(self, symbol: str, candles: Sequence[Candle]) -> Optional[SignalCandidate]:
+        if not self._ready(candles):
+            return None
+        closes = ind.closes(candles)
+        price = closes[-1]
+        atr = ind.atr(candles, 14)
+        rsi = ind.rsi(closes, 14)
+        _, _, hist = ind.macd(closes)
+        if any(math.isnan(x) for x in (atr, rsi, hist)) or atr <= 0:
+            return None
+
+        score = 0
+        reasons: list[str] = []
+
+        # 1. Bollinger squeeze
+        widths = [w for w in ind.bb_width_series(closes, 20)[-30:] if not math.isnan(w)]
+        _, _, _, width = ind.bollinger_bands(closes, 20)
+        if widths and not math.isnan(width):
+            recent_min = min(widths)
+            if recent_min > 0 and width <= recent_min * self.squeeze_ratio:
+                score += 30
+                reasons.append("Bollinger squeeze — consolidation near range low")
+
+        # 2. Volume coil
+        vr = ind.volume_ratio(candles, 20)
+        if not math.isnan(vr) and vr >= 1.8:
+            score += 25
+            reasons.append(f"Volume coil released: {vr:.1f}x average")
+        elif not math.isnan(vr) and vr >= 1.3:
+            score += 12
+            reasons.append(f"Volume building: {vr:.1f}x average")
+
+        # 3. Momentum (RSI rising from neutral + MACD up)
+        if 50 <= rsi < 68 and hist > 0:
+            score += 20
+            reasons.append(f"Momentum building: RSI {rsi:.0f}, MACD positive")
+        elif hist > 0:
+            score += 8
+            reasons.append("MACD histogram positive")
+
+        # 4. Money flow — bullish divergence
+        div = struct.rsi_divergence(candles, lookback=25)
+        if div.bull_score >= 10:
+            score += 15
+            reasons.append("Bullish RSI divergence — hidden accumulation")
+
+        # 5. Trend context
+        ema50 = ind.ema(closes, 50)
+        if ema50 and price > ema50[-1]:
+            score += 10
+            reasons.append("Price above EMA50 — uptrend context")
+
+        if score < self.score_threshold:
+            return None
+
+        sl, tp, ladder = build_targets(price, atr, is_long=True, sl_mult=1.5, tp_mults=(2.0, 4.0))
+        return SignalCandidate(
+            symbol=symbol,
+            signal_type="PREPUMP",
+            direction="LONG",
+            entry_price=price,
+            tp=tp,
+            sl=sl,
+            score=min(score, 100),
+            strategy=self.name,
+            reasons=reasons,
+            confluence_level="HIGH" if score >= 85 else "MEDIUM",
+            entry_mode="MOMENTUM_NOW",
+            tps=ladder,
+        )
