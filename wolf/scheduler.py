@@ -64,4 +64,16 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
             coalesce=True,
             next_run_time=None,
         )
+
+    # Crypto news: post fresh headlines to the News topic.
+    if app.news is not None and app.notifier.enabled:
+        scheduler.add_job(
+            _guarded(lambda: app.notifier.notify_news(app.news.fetch_new()), "news"),
+            "interval",
+            minutes=app.settings.news.interval_min,
+            id="news",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=None,
+        )
     return scheduler

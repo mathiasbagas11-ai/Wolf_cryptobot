@@ -127,6 +127,37 @@ provider-agnostic (`wolf/ai/base.py`) with an Anthropic implementation
 official `anthropic` SDK). With no API key it degrades to an `ABSTAIN` verdict
 that never blocks a signal, so the bot runs unchanged with the AI layer off.
 
+## Telegram topics
+
+Messages route to forum topics with graceful fallback (own topic → a more
+general one → the main channel), so nothing is dropped when only some topics are
+configured:
+
+| Topic | Env var | Content |
+|-------|---------|---------|
+| New Signal | `NEW_SIGNAL_THREAD_ID` | freshly detected signals |
+| Market Update | `MARKET_UPDATE_THREAD_ID` | entry touched, TP hits |
+| Trade Report | `TRADE_REPORT_THREAD_ID` | win/loss resolutions |
+| News | `NEWS_THREAD_ID` | crypto headlines (opt-in, `NEWS_ENABLED=true`) |
+| System | `SYSTEM_THREAD_ID` | startup "online" + diagnostics |
+| Stats | `STATS_THREAD_ID` | periodic performance summary |
+
+`WHALE_THREAD_ID`, `RADAR_THREAD_ID`, `MAJORS_THREAD_ID` are recognised (so the
+old bot's config is accepted) but **reserved** — their content producers (whale
+tracker, market radar, majors session report) are not yet ported.
+
+The bot sends a startup message on boot, and Telegram API errors are logged with
+their description (e.g. "message thread not found") to make misconfiguration
+obvious in the logs.
+
+## Crypto news
+
+Optional (`NEWS_ENABLED=true`). A `NewsService` fetches headlines from a free,
+key-less source (CryptoCompare), de-duplicates against already-seen IDs in the
+state store, and posts only fresh ones to the News topic on an interval
+(`NEWS_INTERVAL_MIN`). Adding a provider is one `NewsSource` subclass + a registry
+entry.
+
 ## Signal lifecycle
 
 ```

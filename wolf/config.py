@@ -72,8 +72,15 @@ class TelegramSettings:
     new_signal_thread_id: str = ""
     market_update_thread_id: str = ""
     trade_report_thread_id: str = ""
+    news_thread_id: str = ""
     system_thread_id: str = ""   # startup / health / errors
     stats_thread_id: str = ""    # periodic performance summary
+    # Reserved to match the previous bot's topic set; their content producers
+    # (whale tracker, market radar, majors session report) are not yet ported,
+    # so these topics stay empty until those features land.
+    whale_thread_id: str = ""
+    radar_thread_id: str = ""
+    majors_thread_id: str = ""
     allowed_chat_ids: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -92,6 +99,9 @@ class TelegramSettings:
 
     def route_trade_report(self) -> str:
         return _first(self.trade_report_thread_id, self.signal_thread_id)
+
+    def route_news(self) -> str:
+        return _first(self.news_thread_id)
 
     def route_system(self) -> str:
         return _first(self.system_thread_id)
@@ -130,6 +140,16 @@ class TrackerSettings:
             "SCALP": self.timeout_scalp_h,
             "SWING": self.timeout_swing_h,
         }.get(signal_type.upper(), self.timeout_screener_h)
+
+
+@dataclass(frozen=True)
+class NewsSettings:
+    """Crypto-news posting configuration."""
+
+    enabled: bool = False
+    provider: str = "cryptocompare"  # free, key-less
+    interval_min: int = 30
+    max_items: int = 3
 
 
 @dataclass(frozen=True)
@@ -187,6 +207,7 @@ class Settings:
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
     ai: AISettings = field(default_factory=AISettings)
+    news: NewsSettings = field(default_factory=NewsSettings)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -198,9 +219,19 @@ class Settings:
             new_signal_thread_id=_env_str("NEW_SIGNAL_THREAD_ID"),
             market_update_thread_id=_env_str("MARKET_UPDATE_THREAD_ID"),
             trade_report_thread_id=_env_str("TRADE_REPORT_THREAD_ID"),
+            news_thread_id=_env_str("NEWS_THREAD_ID"),
             system_thread_id=_env_str("SYSTEM_THREAD_ID"),
             stats_thread_id=_env_str("STATS_THREAD_ID"),
+            whale_thread_id=_env_str("WHALE_THREAD_ID"),
+            radar_thread_id=_env_str("RADAR_THREAD_ID"),
+            majors_thread_id=_env_str("MAJORS_THREAD_ID"),
             allowed_chat_ids=_env_csv("ALLOWED_CHAT_IDS"),
+        )
+        news = NewsSettings(
+            enabled=_env_bool("NEWS_ENABLED", False),
+            provider=_env_str("NEWS_PROVIDER", "cryptocompare"),
+            interval_min=_env_int("NEWS_INTERVAL_MIN", 30),
+            max_items=_env_int("NEWS_MAX_ITEMS", 3),
         )
         tracker = TrackerSettings(
             dedup_minutes=_env_int("TRACKER_DEDUP_MINUTES", 30),
@@ -237,6 +268,7 @@ class Settings:
             telegram=telegram,
             tracker=tracker,
             ai=ai,
+            news=news,
         )
 
     def describe(self) -> dict:
@@ -244,7 +276,7 @@ class Settings:
         secret_names = {f.name for f in fields(self) if f.name.endswith(("_key", "_token"))}
         out: dict = {}
         for f in fields(self):
-            if f.name in ("telegram", "tracker", "ai"):
+            if f.name in ("telegram", "tracker", "ai", "news"):
                 continue
             value = getattr(self, f.name)
             if f.name in secret_names or f.name.endswith("_anon_key"):
@@ -253,4 +285,5 @@ class Settings:
                 out[f.name] = value
         out["telegram_enabled"] = self.telegram.enabled
         out["ai_enabled"] = self.ai.enabled
+        out["news_enabled"] = self.news.enabled
         return out

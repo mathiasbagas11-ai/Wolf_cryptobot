@@ -9,6 +9,7 @@ set of components and there is no module-level global state.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 from wolf.ai import DebateValidator, build_llm_client
 from wolf.config import Settings
@@ -20,6 +21,7 @@ from wolf.exchange import (
     MarketDataClient,
 )
 from wolf.market import ContextProvider
+from wolf.news import NewsService, build_news_source
 from wolf.notify import TelegramNotifier
 from wolf.screener import Screener
 from wolf.state import StateStore
@@ -34,6 +36,7 @@ class Application:
     notifier: TelegramNotifier
     tracker: Tracker
     screener: Screener
+    news: Optional[NewsService] = None
 
 
 def _build_market_client(settings: Settings) -> MarketDataClient:
@@ -91,6 +94,12 @@ def build_application(settings: Settings | None = None) -> Application:
         veto_min_confidence=settings.ai.veto_min_confidence,
     )
 
+    news = None
+    if settings.news.enabled:
+        source = build_news_source(settings.news.provider, timeout=settings.http_timeout)
+        if source is not None:
+            news = NewsService(source, store, max_items=settings.news.max_items)
+
     return Application(
         settings=settings,
         store=store,
@@ -98,4 +107,5 @@ def build_application(settings: Settings | None = None) -> Application:
         notifier=notifier,
         tracker=tracker,
         screener=screener,
+        news=news,
     )

@@ -128,6 +128,11 @@ class TelegramNotifier:
     def notify_stats(self, stats: dict) -> None:
         self.send(self._stats_card(stats), self._settings.route_stats())
 
+    def notify_news(self, items) -> None:
+        if not items:
+            return
+        self.send(self._news_card(items), self._settings.route_news())
+
     def on_event(self, signal: Signal, event: str, info: dict) -> None:
         """Adapter matching :data:`wolf.tracker.NotifyFn`."""
         if event == "ACTIVATED":
@@ -201,6 +206,17 @@ class TelegramNotifier:
             f"{head} · {_esc(s.status)}</b> · {_esc(s.symbol)} {_esc(s.direction)}\n"
             f"PnL <b>{pnl:+.2f}%</b> · held {hold:.1f}h · {_esc(s.strategy)}"
         )
+
+    def _news_card(self, items) -> str:
+        lines = [f"📰 <b>CRYPTO NEWS</b>\n{_DIVIDER}"]
+        for it in items:
+            title = _esc(it.title)
+            src = f" — <i>{_esc(it.source)}</i>" if it.source else ""
+            if it.url:
+                lines.append(f"• <a href=\"{_esc(it.url)}\">{title}</a>{src}")
+            else:
+                lines.append(f"• {title}{src}")
+        return "\n".join(lines)
 
     def _stats_card(self, stats: dict) -> str:
         lines = [
