@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from wolf.account import PaperAccount
 from wolf.ai import DebateValidator, build_llm_client
 from wolf.config import Settings
 from wolf.detectors import default_detectors
@@ -84,15 +85,29 @@ def build_application(settings: Settings | None = None) -> Application:
     notifier = TelegramNotifier(
         settings.telegram, timeout=settings.http_timeout, tz=settings.timezone
     )
-    tracker = Tracker(store, client, settings.tracker, notify=notifier.on_event)
+    account = PaperAccount(
+        store,
+        start_balance=settings.paper_start_balance,
+        risk_pct=settings.paper_risk_pct,
+    )
+    tracker = Tracker(store, client, settings.tracker, notify=notifier.on_event, account=account)
     context_provider = ContextProvider(client)
 
-    validator = None
-    if settings.ai.enabled:
-        llm = build_llm_client(
-            settings.ai.provider, settings.anthropic_api_key, settings.ai.model
+    def _role_client(role):
+        return build_llm_client(
+            role.provider, settings.api_key_for(role.provider), role.model
         )
-        validator = DebateValidator(llm)
+
+    validator = None
+    analysis_llm = None
+    if settings.ai.enabled:
+        validator = DebateValidator(
+            bull=_role_client(settings.ai.bull),
+            bear=_role_client(settings.ai.bear),
+            arbiter=_role_client(settings.ai.arbiter),
+        )
+        # Reuse the (cheap) arbiter model to narrate market/session reports.
+        analysis_llm = _role_client(settings.ai.arbiter)
 
     screener = Screener(
         client, tracker, default_detectors(), notifier=notifier,
@@ -109,9 +124,9 @@ def build_application(settings: Settings | None = None) -> Application:
 
     r = settings.reports
     tz = settings.timezone
-    majors = MajorsReporter(client, tz=tz) if r.majors_enabled else None
+    majors = MajorsReporter(client, tz=tz, llm=analysis_llm) if r.majors_enabled else None
     radar = MarketRadar(client, min_quote_volume=r.radar_min_quote_volume, tz=tz) if r.radar_enabled else None
-    pulse = MarketPulse(client, tz=tz) if r.pulse_enabled else None
+    pulse = MarketPulse(client, tz=tz, llm=analysis_llm) if r.pulse_enabled else None
     whale = WhaleTracker(client, store, min_usd=r.whale_min_usd, tz=tz) if r.whale_enabled else None
 
     return Application(

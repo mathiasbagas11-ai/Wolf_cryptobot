@@ -160,6 +160,34 @@ def test_stats_win_rate(store, fake_client, tracker_settings):
     assert stats["win_rate"] == 50.0
 
 
+# ── trade report payload (paper account + lesson) ───────────────────────────
+def test_resolution_info_includes_balance_and_lesson(store, fake_client, tracker_settings):
+    from wolf.account import PaperAccount
+
+    events = []
+    account = PaperAccount(store, start_balance=1000.0, risk_pct=1.0)
+    tracker = Tracker(
+        store, fake_client, tracker_settings,
+        notify=lambda sig, event, info: events.append((event, info)),
+        account=account,
+    )
+    sig = tracker.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", strategy="MOMENTUM",
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [(100, 111, 99, 110)])
+    tracker.check_pending()
+
+    resolved = [info for ev, info in events if ev == "RESOLVED"]
+    assert resolved, "expected a RESOLVED notification"
+    info = resolved[0]
+    # +10% on a 5% stop = +2R; risk 1% of 1000 = 10 => +20 -> balance 1020.
+    assert info["r_multiple"] == 2.0
+    assert info["balance"] == 1020.0
+    assert "lesson" in info and "MOMENTUM" in info["lesson"]
+
+
 # ── concurrency ────────────────────────────────────────────────────────────
 def test_concurrent_records_do_not_lose_signals(store, fake_client, tracker_settings):
     """Many threads recording distinct signals must not clobber one another."""

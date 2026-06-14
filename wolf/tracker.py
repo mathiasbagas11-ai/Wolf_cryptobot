@@ -110,11 +110,13 @@ class Tracker:
         client: BinanceClient,
         settings: TrackerSettings,
         notify: Optional[NotifyFn] = None,
+        account=None,
     ) -> None:
         self._store = store
         self._client = client
         self._settings = settings
         self._notify = notify or (lambda *_: None)
+        self._account = account  # optional PaperAccount for the Trade Report
         # Guards the compound read-modify-write of pending_signals. StateStore
         # makes each read/write atomic, but record_signal and check_pending each
         # do load -> mutate -> save, which would otherwise interleave when the
@@ -362,8 +364,37 @@ class Tracker:
         for sig, event, info in pending_notifications:
             self._safe_notify(sig, event, info)
         for sig in resolved:
-            self._safe_notify(sig, "RESOLVED", {})
+            self._safe_notify(sig, "RESOLVED", self._resolution_info(sig))
         return resolved
+
+    def _resolution_info(self, sig: Signal) -> dict:
+        """Trade-Report payload: paper-account move + a learned-edge note."""
+        info: dict = {"lesson": self._lesson(sig)}
+        if self._account is not None:
+            try:
+                snapshot = self._account.apply(sig)
+            except Exception:  # the account must never break tracking/notify
+                log.exception("Paper account update failed for %s", sig.symbol)
+                snapshot = None
+            if snapshot:
+                info.update(snapshot)
+        return info
+
+    def _lesson(self, sig: Signal) -> str:
+        """One-line takeaway from the cumulative record for this strategy."""
+        bucket = self.stats().get("by_strategy", {}).get(sig.strategy)
+        if not bucket or not bucket.get("total"):
+            return f"{sig.strategy}: first graded trade — building a baseline."
+        wr = bucket["win_rate"]
+        n = bucket["total"]
+        avg = bucket["avg_pnl"]
+        if wr >= 55 and avg > 0:
+            verdict = "edge holding — keep taking these"
+        elif wr >= 45:
+            verdict = "roughly coin-flip — needs tighter filters"
+        else:
+            verdict = "underperforming — tighten or pause this setup"
+        return f"{sig.strategy}: {wr:.0f}% win over {n} ({avg:+.2f}% avg) — {verdict}."
 
     def _resolve(self, sig: Signal, res: EvalResult, created_at: datetime, now: datetime) -> None:
         exit_price = res.exit_price

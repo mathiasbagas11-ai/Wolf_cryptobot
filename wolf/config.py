@@ -117,6 +117,26 @@ class TelegramSettings:
     def route_stats(self) -> str:           # periodic performance
         return _first(self.stats_thread_id, self.system_thread_id)
 
+    def configured_threads(self) -> list[tuple[str, str]]:
+        """Return ``(label, thread_id)`` for each non-empty configured topic.
+
+        Used at startup to validate every routed topic exists, so a wrong/stale
+        thread id is reported once instead of failing silently on every message.
+        """
+        labels = [
+            ("Signal Entry", self.signal_thread_id),
+            ("New Signal", self.new_signal_thread_id),
+            ("Market Update", self.market_update_thread_id),
+            ("Trade Report", self.trade_report_thread_id),
+            ("News", self.news_thread_id),
+            ("System/General", self.system_thread_id),
+            ("Stats", self.stats_thread_id),
+            ("Whale Report", self.whale_thread_id),
+            ("Hot Ecosystem", self.radar_thread_id),
+            ("BTC/ETH/SOL", self.majors_thread_id),
+        ]
+        return [(label, tid) for label, tid in labels if tid]
+
 
 def _first(*values: str) -> str:
     for v in values:
@@ -181,12 +201,26 @@ class ReportsSettings:
 
 
 @dataclass(frozen=True)
+class DebateRole:
+    """One debate participant (bull / bear / arbiter) → a provider + model."""
+
+    provider: str  # deepseek | groq | hermes | anthropic
+    model: str
+
+
+@dataclass(frozen=True)
 class AISettings:
-    """AI debate-layer configuration."""
+    """AI debate-layer configuration.
+
+    Each debate role runs on its own (cheap) provider so the layer costs a
+    fraction of Claude: DeepSeek argues the bull case, Groq the bear case, and
+    Hermes arbitrates. Any role can be repointed via env without code changes.
+    """
 
     enabled: bool = False
-    provider: str = "anthropic"
-    model: str = "claude-opus-4-8"
+    bull: DebateRole = DebateRole("deepseek", "deepseek-chat")
+    bear: DebateRole = DebateRole("groq", "llama-3.3-70b-versatile")
+    arbiter: DebateRole = DebateRole("hermes", "nousresearch/hermes-3-llama-3.1-405b")
     # If a REJECT verdict at/above this confidence should veto the signal.
     veto_enabled: bool = True
     veto_min_confidence: int = 70
@@ -206,6 +240,10 @@ class Settings:
     # Ordered data sources to try (fallback). First that responds wins.
     exchanges: tuple[str, ...] = ("binance", "okx", "bybit", "gate")
 
+    # Paper trading account (drives the Trade Report balance/PnL view)
+    paper_start_balance: float = 1000.0
+    paper_risk_pct: float = 1.0
+
     # Scheduling (minutes)
     screener_interval_min: int = 10
     tracker_interval_min: int = 5
@@ -224,6 +262,7 @@ class Settings:
     groq_api_key: str = ""
     anthropic_api_key: str = ""
     deepseek_api_key: str = ""
+    hermes_api_key: str = ""
     newsapi_key: str = ""
     twitter_bearer_token: str = ""
     glassnode_api_key: str = ""
@@ -283,14 +322,26 @@ class Settings:
         )
         ai = AISettings(
             enabled=_env_bool("AI_DEBATE_ENABLED", False),
-            provider=_env_str("AI_PROVIDER", "anthropic"),
-            model=_env_str("CLAUDE_MODEL", "claude-opus-4-8"),
+            bull=DebateRole(
+                provider=_env_str("DEBATE_BULL_PROVIDER", "deepseek"),
+                model=_env_str("DEBATE_BULL_MODEL", "deepseek-chat"),
+            ),
+            bear=DebateRole(
+                provider=_env_str("DEBATE_BEAR_PROVIDER", "groq"),
+                model=_env_str("DEBATE_BEAR_MODEL", "llama-3.3-70b-versatile"),
+            ),
+            arbiter=DebateRole(
+                provider=_env_str("DEBATE_ARBITER_PROVIDER", "hermes"),
+                model=_env_str("DEBATE_ARBITER_MODEL", "nousresearch/hermes-3-llama-3.1-405b"),
+            ),
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),
         )
         exchanges = _env_csv("EXCHANGES") or ("binance", "okx", "bybit", "gate")
         return cls(
             state_dir=_env_str("STATE_DIR", "state_data"),
+            paper_start_balance=_env_float("PAPER_START_BALANCE", 1000.0),
+            paper_risk_pct=_env_float("PAPER_RISK_PCT", 1.0),
             http_timeout=_env_float("HTTP_TIMEOUT", 10.0),
             exchanges=tuple(exchanges),
             screener_interval_min=_env_int("SCREENER_INTERVAL_MIN", 10),
@@ -303,6 +354,7 @@ class Settings:
             groq_api_key=_env_str("GROQ_API_KEY"),
             anthropic_api_key=_env_str("ANTHROPIC_API_KEY"),
             deepseek_api_key=_env_str("DEEPSEEK_API_KEY"),
+            hermes_api_key=_env_str("HERMES_API_KEY"),
             newsapi_key=_env_str("NEWSAPI_KEY"),
             twitter_bearer_token=_env_str("TWITTER_BEARER_TOKEN"),
             glassnode_api_key=_env_str("GLASSNODE_API_KEY"),
@@ -316,6 +368,17 @@ class Settings:
             news=news,
             reports=reports,
         )
+
+    def api_key_for(self, provider: str) -> str:
+        """Return the configured API key for a debate provider name."""
+        return {
+            "anthropic": self.anthropic_api_key,
+            "deepseek": self.deepseek_api_key,
+            "groq": self.groq_api_key,
+            "hermes": self.hermes_api_key,
+            "openrouter": self.hermes_api_key,
+            "gemini": self.gemini_api_key,
+        }.get((provider or "").lower(), "")
 
     def describe(self) -> dict:
         """Return a redacted, JSON-serialisable view for diagnostics/health."""

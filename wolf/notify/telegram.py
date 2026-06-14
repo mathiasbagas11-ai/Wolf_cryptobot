@@ -56,9 +56,26 @@ class TelegramNotifier:
 
     # ── transport ───────────────────────────────────────────────────────
     def send(self, text: str, thread_id: str = "") -> bool:
+        ok, desc, _mid = self._post(text, thread_id)
+        # If the topic is misconfigured (wrong/stale thread id), don't drop the
+        # message — retry once on the main channel so the alert still lands.
+        if not ok and thread_id and self._is_bad_thread(desc):
+            log.warning(
+                "thread=%s invalid (%s) — falling back to main channel", thread_id, desc
+            )
+            ok, _desc, _mid = self._post(text, "")
+        return ok
+
+    @staticmethod
+    def _is_bad_thread(description: str) -> bool:
+        d = (description or "").lower()
+        return "thread" in d or "topic" in d
+
+    def _post(self, text: str, thread_id: str = "") -> tuple[bool, str, Optional[int]]:
+        """Low-level send. Returns ``(ok, error_description, message_id)``."""
         if not self.enabled:
             log.debug("Telegram disabled; dropping message")
-            return False
+            return False, "disabled", None
         url = f"https://api.telegram.org/bot{self._settings.bot_token}/sendMessage"
         payload: dict = {
             "chat_id": self._settings.chat_id,
@@ -72,7 +89,7 @@ class TelegramNotifier:
             resp = self._session.post(url, json=payload, timeout=self._timeout)
         except requests.RequestException as exc:
             log.warning("Telegram send error: %s", exc)
-            return False
+            return False, str(exc), None
         if resp.status_code != 200:
             description = ""
             try:
@@ -83,8 +100,72 @@ class TelegramNotifier:
                 "Telegram send failed (%s) thread=%s: %s",
                 resp.status_code, thread_id or "main", description,
             )
-            return False
-        return True
+            return False, description, None
+        message_id = None
+        try:
+            message_id = resp.json().get("result", {}).get("message_id")
+        except ValueError:
+            message_id = None
+        return True, "", message_id
+
+    def _delete(self, message_id: int) -> None:
+        """Best-effort delete of a probe message; failures are non-fatal."""
+        url = f"https://api.telegram.org/bot{self._settings.bot_token}/deleteMessage"
+        try:
+            self._session.post(
+                url,
+                json={"chat_id": self._settings.chat_id, "message_id": message_id},
+                timeout=self._timeout,
+            )
+        except requests.RequestException as exc:
+            log.debug("Probe delete failed for %s: %s", message_id, exc)
+
+    def validate_threads(self) -> dict:
+        """Probe every configured topic and report which thread ids are invalid.
+
+        Sends a tiny probe message to each routed topic (deleting it again on
+        success) so a wrong or stale ``*_THREAD_ID`` is surfaced once at startup
+        — with a clear label — instead of failing silently on every later post.
+        Returns ``{"ok": [...], "bad": [(label, tid, reason)]}``.
+        """
+        result: dict = {"ok": [], "bad": []}
+        if not self.enabled:
+            return result
+        for label, tid in self._settings.configured_threads():
+            ok, desc, mid = self._post(f"🔎 thread check: {esc(label)}", tid)
+            if ok:
+                result["ok"].append((label, tid))
+                if mid is not None:
+                    self._delete(mid)
+            else:
+                result["bad"].append((label, tid, desc or "send failed"))
+        return result
+
+    def report_thread_validation(self, result: dict) -> None:
+        """Log a summary and, if any topic is misconfigured, post it to General."""
+        bad = result.get("bad", [])
+        ok = result.get("ok", [])
+        if not bad:
+            log.info("Telegram topics OK: %d configured topic(s) reachable", len(ok))
+            return
+        for label, tid, reason in bad:
+            log.warning("Telegram topic INVALID: %s (thread=%s) — %s", label, tid, reason)
+        lines = [
+            f"⚠️ <b>TOPIC CHECK</b>\n{DIVIDER}",
+            f"{len(ok)} OK · {len(bad)} misconfigured:",
+        ]
+        for label, tid, reason in bad:
+            lines.append(f"• <b>{esc(label)}</b> (id <code>{esc(str(tid))}</code>) — {esc(reason)}")
+        lines.append(
+            "Fix the matching <code>*_THREAD_ID</code> env var (or blank it to use "
+            "the main channel)."
+        )
+        lines.append(self._stamp())
+        # Post to General if it's valid, else fall back to the main channel.
+        bad_ids = {tid for _, tid, _ in bad}
+        sys_route = self._settings.route_system()
+        thread = "" if sys_route in bad_ids else sys_route
+        self.send("\n".join(lines), thread)
 
     # ── lifecycle notifications ─────────────────────────────────────────
     def notify_startup(self, info: dict) -> None:
@@ -111,7 +192,7 @@ class TelegramNotifier:
         elif event == "TP_HIT":
             self.send(self._tp_text(signal, info), self._settings.route_entry())
         elif event == "RESOLVED":
-            self.send(self._resolved_text(signal), self._settings.route_trade_report())
+            self.send(self._resolved_text(signal, info), self._settings.route_trade_report())
 
     def notify_stats(self, stats: dict) -> None:
         self.send(self._stats_card(stats), self._settings.route_stats())
@@ -183,16 +264,34 @@ class TelegramNotifier:
             f"{self._stamp()}"
         )
 
-    def _resolved_text(self, s: Signal) -> str:
+    def _resolved_text(self, s: Signal, info: Optional[dict] = None) -> str:
+        info = info or {}
         status = Status(s.status)
         head = "🎯 <b>WIN" if status.is_win else ("🛑 <b>LOSS" if status.is_loss else "⚪ <b>CLOSED")
         pnl = s.pnl_pct if s.pnl_pct is not None else 0.0
         hold = s.hold_hours if s.hold_hours is not None else 0.0
-        return (
-            f"{head} · {esc(s.status)}</b> · {esc(s.symbol)} {esc(s.direction)}\n"
-            f"PnL <b>{pnl:+.2f}%</b> · held {hold:.1f}h · {esc(s.strategy)}\n"
-            f"{self._stamp()}"
-        )
+        tp_final = (s.tp_ladder[-1]["price"] if s.tp_ladder else s.tp)
+        exit_str = fmt_price(s.exit_price) if s.exit_price is not None else "—"
+
+        lines = [
+            f"{head} · {esc(s.status)}</b> · {esc(s.symbol)} {esc(s.direction)}",
+            f"💵 Entry <code>{fmt_price(s.entry_price)}</code> → Exit <code>{exit_str}</code>",
+            f"🎯 TP <code>{fmt_price(tp_final)}</code> · 🛑 SL <code>{fmt_price(s.sl)}</code>",
+        ]
+        # PnL line — add currency move + R multiple when the paper account ran.
+        pnl_line = f"📈 PnL <b>{pnl:+.2f}%</b>"
+        if "r_multiple" in info:
+            pnl_line += f" · {info['r_multiple']:+.2f}R"
+        if "pnl_amount" in info:
+            pnl_line += f" · {info['pnl_amount']:+.2f} USD"
+        pnl_line += f" · held {hold:.1f}h · {esc(s.strategy)}"
+        lines.append(pnl_line)
+        if "balance" in info:
+            lines.append(f"🏦 Paper balance <b>{info['balance']:.2f} USD</b>")
+        if info.get("lesson"):
+            lines.append(f"🧠 <i>{esc(info['lesson'])}</i>")
+        lines.append(self._stamp())
+        return "\n".join(lines)
 
     def _news_card(self, items) -> str:
         lines = [f"📰 <b>CRYPTO NEWS</b>\n{DIVIDER}"]
