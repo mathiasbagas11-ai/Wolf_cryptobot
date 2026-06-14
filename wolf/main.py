@@ -36,6 +36,17 @@ def main() -> None:
         settings.screener_interval_min,
     )
 
+    # Announce online to Telegram so the channel confirms the bot is up (and
+    # surfaces any chat/topic misconfiguration in the logs immediately).
+    application.notifier.notify_startup({
+        "sources": application.client.source_names,
+        "detectors": application.screener.detector_names,
+        "universe": application.screener.universe_size,
+        "scan_min": settings.screener_interval_min,
+        "track_min": settings.tracker_interval_min,
+        "ai": settings.ai.enabled,
+    })
+
     # Run an initial tracking pass so restarts resolve overdue signals promptly.
     try:
         application.tracker.check_pending()

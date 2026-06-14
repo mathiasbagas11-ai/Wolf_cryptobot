@@ -72,11 +72,39 @@ class TelegramSettings:
     new_signal_thread_id: str = ""
     market_update_thread_id: str = ""
     trade_report_thread_id: str = ""
+    system_thread_id: str = ""   # startup / health / errors
+    stats_thread_id: str = ""    # periodic performance summary
     allowed_chat_ids: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def enabled(self) -> bool:
         return bool(self.bot_token and self.chat_id)
+
+    # ── routing with graceful fallback ──
+    # A message is delivered to the first configured thread in its preference
+    # list, else the main channel (empty thread id) — so nothing is silently
+    # dropped when only some topics are configured.
+    def route_new_signal(self) -> str:
+        return _first(self.new_signal_thread_id, self.signal_thread_id)
+
+    def route_market_update(self) -> str:
+        return _first(self.market_update_thread_id, self.signal_thread_id)
+
+    def route_trade_report(self) -> str:
+        return _first(self.trade_report_thread_id, self.signal_thread_id)
+
+    def route_system(self) -> str:
+        return _first(self.system_thread_id)
+
+    def route_stats(self) -> str:
+        return _first(self.stats_thread_id, self.system_thread_id)
+
+
+def _first(*values: str) -> str:
+    for v in values:
+        if v:
+            return v
+    return ""
 
 
 @dataclass(frozen=True)
@@ -133,6 +161,8 @@ class Settings:
     # Scheduling (minutes)
     screener_interval_min: int = 10
     tracker_interval_min: int = 5
+    # Periodic performance summary to Telegram (hours; 0 disables).
+    stats_report_hours: int = 24
 
     # API server
     api_host: str = "0.0.0.0"
@@ -168,6 +198,8 @@ class Settings:
             new_signal_thread_id=_env_str("NEW_SIGNAL_THREAD_ID"),
             market_update_thread_id=_env_str("MARKET_UPDATE_THREAD_ID"),
             trade_report_thread_id=_env_str("TRADE_REPORT_THREAD_ID"),
+            system_thread_id=_env_str("SYSTEM_THREAD_ID"),
+            stats_thread_id=_env_str("STATS_THREAD_ID"),
             allowed_chat_ids=_env_csv("ALLOWED_CHAT_IDS"),
         )
         tracker = TrackerSettings(
@@ -188,6 +220,7 @@ class Settings:
             exchanges=tuple(exchanges),
             screener_interval_min=_env_int("SCREENER_INTERVAL_MIN", 10),
             tracker_interval_min=_env_int("TRACKER_INTERVAL_MIN", 5),
+            stats_report_hours=_env_int("STATS_REPORT_HOURS", 24),
             api_host=_env_str("API_HOST", "0.0.0.0"),
             api_port=_env_int("API_PORT", 8000),
             api_key=_env_str("API_KEY"),

@@ -52,6 +52,14 @@ class Screener:
         self._validator = validator
         self._veto_min_confidence = veto_min_confidence
 
+    @property
+    def detector_names(self) -> list[str]:
+        return [d.name for d in self._detectors]
+
+    @property
+    def universe_size(self) -> int:
+        return len(self._universe)
+
     def _build_context(self, symbol: str):
         if self._context_provider is None:
             return None
