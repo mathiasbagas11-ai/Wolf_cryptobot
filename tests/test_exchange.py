@@ -225,3 +225,49 @@ def test_source_names_and_empty_guard():
     assert MarketDataClient([FakeSource("binance", [])]).source_names == ["binance"]
     with pytest.raises(ValueError):
         MarketDataClient([])
+
+
+# ── 24h overview + trades parsing (for reports) ────────────────────────────
+def test_binance_parse_24h():
+    payload = [
+        {"symbol": "BTCUSDT", "priceChangePercent": "2.5", "lastPrice": "65000", "quoteVolume": "1000000000"},
+        {"symbol": "BADROW"},  # missing fields -> skipped
+    ]
+    rows = BinanceSource().parse_24h(payload)
+    assert len(rows) == 1
+    assert rows[0] == {"symbol": "BTCUSDT", "change_pct": 2.5, "price": 65000.0, "quote_volume": 1e9}
+
+
+def test_okx_parse_24h_filters_usdt_and_computes_change():
+    payload = {"data": [
+        {"instId": "BTC-USDT", "last": "110", "open24h": "100", "volCcy24h": "5000"},
+        {"instId": "BTC-USDC", "last": "1", "open24h": "1", "volCcy24h": "1"},  # not USDT
+    ]}
+    rows = OKXSource().parse_24h(payload)
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "BTCUSDT"
+    assert round(rows[0]["change_pct"], 2) == 10.0
+
+
+def test_binance_parse_trades_notional_and_side():
+    payload = [
+        {"id": 1, "price": "65000", "qty": "2", "time": 100, "isBuyerMaker": False},
+        {"id": 2, "price": "65000", "qty": "1", "time": 200, "isBuyerMaker": True},
+    ]
+    trades = BinanceSource().parse_trades("BTCUSDT", payload)
+    assert trades[0]["id"] == "BTCUSDT-1"
+    assert trades[0]["usd"] == 130000.0 and trades[0]["side"] == "BUY"
+    assert trades[1]["side"] == "SELL"
+
+
+def test_overview_fallback_across_sources():
+    class OverviewSource(FakeSource):
+        def get_24h_overview(self):
+            return [{"symbol": "BTCUSDT", "change_pct": 1.0, "price": 1, "quote_volume": 1}]
+
+    client = MarketDataClient([FakeSource("a", []), OverviewSource("b", [])])
+    assert client.get_market_overview()[0]["symbol"] == "BTCUSDT"
+
+
+def test_overview_empty_when_unsupported():
+    assert MarketDataClient([FakeSource("a", [])]).get_market_overview() == []

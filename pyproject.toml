@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["wolf", "wolf.state", "wolf.exchange", "wolf.detectors", "wolf.notify", "wolf.api", "wolf.ai", "wolf.news"]
+packages = ["wolf", "wolf.state", "wolf.exchange", "wolf.detectors", "wolf.notify", "wolf.api", "wolf.ai", "wolf.news", "wolf.reports"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

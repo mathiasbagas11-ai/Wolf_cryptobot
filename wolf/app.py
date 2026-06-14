@@ -23,6 +23,7 @@ from wolf.exchange import (
 from wolf.market import ContextProvider
 from wolf.news import NewsService, build_news_source
 from wolf.notify import TelegramNotifier
+from wolf.reports import MajorsReporter, MarketPulse, MarketRadar, WhaleTracker
 from wolf.screener import Screener
 from wolf.state import StateStore
 from wolf.tracker import Tracker
@@ -37,6 +38,10 @@ class Application:
     tracker: Tracker
     screener: Screener
     news: Optional[NewsService] = None
+    majors: Optional[MajorsReporter] = None
+    radar: Optional[MarketRadar] = None
+    pulse: Optional[MarketPulse] = None
+    whale: Optional[WhaleTracker] = None
 
 
 def _build_market_client(settings: Settings) -> MarketDataClient:
@@ -76,7 +81,9 @@ def build_application(settings: Settings | None = None) -> Application:
 
     store = StateStore(settings.state_dir)
     client = _build_market_client(settings)
-    notifier = TelegramNotifier(settings.telegram, timeout=settings.http_timeout)
+    notifier = TelegramNotifier(
+        settings.telegram, timeout=settings.http_timeout, tz=settings.timezone
+    )
     tracker = Tracker(store, client, settings.tracker, notify=notifier.on_event)
     context_provider = ContextProvider(client)
 
@@ -100,6 +107,13 @@ def build_application(settings: Settings | None = None) -> Application:
         if source is not None:
             news = NewsService(source, store, max_items=settings.news.max_items)
 
+    r = settings.reports
+    tz = settings.timezone
+    majors = MajorsReporter(client, tz=tz) if r.majors_enabled else None
+    radar = MarketRadar(client, min_quote_volume=r.radar_min_quote_volume, tz=tz) if r.radar_enabled else None
+    pulse = MarketPulse(client, tz=tz) if r.pulse_enabled else None
+    whale = WhaleTracker(client, store, min_usd=r.whale_min_usd, tz=tz) if r.whale_enabled else None
+
     return Application(
         settings=settings,
         store=store,
@@ -108,4 +122,8 @@ def build_application(settings: Settings | None = None) -> Application:
         tracker=tracker,
         screener=screener,
         news=news,
+        majors=majors,
+        radar=radar,
+        pulse=pulse,
+        whale=whale,
     )

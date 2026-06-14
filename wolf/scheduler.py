@@ -76,4 +76,33 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
             coalesce=True,
             next_run_time=None,
         )
+
+    # Periodic market reports, each to its own topic.
+    r = app.settings.reports
+    _add_report_job(scheduler, app.notifier.enabled and app.majors is not None,
+                    "majors", r.majors_interval_min,
+                    lambda: app.notifier.notify_majors(app.majors.build()))
+    _add_report_job(scheduler, app.notifier.enabled and app.radar is not None,
+                    "radar", r.radar_interval_min,
+                    lambda: app.notifier.notify_radar(app.radar.build()))
+    _add_report_job(scheduler, app.notifier.enabled and app.pulse is not None,
+                    "pulse", r.pulse_interval_min,
+                    lambda: app.notifier.notify_pulse(app.pulse.build()))
+    _add_report_job(scheduler, app.notifier.enabled and app.whale is not None,
+                    "whale", r.whale_interval_min,
+                    lambda: app.notifier.notify_whale(app.whale.build()))
     return scheduler
+
+
+def _add_report_job(scheduler, enabled: bool, job_id: str, minutes: int, fn) -> None:
+    if not enabled:
+        return
+    scheduler.add_job(
+        _guarded(fn, job_id),
+        "interval",
+        minutes=minutes,
+        id=job_id,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=None,
+    )

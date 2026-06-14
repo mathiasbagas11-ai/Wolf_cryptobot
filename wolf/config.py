@@ -75,12 +75,9 @@ class TelegramSettings:
     news_thread_id: str = ""
     system_thread_id: str = ""   # startup / health / errors
     stats_thread_id: str = ""    # periodic performance summary
-    # Reserved to match the previous bot's topic set; their content producers
-    # (whale tracker, market radar, majors session report) are not yet ported,
-    # so these topics stay empty until those features land.
-    whale_thread_id: str = ""
-    radar_thread_id: str = ""
-    majors_thread_id: str = ""
+    whale_thread_id: str = ""    # 👁 Whale Report (large trades)
+    radar_thread_id: str = ""    # 🔥 Hot Ecosystem (market radar)
+    majors_thread_id: str = ""   # 🐝 BTC/ETH/SOL (majors session report)
     allowed_chat_ids: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -88,25 +85,36 @@ class TelegramSettings:
         return bool(self.bot_token and self.chat_id)
 
     # ── routing with graceful fallback ──
-    # A message is delivered to the first configured thread in its preference
-    # list, else the main channel (empty thread id) — so nothing is silently
-    # dropped when only some topics are configured.
-    def route_new_signal(self) -> str:
-        return _first(self.new_signal_thread_id, self.signal_thread_id)
+    # Each message type goes to its own topic, falling back to the main channel
+    # (empty thread id) when that topic isn't configured — so nothing is dropped.
+    def route_new_signal(self) -> str:      # 🆕 New Signal
+        return _first(self.new_signal_thread_id)
 
-    def route_market_update(self) -> str:
-        return _first(self.market_update_thread_id, self.signal_thread_id)
+    def route_entry(self) -> str:           # ⭐ Signal Entry (activation / TP)
+        return _first(self.signal_thread_id)
 
-    def route_trade_report(self) -> str:
-        return _first(self.trade_report_thread_id, self.signal_thread_id)
+    def route_market_update(self) -> str:   # 📚 Market Update (bias/pulse)
+        return _first(self.market_update_thread_id)
 
-    def route_news(self) -> str:
+    def route_trade_report(self) -> str:    # 📝 Trade Reports (resolutions)
+        return _first(self.trade_report_thread_id)
+
+    def route_news(self) -> str:            # 🗞 News Update
         return _first(self.news_thread_id)
 
-    def route_system(self) -> str:
+    def route_whale(self) -> str:           # 👁 Whale Report
+        return _first(self.whale_thread_id)
+
+    def route_radar(self) -> str:           # 🔥 Hot Ecosystem (radar)
+        return _first(self.radar_thread_id)
+
+    def route_majors(self) -> str:          # 🐝 BTC/ETH/SOL
+        return _first(self.majors_thread_id)
+
+    def route_system(self) -> str:          # startup / health
         return _first(self.system_thread_id)
 
-    def route_stats(self) -> str:
+    def route_stats(self) -> str:           # periodic performance
         return _first(self.stats_thread_id, self.system_thread_id)
 
 
@@ -150,6 +158,26 @@ class NewsSettings:
     provider: str = "cryptocompare"  # free, key-less
     interval_min: int = 30
     max_items: int = 3
+
+
+@dataclass(frozen=True)
+class ReportsSettings:
+    """Periodic market reports posted to their own Telegram topics."""
+
+    # 🐝 BTC/ETH/SOL session report
+    majors_enabled: bool = False
+    majors_interval_min: int = 60
+    # 🔥 Hot Ecosystem — market radar (gainers/losers/volume)
+    radar_enabled: bool = False
+    radar_interval_min: int = 30
+    radar_min_quote_volume: float = 5_000_000
+    # 📚 Market Update — BTC/ETH bias pulse
+    pulse_enabled: bool = False
+    pulse_interval_min: int = 30
+    # 👁 Whale Report — large trades
+    whale_enabled: bool = False
+    whale_interval_min: int = 5
+    whale_min_usd: float = 250_000
 
 
 @dataclass(frozen=True)
@@ -204,10 +232,14 @@ class Settings:
 
     log_level: str = "INFO"
 
+    # Display timezone for message timestamps (IANA name). Default WIB.
+    timezone: str = "Asia/Jakarta"
+
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
     ai: AISettings = field(default_factory=AISettings)
     news: NewsSettings = field(default_factory=NewsSettings)
+    reports: ReportsSettings = field(default_factory=ReportsSettings)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -232,6 +264,18 @@ class Settings:
             provider=_env_str("NEWS_PROVIDER", "cryptocompare"),
             interval_min=_env_int("NEWS_INTERVAL_MIN", 30),
             max_items=_env_int("NEWS_MAX_ITEMS", 3),
+        )
+        reports = ReportsSettings(
+            majors_enabled=_env_bool("MAJORS_ENABLED", False),
+            majors_interval_min=_env_int("MAJORS_INTERVAL_MIN", 60),
+            radar_enabled=_env_bool("RADAR_ENABLED", False),
+            radar_interval_min=_env_int("RADAR_INTERVAL_MIN", 30),
+            radar_min_quote_volume=_env_float("RADAR_MIN_QUOTE_VOLUME", 5_000_000),
+            pulse_enabled=_env_bool("MARKET_PULSE_ENABLED", False),
+            pulse_interval_min=_env_int("MARKET_PULSE_INTERVAL", 30),
+            whale_enabled=_env_bool("WHALE_ENABLED", False),
+            whale_interval_min=_env_int("WHALE_INTERVAL_MIN", 5),
+            whale_min_usd=_env_float("WHALE_MIN_USD", 250_000),
         )
         tracker = TrackerSettings(
             dedup_minutes=_env_int("TRACKER_DEDUP_MINUTES", 30),
@@ -265,10 +309,12 @@ class Settings:
             supabase_url=_env_str("SUPABASE_URL"),
             supabase_anon_key=_env_str("SUPABASE_ANON_KEY"),
             log_level=_env_str("LOG_LEVEL", "INFO"),
+            timezone=_env_str("TIMEZONE", "Asia/Jakarta"),
             telegram=telegram,
             tracker=tracker,
             ai=ai,
             news=news,
+            reports=reports,
         )
 
     def describe(self) -> dict:
@@ -276,7 +322,7 @@ class Settings:
         secret_names = {f.name for f in fields(self) if f.name.endswith(("_key", "_token"))}
         out: dict = {}
         for f in fields(self):
-            if f.name in ("telegram", "tracker", "ai", "news"):
+            if f.name in ("telegram", "tracker", "ai", "news", "reports"):
                 continue
             value = getattr(self, f.name)
             if f.name in secret_names or f.name.endswith("_anon_key"):

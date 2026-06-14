@@ -95,6 +95,22 @@ class ExchangeSource(ABC):
             log.debug("%s price parse failed for %s: %s", self.name, symbol, exc)
             return None
 
+    # ── optional capabilities (override per venue) ──
+    def get_24h_overview(self) -> list[dict]:
+        """All-symbols 24h stats as ``[{symbol, change_pct, price, quote_volume}]``.
+
+        Returns ``[]`` for venues that don't implement it — used by the radar and
+        majors reports, which only need one venue's snapshot.
+        """
+        return []
+
+    def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
+        """Recent public trades ``[{id, symbol, price, qty, usd, side, time}]``.
+
+        Returns ``[]`` for venues that don't implement it (whale tracker input).
+        """
+        return []
+
 
 def split_quote(symbol: str) -> tuple[str, str]:
     """Split ``BTCUSDT`` into ``(BTC, USDT)``; falls back to (sym, '')."""
@@ -129,6 +145,57 @@ class BinanceSource(ExchangeSource):
 
     def parse_price(self, payload) -> Optional[float]:
         return float(payload["price"]) if isinstance(payload, dict) else None
+
+    def get_24h_overview(self) -> list[dict]:
+        # One request returns every symbol's 24h stats — cheap for radar/majors.
+        data = self._get_json(f"{self._base}/ticker/24hr", {})
+        return self.parse_24h(data)
+
+    @staticmethod
+    def parse_24h(payload) -> list[dict]:
+        if not isinstance(payload, list):
+            return []
+        out = []
+        for r in payload:
+            try:
+                out.append({
+                    "symbol": r["symbol"],
+                    "change_pct": float(r["priceChangePercent"]),
+                    "price": float(r["lastPrice"]),
+                    "quote_volume": float(r["quoteVolume"]),
+                })
+            except (KeyError, ValueError, TypeError):
+                continue
+        return out
+
+    def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
+        data = self._get_json(
+            f"{self._base}/trades", {"symbol": self._symbol(symbol), "limit": min(1000, limit)}
+        )
+        return self.parse_trades(symbol, data)
+
+    @staticmethod
+    def parse_trades(symbol: str, payload) -> list[dict]:
+        if not isinstance(payload, list):
+            return []
+        out = []
+        for t in payload:
+            try:
+                price = float(t["price"])
+                qty = float(t["qty"])
+                out.append({
+                    "id": f"{symbol}-{t['id']}",
+                    "symbol": symbol,
+                    "price": price,
+                    "qty": qty,
+                    "usd": price * qty,
+                    # On Binance, a buyer-maker trade is an aggressive market SELL.
+                    "side": "SELL" if t.get("isBuyerMaker") else "BUY",
+                    "time": int(t.get("time", 0)),
+                })
+            except (KeyError, ValueError, TypeError):
+                continue
+        return out
 
 
 class OKXSource(ExchangeSource):
@@ -167,6 +234,34 @@ class OKXSource(ExchangeSource):
     def parse_price(self, payload) -> Optional[float]:
         rows = payload.get("data") if isinstance(payload, dict) else None
         return float(rows[0]["last"]) if rows else None
+
+    def get_24h_overview(self) -> list[dict]:
+        data = self._get_json(f"{self._base}/api/v5/market/tickers", {"instType": "SPOT"})
+        return self.parse_24h(data)
+
+    @staticmethod
+    def parse_24h(payload) -> list[dict]:
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not rows:
+            return []
+        out = []
+        for r in rows:
+            try:
+                inst = r["instId"]
+                if not inst.endswith("-USDT"):
+                    continue
+                last = float(r["last"])
+                open24h = float(r["open24h"])
+                change = (last - open24h) / open24h * 100 if open24h else 0.0
+                out.append({
+                    "symbol": inst.replace("-", ""),  # BTC-USDT -> BTCUSDT
+                    "change_pct": change,
+                    "price": last,
+                    "quote_volume": float(r.get("volCcy24h", 0)),
+                })
+            except (KeyError, ValueError, TypeError):
+                continue
+        return out
 
 
 class GateSource(ExchangeSource):

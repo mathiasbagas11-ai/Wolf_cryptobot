@@ -72,6 +72,23 @@ class MarketDataClient:
                 return price
         return None
 
+    # ── market-wide / trades (for reports) ──
+    def get_market_overview(self) -> list[dict]:
+        """All-symbols 24h snapshot from the first venue that supports it."""
+        for source in self._sources:
+            data = source.get_24h_overview()
+            if data:
+                return data
+        return []
+
+    def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
+        for source in self._ordered(symbol):
+            trades = source.get_recent_trades(symbol, limit)
+            if trades:
+                self._remember(symbol, source.name)
+                return trades
+        return []
+
     # ── derivatives ──
     def get_funding_rate(self, symbol: str) -> Optional[float]:
         # Try the venue fallback list first (Binance -> OKX -> Bybit), then the

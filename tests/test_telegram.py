@@ -48,12 +48,26 @@ def _signal(**kw) -> Signal:
     return Signal(**base)
 
 
-# ── routing fallback ───────────────────────────────────────────────────────
-def test_route_new_signal_prefers_own_then_falls_back():
-    s = _settings(new_signal_thread_id="10", signal_thread_id="99")
-    assert s.route_new_signal() == "10"
-    assert _settings(signal_thread_id="99").route_new_signal() == "99"
-    assert _settings().route_new_signal() == ""  # main channel
+# ── routing ────────────────────────────────────────────────────────────────
+def test_each_topic_routes_to_its_own_thread():
+    s = _settings(
+        new_signal_thread_id="1", signal_thread_id="2", market_update_thread_id="3",
+        trade_report_thread_id="4", news_thread_id="5", whale_thread_id="6",
+        radar_thread_id="7", majors_thread_id="8",
+    )
+    assert s.route_new_signal() == "1"
+    assert s.route_entry() == "2"           # Signal Entry
+    assert s.route_market_update() == "3"
+    assert s.route_trade_report() == "4"
+    assert s.route_news() == "5"
+    assert s.route_whale() == "6"
+    assert s.route_radar() == "7"
+    assert s.route_majors() == "8"
+
+
+def test_unconfigured_topic_falls_back_to_main():
+    assert _settings().route_new_signal() == ""
+    assert _settings().route_majors() == ""
 
 
 def test_route_stats_falls_back_to_system():
@@ -98,19 +112,37 @@ def test_announce_signal_card_content_and_route():
 def test_on_event_routing():
     sess = FakeSession()
     n = TelegramNotifier(
-        _settings(market_update_thread_id="20", trade_report_thread_id="30"),
+        _settings(signal_thread_id="20", trade_report_thread_id="30"),
         session=sess,
     )
     sig = _signal(status="ACTIVE")
-    n.on_event(sig, "ACTIVATED", {"price": 65000})
-    n.on_event(sig, "TP_HIT", {"level": 1, "price": 66500})
+    n.on_event(sig, "ACTIVATED", {"price": 65000})           # -> Signal Entry (20)
+    n.on_event(sig, "TP_HIT", {"level": 1, "price": 66500})  # -> Signal Entry (20)
     resolved = _signal(status="TP_HIT", pnl_pct=4.6, hold_hours=3.2)
-    n.on_event(resolved, "RESOLVED", {})
+    n.on_event(resolved, "RESOLVED", {})                     # -> Trade Reports (30)
     threads = [c["message_thread_id"] for c in sess.calls]
     assert threads == ["20", "20", "30"]
     assert "ENTRY TOUCHED" in sess.calls[0]["text"]
     assert "TP1 HIT" in sess.calls[1]["text"]
     assert "WIN" in sess.calls[2]["text"] and "+4.60%" in sess.calls[2]["text"]
+
+
+def test_report_notify_routing():
+    sess = FakeSession()
+    n = TelegramNotifier(
+        _settings(majors_thread_id="80", radar_thread_id="70",
+                  market_update_thread_id="30", whale_thread_id="60"),
+        session=sess,
+    )
+    n.notify_majors("majors card")
+    n.notify_radar("radar card")
+    n.notify_pulse("pulse card")
+    n.notify_whale("whale card")
+    threads = [c["message_thread_id"] for c in sess.calls]
+    assert threads == ["80", "70", "30", "60"]
+    # Empty text is a no-op.
+    n.notify_majors(None)
+    assert len(sess.calls) == 4
 
 
 def test_resolved_loss_formatting():

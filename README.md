@@ -133,30 +133,38 @@ Messages route to forum topics with graceful fallback (own topic → a more
 general one → the main channel), so nothing is dropped when only some topics are
 configured:
 
-| Topic | Env var | Content |
-|-------|---------|---------|
-| New Signal | `NEW_SIGNAL_THREAD_ID` | freshly detected signals |
-| Market Update | `MARKET_UPDATE_THREAD_ID` | entry touched, TP hits |
-| Trade Report | `TRADE_REPORT_THREAD_ID` | win/loss resolutions |
-| News | `NEWS_THREAD_ID` | crypto headlines (opt-in, `NEWS_ENABLED=true`) |
-| System | `SYSTEM_THREAD_ID` | startup "online" + diagnostics |
-| Stats | `STATS_THREAD_ID` | periodic performance summary |
+| Telegram topic | Env var | Content | Enable |
+|----------------|---------|---------|--------|
+| ‼️ New Signal | `NEW_SIGNAL_THREAD_ID` | new signal alerts | always |
+| ⭐ Signal Entry | `SIGNAL_THREAD_ID` | entry touched + TP hits | always |
+| 📝 Trade Reports | `TRADE_REPORT_THREAD_ID` | win/loss resolutions | always |
+| 📚 Market Update | `MARKET_UPDATE_THREAD_ID` | BTC/ETH bias pulse | `MARKET_PULSE_ENABLED` |
+| 🔥 Hot Ecosystem | `RADAR_THREAD_ID` | market radar (gainers/losers/volume) | `RADAR_ENABLED` |
+| 👁 Whale Report | `WHALE_THREAD_ID` | large trades | `WHALE_ENABLED` |
+| 🐝 BTC/ETH/SOL | `MAJORS_THREAD_ID` | majors session report | `MAJORS_ENABLED` |
+| 🗞 News Update | `NEWS_THREAD_ID` | crypto headlines | `NEWS_ENABLED` |
+| System / Stats | `SYSTEM_THREAD_ID` / `STATS_THREAD_ID` | startup + performance | always |
 
-`WHALE_THREAD_ID`, `RADAR_THREAD_ID`, `MAJORS_THREAD_ID` are recognised (so the
-old bot's config is accepted) but **reserved** — their content producers (whale
-tracker, market radar, majors session report) are not yet ported.
-
-The bot sends a startup message on boot, and Telegram API errors are logged with
-their description (e.g. "message thread not found") to make misconfiguration
+Timestamps render in `TIMEZONE` (default `Asia/Jakarta` → WIB). The bot sends a
+startup "ONLINE" message on boot, and Telegram API errors are logged with their
+description (e.g. "message thread not found") so a misconfigured chat/topic is
 obvious in the logs.
 
-## Crypto news
+## Market reports & news
 
-Optional (`NEWS_ENABLED=true`). A `NewsService` fetches headlines from a free,
-key-less source (CryptoCompare), de-duplicates against already-seen IDs in the
-state store, and posts only fresh ones to the News topic on an interval
-(`NEWS_INTERVAL_MIN`). Adding a provider is one `NewsSource` subclass + a registry
-entry.
+Periodic reports each post to their own topic and are **opt-in**:
+
+* **Majors** (`MAJORS_ENABLED`) — BTC/ETH/SOL price + 24h snapshot, one API call.
+* **Radar** (`RADAR_ENABLED`) — top gainers/losers/volume from one all-symbols
+  24h call (no per-symbol fan-out, so it's rate-limit friendly).
+* **Market pulse** (`MARKET_PULSE_ENABLED`) — BTC/ETH trend + RSI bias.
+* **Whale** (`WHALE_ENABLED`) — large public trades above `WHALE_MIN_USD`,
+  de-duplicated via the state store (REST only, no key, no WebSocket).
+* **News** (`NEWS_ENABLED`) — CryptoCompare headlines (free, key-less),
+  de-duplicated so the same story isn't reposted.
+
+Each is a small module behind the exchange `MarketDataClient`; they never touch
+the signal pipeline and degrade to nothing if their data is unavailable.
 
 ## Signal lifecycle
 
