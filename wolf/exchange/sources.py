@@ -169,6 +169,50 @@ class OKXSource(ExchangeSource):
         return float(rows[0]["last"]) if rows else None
 
 
+class GateSource(ExchangeSource):
+    name = "gate"
+    # Gate uses native interval codes for minutes/hours/days.
+    _INTERVALS = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+                  "1h": "1h", "4h": "4h", "1d": "1d"}
+
+    def __init__(self, base_url: str = "https://api.gateio.ws/api/v4", **kw) -> None:
+        super().__init__(base_url, **kw)
+
+    def _symbol(self, symbol: str) -> str:
+        base, quote = _split_quote(symbol)
+        return f"{base}_{quote}" if quote else symbol
+
+    def _interval(self, interval: str) -> str:
+        return self._INTERVALS.get(interval, "15m")
+
+    def _klines_request(self, symbol, interval, limit):
+        return f"{self._base}/spot/candlesticks", {
+            "currency_pair": symbol, "interval": interval, "limit": limit
+        }
+
+    def parse_klines(self, payload) -> list[Candle]:
+        if not isinstance(payload, list) or not payload:
+            return []
+        # Gate row: [t(s), quote_vol, close, high, low, open, base_vol, closed].
+        # Returned oldest-first (ascending).
+        out = []
+        for r in payload:
+            out.append(Candle(
+                time=int(float(r[0])) * 1000,
+                open=float(r[5]), high=float(r[3]), low=float(r[4]), close=float(r[2]),
+                volume=float(r[6]) if len(r) > 6 else float(r[1]),
+            ))
+        return out
+
+    def _price_request(self, symbol):
+        return f"{self._base}/spot/tickers", {"currency_pair": symbol}
+
+    def parse_price(self, payload) -> Optional[float]:
+        if isinstance(payload, list) and payload:
+            return float(payload[0]["last"])
+        return None
+
+
 class BybitSource(ExchangeSource):
     name = "bybit"
     _INTERVALS = {"1m": "1", "5m": "5", "15m": "15", "30m": "30",

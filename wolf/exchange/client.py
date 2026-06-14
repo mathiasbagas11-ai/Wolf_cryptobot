@@ -29,11 +29,12 @@ log = logging.getLogger("wolf.exchange")
 
 
 class MarketDataClient:
-    def __init__(self, sources: Sequence[ExchangeSource], futures=None) -> None:
+    def __init__(self, sources: Sequence[ExchangeSource], futures=None, funding_sources=None) -> None:
         if not sources:
             raise ValueError("MarketDataClient needs at least one source")
         self._sources = list(sources)
-        self._futures = futures
+        self._futures = futures  # provides open-interest change (Binance)
+        self._funding_sources = list(funding_sources) if funding_sources else []
         self._preferred: dict[str, str] = {}  # symbol -> source name that last worked
         self._lock = threading.Lock()
 
@@ -71,9 +72,18 @@ class MarketDataClient:
                 return price
         return None
 
-    # ── derivatives (Binance futures only) ──
+    # ── derivatives ──
     def get_funding_rate(self, symbol: str) -> Optional[float]:
-        return self._futures.get_funding_rate(symbol) if self._futures else None
+        # Try the venue fallback list first (Binance -> OKX -> Bybit), then the
+        # futures provider as a last resort. Funding is optional: None just means
+        # detectors run candle-only.
+        for source in self._funding_sources:
+            rate = source.get_funding_rate(symbol)
+            if rate is not None:
+                return rate
+        if self._futures:
+            return self._futures.get_funding_rate(symbol)
+        return None
 
     def get_open_interest_change(self, symbol: str, period: str = "5m", limit: int = 12) -> Optional[float]:
         return self._futures.get_open_interest_change(symbol, period, limit) if self._futures else None

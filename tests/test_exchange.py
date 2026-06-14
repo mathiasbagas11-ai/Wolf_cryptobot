@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from typing import Optional
 
-from wolf.exchange import BinanceSource, BybitSource, MarketDataClient, OKXSource
+from wolf.exchange import (
+    BinanceFunding,
+    BinanceSource,
+    BybitFunding,
+    BybitSource,
+    GateSource,
+    MarketDataClient,
+    OKXFunding,
+    OKXSource,
+)
 from wolf.exchange.sources import ExchangeSource
 from wolf.models import Candle
 
@@ -67,6 +76,47 @@ def test_parse_empty_payloads():
     assert OKXSource().parse_klines({"data": []}) == []
     assert BybitSource().parse_klines({"result": {"list": []}}) == []
     assert BinanceSource().parse_klines(None) == []
+
+
+# ── Gate.io ────────────────────────────────────────────────────────────────
+def test_gate_symbol_and_interval():
+    s = GateSource()
+    assert s._symbol("BTCUSDT") == "BTC_USDT"
+    assert s._interval("15m") == "15m"
+    assert s._interval("1h") == "1h"
+
+
+def test_gate_parse_klines():
+    # Gate row: [t(s), quote_vol, close, high, low, open, base_vol, closed]
+    payload = [
+        ["1000", "5000", "11", "12", "9", "10", "450", "true"],
+        ["1900", "6000", "12", "13", "10", "11", "500", "true"],
+    ]
+    candles = GateSource().parse_klines(payload)
+    assert [c.time for c in candles] == [1_000_000, 1_900_000]  # seconds -> ms
+    assert candles[0].open == 10.0 and candles[0].high == 12.0 and candles[0].close == 11.0
+    assert candles[0].volume == 450.0
+
+
+def test_gate_parse_price():
+    assert GateSource().parse_price([{"last": "65000.5"}]) == 65000.5
+
+
+# ── funding sources ────────────────────────────────────────────────────────
+def test_binance_funding_parse():
+    assert BinanceFunding().parse({"lastFundingRate": "-0.0006"}) == -0.06
+
+
+def test_okx_funding_parse_and_inst():
+    f = OKXFunding()
+    assert f._request("BTCUSDT")[1]["instId"] == "BTC-USDT-SWAP"
+    assert f.parse({"data": [{"fundingRate": "0.0009"}]}) == 0.09
+
+
+def test_bybit_funding_parse():
+    assert BybitFunding().parse({"result": {"list": [{"fundingRate": "-0.0005"}]}}) == -0.05
+    # Empty funding string -> None, not a crash.
+    assert BybitFunding().parse({"result": {"list": [{"fundingRate": ""}]}}) is None
 
 
 # ── fallback + cache ───────────────────────────────────────────────────────
@@ -140,6 +190,34 @@ def test_funding_delegates_to_futures():
 def test_funding_none_without_futures():
     client = MarketDataClient([FakeSource("a", [_c(1)])])
     assert client.get_funding_rate("BTCUSDT") is None
+
+
+class FakeFunding:
+    def __init__(self, rate): self._rate = rate
+    def get_funding_rate(self, symbol): return self._rate
+
+
+def test_funding_falls_back_across_venues():
+    # First venue returns None, second returns a rate.
+    client = MarketDataClient(
+        [FakeSource("a", [_c(1)])],
+        funding_sources=[FakeFunding(None), FakeFunding(-0.08)],
+    )
+    assert client.get_funding_rate("BTCUSDT") == -0.08
+
+
+def test_funding_sources_take_priority_over_futures():
+    class Fut:
+        def get_funding_rate(self, s): return 0.01
+        def get_open_interest_change(self, s, p="5m", l=12): return 1.0
+
+    client = MarketDataClient(
+        [FakeSource("a", [_c(1)])],
+        futures=Fut(),
+        funding_sources=[FakeFunding(-0.05)],
+    )
+    # Venue funding wins; futures only used as last resort.
+    assert client.get_funding_rate("BTCUSDT") == -0.05
 
 
 def test_source_names_and_empty_guard():

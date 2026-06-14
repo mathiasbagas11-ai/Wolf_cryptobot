@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from wolf.ai import DebateValidator, build_llm_client
 from wolf.config import Settings
 from wolf.detectors import default_detectors
-from wolf.exchange import SOURCE_REGISTRY, BinanceClient, MarketDataClient
+from wolf.exchange import (
+    FUNDING_REGISTRY,
+    SOURCE_REGISTRY,
+    BinanceClient,
+    MarketDataClient,
+)
 from wolf.market import ContextProvider
 from wolf.notify import TelegramNotifier
 from wolf.screener import Screener
@@ -48,12 +53,19 @@ def _build_market_client(settings: Settings) -> MarketDataClient:
 
         sources.append(BinanceSource(base_url=settings.binance_spot_base, timeout=settings.http_timeout))
 
+    # Funding sources follow the same venue order; only venues that expose
+    # funding appear in FUNDING_REGISTRY.
+    funding_sources = [
+        FUNDING_REGISTRY[name](timeout=settings.http_timeout)
+        for name in settings.exchanges
+        if name in FUNDING_REGISTRY
+    ]
     futures = BinanceClient(
         spot_base=settings.binance_spot_base,
         futures_base=settings.binance_futures_base,
         timeout=settings.http_timeout,
     )
-    return MarketDataClient(sources, futures=futures)
+    return MarketDataClient(sources, futures=futures, funding_sources=funding_sources)
 
 
 def build_application(settings: Settings | None = None) -> Application:

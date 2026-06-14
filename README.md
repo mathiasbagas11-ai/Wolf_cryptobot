@@ -93,17 +93,21 @@ Market data is fetched through a `MarketDataClient` that tries an ordered list o
 exchange sources and serves from the first that responds — resilient to a venue
 being geo-blocked or down (the same role the old bot's `exchange_resolver`
 played). The winning source per symbol is cached so later cycles skip dead
-venues. Order is configurable via `EXCHANGES` (default `binance,okx,bybit`).
+venues. Order is configurable via `EXCHANGES` (default `binance,okx,bybit,gate`).
 
 ```
 get_klines(BTCUSDT) ─► Binance ─(403/empty)─► OKX ─(ok)─► candles   [cache: OKX]
 ```
 
 Each venue lives in its own module (`wolf/exchange/sources.py`) and normalises
-its symbol format (`BTCUSDT` ↔ `BTC-USDT`), interval codes (`15m` ↔ `1H`/`15`)
-and JSON payload into the common `Candle` type. Derivatives data (funding rate,
-open interest) is Binance-futures-specific and delegated to a futures provider;
-when unavailable, detectors degrade to candle-only.
+its symbol format (`BTCUSDT` ↔ `BTC-USDT` ↔ `BTC_USDT`), interval codes
+(`15m` ↔ `1H`/`15`) and JSON payload into the common `Candle` type.
+
+**Funding rate** is itself multi-venue (`wolf/exchange/derivatives.py`): the
+client falls back across Binance → OKX → Bybit so the PREPUMP/PREDUMP funding
+signal survives one venue being blocked. Open-interest change stays Binance-
+specific. When no funding/OI is available, those detectors degrade to
+candle-only.
 
 ## AI debate layer
 
