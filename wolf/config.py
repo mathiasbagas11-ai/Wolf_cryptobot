@@ -127,6 +127,8 @@ class Settings:
     binance_spot_base: str = "https://api.binance.com/api/v3"
     binance_futures_base: str = "https://fapi.binance.com"
     http_timeout: float = 10.0
+    # Ordered data sources to try (fallback). First that responds wins.
+    exchanges: tuple[str, ...] = ("binance", "okx", "bybit")
 
     # Scheduling (minutes)
     screener_interval_min: int = 10
@@ -179,9 +181,11 @@ class Settings:
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),
         )
+        exchanges = _env_csv("EXCHANGES") or ("binance", "okx", "bybit")
         return cls(
             state_dir=_env_str("STATE_DIR", "state_data"),
             http_timeout=_env_float("HTTP_TIMEOUT", 10.0),
+            exchanges=tuple(exchanges),
             screener_interval_min=_env_int("SCREENER_INTERVAL_MIN", 10),
             tracker_interval_min=_env_int("TRACKER_INTERVAL_MIN", 5),
             api_host=_env_str("API_HOST", "0.0.0.0"),

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from wolf.ai import DebateValidator, build_llm_client
 from wolf.config import Settings
 from wolf.detectors import default_detectors
-from wolf.exchange import BinanceClient
+from wolf.exchange import SOURCE_REGISTRY, BinanceClient, MarketDataClient
 from wolf.market import ContextProvider
 from wolf.notify import TelegramNotifier
 from wolf.screener import Screener
@@ -25,21 +25,42 @@ from wolf.tracker import Tracker
 class Application:
     settings: Settings
     store: StateStore
-    client: BinanceClient
+    client: MarketDataClient
     notifier: TelegramNotifier
     tracker: Tracker
     screener: Screener
+
+
+def _build_market_client(settings: Settings) -> MarketDataClient:
+    """Compose the ordered fallback sources + a Binance futures provider."""
+    sources = []
+    for name in settings.exchanges:
+        factory = SOURCE_REGISTRY.get(name)
+        if factory is None:
+            continue
+        # Binance source reuses the configured spot base; others use defaults.
+        if name == "binance":
+            sources.append(factory(base_url=settings.binance_spot_base, timeout=settings.http_timeout))
+        else:
+            sources.append(factory(timeout=settings.http_timeout))
+    if not sources:  # never leave the client without a source
+        from wolf.exchange import BinanceSource
+
+        sources.append(BinanceSource(base_url=settings.binance_spot_base, timeout=settings.http_timeout))
+
+    futures = BinanceClient(
+        spot_base=settings.binance_spot_base,
+        futures_base=settings.binance_futures_base,
+        timeout=settings.http_timeout,
+    )
+    return MarketDataClient(sources, futures=futures)
 
 
 def build_application(settings: Settings | None = None) -> Application:
     settings = settings or Settings.from_env()
 
     store = StateStore(settings.state_dir)
-    client = BinanceClient(
-        spot_base=settings.binance_spot_base,
-        futures_base=settings.binance_futures_base,
-        timeout=settings.http_timeout,
-    )
+    client = _build_market_client(settings)
     notifier = TelegramNotifier(settings.telegram, timeout=settings.http_timeout)
     tracker = Tracker(store, client, settings.tracker, notify=notifier.on_event)
     context_provider = ContextProvider(client)

@@ -47,7 +47,7 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/config.py` | Immutable `Settings` loaded from env — **no globals** |
 | `wolf/models.py` | Typed `Signal`/`Candle`/`Status` dataclasses & enums |
 | `wolf/state/store.py` | Atomic, thread-safe JSON store (the **only** persistence layer) |
-| `wolf/exchange/binance.py` | Binance REST client with narrow error handling |
+| `wolf/exchange/` | Multi-exchange data layer — Binance/OKX/Bybit sources + fallback client |
 | `wolf/indicators.py` | Pure indicator functions (RSI, ATR, EMA, MACD, Bollinger…) |
 | `wolf/structure.py` | Price-action helpers (swing points, liquidity sweep, RSI divergence) |
 | `wolf/detectors/` | One detector per module (`momentum`, `prepump`, `predump`, `scalp`, `swing`) |
@@ -86,6 +86,24 @@ in `wolf/detectors/__init__.py` — nothing else changes.
 Binance futures: negative/extreme funding boosts a PREPUMP short-squeeze case,
 overheated positive funding boosts a PREDUMP. The bonus is purely additive, so
 detectors still work candle-only when futures data is unavailable.
+
+## Data sources (multi-exchange fallback)
+
+Market data is fetched through a `MarketDataClient` that tries an ordered list of
+exchange sources and serves from the first that responds — resilient to a venue
+being geo-blocked or down (the same role the old bot's `exchange_resolver`
+played). The winning source per symbol is cached so later cycles skip dead
+venues. Order is configurable via `EXCHANGES` (default `binance,okx,bybit`).
+
+```
+get_klines(BTCUSDT) ─► Binance ─(403/empty)─► OKX ─(ok)─► candles   [cache: OKX]
+```
+
+Each venue lives in its own module (`wolf/exchange/sources.py`) and normalises
+its symbol format (`BTCUSDT` ↔ `BTC-USDT`), interval codes (`15m` ↔ `1H`/`15`)
+and JSON payload into the common `Candle` type. Derivatives data (funding rate,
+open interest) is Binance-futures-specific and delegated to a futures provider;
+when unavailable, detectors degrade to candle-only.
 
 ## AI debate layer
 
