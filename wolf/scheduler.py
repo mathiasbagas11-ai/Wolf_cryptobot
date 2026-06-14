@@ -44,7 +44,13 @@ def _guarded(fn, label: str):
 
 
 def build_scheduler(app: Application) -> BackgroundScheduler:
-    scheduler = BackgroundScheduler(timezone="UTC")
+    # A generous misfire grace so the immediate first run (next_run_time=now) is
+    # not skipped if start() lags a second or two behind build — otherwise the
+    # boot-time report would be silently dropped as a "misfire".
+    scheduler = BackgroundScheduler(
+        timezone="UTC",
+        job_defaults={"misfire_grace_time": 300, "coalesce": True},
+    )
     scheduler.add_job(
         _guarded(app.tracker.check_pending, "track"),
         "interval",
