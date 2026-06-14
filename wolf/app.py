@@ -89,10 +89,16 @@ def build_application(settings: Settings | None = None) -> Application:
 
     validator = None
     if settings.ai.enabled:
-        llm = build_llm_client(
-            settings.ai.provider, settings.anthropic_api_key, settings.ai.model
+        def _role_client(role):
+            return build_llm_client(
+                role.provider, settings.api_key_for(role.provider), role.model
+            )
+
+        validator = DebateValidator(
+            bull=_role_client(settings.ai.bull),
+            bear=_role_client(settings.ai.bear),
+            arbiter=_role_client(settings.ai.arbiter),
         )
-        validator = DebateValidator(llm)
 
     screener = Screener(
         client, tracker, default_detectors(), notifier=notifier,

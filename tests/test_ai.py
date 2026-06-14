@@ -50,6 +50,28 @@ def test_build_llm_client_unknown_provider_is_null():
     assert build_llm_client("acme", "key", "m").available is False
 
 
+def test_build_llm_client_openai_compat_providers():
+    from wolf.ai.openai_compat import OpenAICompatLLMClient
+
+    for provider in ("deepseek", "groq", "hermes"):
+        client = build_llm_client(provider, "key", "model")
+        assert isinstance(client, OpenAICompatLLMClient)
+        assert client.available is True
+
+
+def test_debate_splits_roles_across_clients():
+    bull, bear, arbiter = FakeLLM(), FakeLLM(), FakeLLM("REJECT", 90)
+    verdict = DebateValidator(bull=bull, bear=bear, arbiter=arbiter).validate(_candidate())
+    assert verdict.decision == Decision.REJECT
+    assert len(bull.calls) == 1 and len(bear.calls) == 1  # one role each
+
+
+def test_debate_abstains_when_all_roles_unavailable():
+    null = NullLLMClient()
+    v = DebateValidator(bull=null, bear=null, arbiter=null).validate(_candidate())
+    assert v.decision == Decision.ABSTAIN
+
+
 # ── debate ────────────────────────────────────────────────────────────────
 def test_validator_abstains_when_unavailable():
     verdict = DebateValidator(NullLLMClient()).validate(_candidate())

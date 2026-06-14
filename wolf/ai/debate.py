@@ -103,24 +103,45 @@ def _describe(candidate: SignalCandidate, context=None) -> str:
 
 
 class DebateValidator(SignalValidator):
-    def __init__(self, client: Optional[LLMClient] = None) -> None:
-        self._client = client or NullLLMClient()
+    """Bull/Bear/Arbiter debate, optionally split across three providers.
+
+    Pass a single ``client`` to run every role on one model (back-compat), or
+    distinct ``bull``/``bear``/``arbiter`` clients to debate across providers —
+    e.g. DeepSeek (bull) vs Groq (bear), refereed by Hermes (arbiter).
+    """
+
+    def __init__(
+        self,
+        client: Optional[LLMClient] = None,
+        *,
+        bull: Optional[LLMClient] = None,
+        bear: Optional[LLMClient] = None,
+        arbiter: Optional[LLMClient] = None,
+    ) -> None:
+        fallback = client or NullLLMClient()
+        self._bull = bull or fallback
+        self._bear = bear or fallback
+        self._arbiter = arbiter or fallback
+
+    @property
+    def _available(self) -> bool:
+        return any(c.available for c in (self._bull, self._bear, self._arbiter))
 
     def validate(self, candidate: SignalCandidate, context=None) -> Verdict:
-        if not self._client.available:
+        if not self._available:
             return Verdict(decision=Decision.ABSTAIN)
 
         setup = _describe(candidate, context)
         try:
-            bull = self._client.complete(_BULL_SYSTEM, setup, max_tokens=512)
-            bear = self._client.complete(_BEAR_SYSTEM, setup, max_tokens=512)
+            bull = self._bull.complete(_BULL_SYSTEM, setup, max_tokens=512)
+            bear = self._bear.complete(_BEAR_SYSTEM, setup, max_tokens=512)
             arbiter_prompt = (
                 f"PROPOSED SETUP:\n{setup}\n\n"
                 f"BULL CASE:\n{bull or '(none)'}\n\n"
                 f"BEAR CASE:\n{bear or '(none)'}\n\n"
                 "Decide: CONFIRM, NEUTRAL, or REJECT."
             )
-            data = self._client.complete_json(_ARBITER_SYSTEM, arbiter_prompt, _VERDICT_SCHEMA, max_tokens=512)
+            data = self._arbiter.complete_json(_ARBITER_SYSTEM, arbiter_prompt, _VERDICT_SCHEMA, max_tokens=512)
         except Exception:  # the AI layer must never break screening
             log.exception("Debate failed for %s — abstaining", candidate.symbol)
             return Verdict(decision=Decision.ABSTAIN)
