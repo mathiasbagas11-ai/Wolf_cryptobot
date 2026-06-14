@@ -111,7 +111,7 @@ class TelegramNotifier:
         elif event == "TP_HIT":
             self.send(self._tp_text(signal, info), self._settings.route_entry())
         elif event == "RESOLVED":
-            self.send(self._resolved_text(signal), self._settings.route_trade_report())
+            self.send(self._resolved_text(signal, info), self._settings.route_trade_report())
 
     def notify_stats(self, stats: dict) -> None:
         self.send(self._stats_card(stats), self._settings.route_stats())
@@ -183,16 +183,34 @@ class TelegramNotifier:
             f"{self._stamp()}"
         )
 
-    def _resolved_text(self, s: Signal) -> str:
+    def _resolved_text(self, s: Signal, info: Optional[dict] = None) -> str:
+        info = info or {}
         status = Status(s.status)
         head = "🎯 <b>WIN" if status.is_win else ("🛑 <b>LOSS" if status.is_loss else "⚪ <b>CLOSED")
         pnl = s.pnl_pct if s.pnl_pct is not None else 0.0
         hold = s.hold_hours if s.hold_hours is not None else 0.0
-        return (
-            f"{head} · {esc(s.status)}</b> · {esc(s.symbol)} {esc(s.direction)}\n"
-            f"PnL <b>{pnl:+.2f}%</b> · held {hold:.1f}h · {esc(s.strategy)}\n"
-            f"{self._stamp()}"
-        )
+        tp_final = (s.tp_ladder[-1]["price"] if s.tp_ladder else s.tp)
+        exit_str = fmt_price(s.exit_price) if s.exit_price is not None else "—"
+
+        lines = [
+            f"{head} · {esc(s.status)}</b> · {esc(s.symbol)} {esc(s.direction)}",
+            f"💵 Entry <code>{fmt_price(s.entry_price)}</code> → Exit <code>{exit_str}</code>",
+            f"🎯 TP <code>{fmt_price(tp_final)}</code> · 🛑 SL <code>{fmt_price(s.sl)}</code>",
+        ]
+        # PnL line — add currency move + R multiple when the paper account ran.
+        pnl_line = f"📈 PnL <b>{pnl:+.2f}%</b>"
+        if "r_multiple" in info:
+            pnl_line += f" · {info['r_multiple']:+.2f}R"
+        if "pnl_amount" in info:
+            pnl_line += f" · {info['pnl_amount']:+.2f} USD"
+        pnl_line += f" · held {hold:.1f}h · {esc(s.strategy)}"
+        lines.append(pnl_line)
+        if "balance" in info:
+            lines.append(f"🏦 Paper balance <b>{info['balance']:.2f} USD</b>")
+        if info.get("lesson"):
+            lines.append(f"🧠 <i>{esc(info['lesson'])}</i>")
+        lines.append(self._stamp())
+        return "\n".join(lines)
 
     def _news_card(self, items) -> str:
         lines = [f"📰 <b>CRYPTO NEWS</b>\n{DIVIDER}"]

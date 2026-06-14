@@ -220,6 +220,10 @@ class Settings:
     # Ordered data sources to try (fallback). First that responds wins.
     exchanges: tuple[str, ...] = ("binance", "okx", "bybit", "gate")
 
+    # Paper trading account (drives the Trade Report balance/PnL view)
+    paper_start_balance: float = 1000.0
+    paper_risk_pct: float = 1.0
+
     # Scheduling (minutes)
     screener_interval_min: int = 10
     tracker_interval_min: int = 5
@@ -316,6 +320,8 @@ class Settings:
         exchanges = _env_csv("EXCHANGES") or ("binance", "okx", "bybit", "gate")
         return cls(
             state_dir=_env_str("STATE_DIR", "state_data"),
+            paper_start_balance=_env_float("PAPER_START_BALANCE", 1000.0),
+            paper_risk_pct=_env_float("PAPER_RISK_PCT", 1.0),
             http_timeout=_env_float("HTTP_TIMEOUT", 10.0),
             exchanges=tuple(exchanges),
             screener_interval_min=_env_int("SCREENER_INTERVAL_MIN", 10),
