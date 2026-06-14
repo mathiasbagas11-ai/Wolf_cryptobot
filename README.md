@@ -51,6 +51,8 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/indicators.py` | Pure indicator functions (RSI, ATR, EMA, MACD, Bollinger…) |
 | `wolf/structure.py` | Price-action helpers (swing points, liquidity sweep, RSI divergence) |
 | `wolf/detectors/` | One detector per module (`momentum`, `prepump`, `predump`, `scalp`, `swing`) |
+| `wolf/market.py` | Futures market context (funding rate, open interest) + provider |
+| `wolf/ai/` | AI debate layer — Bull/Bear + arbiter verdict (Anthropic SDK) |
 | `wolf/tracker.py` | Signal lifecycle engine + stats — the core |
 | `wolf/notify/telegram.py` | Telegram notifier + message builders |
 | `wolf/screener.py` | Thin orchestration (replaces the old 11k-line hub) |
@@ -78,6 +80,30 @@ and unit-tested.
 
 Add a detector by writing one module and appending it to `default_detectors()`
 in `wolf/detectors/__init__.py` — nothing else changes.
+
+`PREPUMP`/`PREDUMP` additionally consume an optional **market context**
+(`wolf/market.py`) carrying the funding rate and open-interest momentum from
+Binance futures: negative/extreme funding boosts a PREPUMP short-squeeze case,
+overheated positive funding boosts a PREDUMP. The bonus is purely additive, so
+detectors still work candle-only when futures data is unavailable.
+
+## AI debate layer
+
+Optional and **off by default** (`AI_DEBATE_ENABLED=true` to enable). When on,
+the screener runs the single best candidate per symbol through a three-step
+debate before recording it:
+
+1. **Bull** argues for the trade.
+2. **Bear** argues against it.
+3. **Arbiter** returns a structured verdict — `CONFIRM` / `NEUTRAL` / `REJECT`
+   with a confidence (0-100) and one-line rationale.
+
+A `REJECT` at or above `AI_VETO_MIN_CONFIDENCE` (default 70) vetoes the signal;
+otherwise the rationale is attached to the signal's reasons. The layer is
+provider-agnostic (`wolf/ai/base.py`) with an Anthropic implementation
+(`claude-opus-4-8`, adaptive thinking, structured-output verdicts via the
+official `anthropic` SDK). With no API key it degrades to an `ABSTAIN` verdict
+that never blocks a signal, so the bot runs unchanged with the AI layer off.
 
 ## Signal lifecycle
 
@@ -157,6 +183,9 @@ unchanged. Key knobs:
 | `TRACKER_DEDUP_MINUTES` | `30` | Suppress duplicate symbol+direction |
 | `STATE_DIR` | `state_data` | Where JSON state is persisted |
 | `API_PORT` | `8000` | REST API port |
+| `AI_DEBATE_ENABLED` | `false` | Enable the Bull/Bear/arbiter AI layer |
+| `CLAUDE_MODEL` | `claude-opus-4-8` | Model for the AI arbiter |
+| `AI_VETO_MIN_CONFIDENCE` | `70` | Min `REJECT` confidence to veto a signal |
 
 ---
 

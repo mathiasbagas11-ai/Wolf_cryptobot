@@ -14,10 +14,11 @@ dependencies = [
     "apscheduler>=3.10",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
+    "anthropic>=0.40",
 ]
 
 [tool.setuptools]
-packages = ["wolf", "wolf.state", "wolf.exchange", "wolf.detectors", "wolf.notify", "wolf.api"]
+packages = ["wolf", "wolf.state", "wolf.exchange", "wolf.detectors", "wolf.notify", "wolf.api", "wolf.ai"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

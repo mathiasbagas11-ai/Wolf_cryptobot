@@ -38,6 +38,8 @@ class Screener:
         interval: str = "15m",
         candle_limit: int = 150,
         context_provider=None,
+        validator=None,
+        veto_min_confidence: int = 70,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -47,18 +49,19 @@ class Screener:
         self._interval = interval
         self._candle_limit = candle_limit
         self._context_provider = context_provider
+        self._validator = validator
+        self._veto_min_confidence = veto_min_confidence
 
-    def scan_symbol(self, symbol: str) -> Optional[SignalCandidate]:
-        """Return the highest-scoring candidate for ``symbol`` this cycle."""
-        candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
-        if not candles:
+    def _build_context(self, symbol: str):
+        if self._context_provider is None:
             return None
-        context = None
-        if self._context_provider is not None:
-            try:
-                context = self._context_provider.build(symbol)
-            except (ValueError, KeyError, TypeError):
-                log.exception("Context build failed for %s", symbol)
+        try:
+            return self._context_provider.build(symbol)
+        except (ValueError, KeyError, TypeError):
+            log.exception("Context build failed for %s", symbol)
+            return None
+
+    def _best_candidate(self, symbol: str, candles, context) -> Optional[SignalCandidate]:
         best: Optional[SignalCandidate] = None
         for detector in self._detectors:
             try:
@@ -70,12 +73,38 @@ class Screener:
                 best = candidate
         return best
 
+    def scan_symbol(self, symbol: str) -> Optional[SignalCandidate]:
+        """Return the highest-scoring candidate for ``symbol`` this cycle."""
+        candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
+        if not candles:
+            return None
+        return self._best_candidate(symbol, candles, self._build_context(symbol))
+
+    def _apply_validator(self, candidate: SignalCandidate, context) -> bool:
+        """Run the AI debate gate. Returns False if the signal is vetoed."""
+        if self._validator is None:
+            return True
+        verdict = self._validator.validate(candidate, context)
+        if verdict.rationale:
+            # Prepend so the verdict survives the Signal's top-3 reasons cap.
+            candidate.reasons = [f"AI[{verdict.decision} {verdict.confidence}%]: {verdict.rationale}"] + candidate.reasons
+        if verdict.is_reject and verdict.confidence >= self._veto_min_confidence:
+            log.info("AI vetoed %s %s (%d%%): %s", candidate.symbol, candidate.direction, verdict.confidence, verdict.rationale)
+            return False
+        return True
+
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""
         recorded = []
         for symbol in self._universe:
-            candidate = self.scan_symbol(symbol)
+            candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
+            if not candles:
+                continue
+            context = self._build_context(symbol)
+            candidate = self._best_candidate(symbol, candles, context)
             if not candidate:
+                continue
+            if not self._apply_validator(candidate, context):
                 continue
             signal = self._tracker.record_signal(
                 symbol=candidate.symbol,

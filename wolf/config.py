@@ -106,6 +106,18 @@ class TrackerSettings:
 
 
 @dataclass(frozen=True)
+class AISettings:
+    """AI debate-layer configuration."""
+
+    enabled: bool = False
+    provider: str = "anthropic"
+    model: str = "claude-opus-4-8"
+    # If a REJECT verdict at/above this confidence should veto the signal.
+    veto_enabled: bool = True
+    veto_min_confidence: int = 70
+
+
+@dataclass(frozen=True)
 class Settings:
     """Top-level immutable application settings."""
 
@@ -140,6 +152,7 @@ class Settings:
 
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
+    ai: AISettings = field(default_factory=AISettings)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -156,6 +169,13 @@ class Settings:
         tracker = TrackerSettings(
             dedup_minutes=_env_int("TRACKER_DEDUP_MINUTES", 30),
             max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", 500),
+        )
+        ai = AISettings(
+            enabled=_env_bool("AI_DEBATE_ENABLED", False),
+            provider=_env_str("AI_PROVIDER", "anthropic"),
+            model=_env_str("CLAUDE_MODEL", "claude-opus-4-8"),
+            veto_enabled=_env_bool("AI_VETO_ENABLED", True),
+            veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),
         )
         return cls(
             state_dir=_env_str("STATE_DIR", "state_data"),
@@ -176,6 +196,7 @@ class Settings:
             log_level=_env_str("LOG_LEVEL", "INFO"),
             telegram=telegram,
             tracker=tracker,
+            ai=ai,
         )
 
     def describe(self) -> dict:
@@ -183,7 +204,7 @@ class Settings:
         secret_names = {f.name for f in fields(self) if f.name.endswith(("_key", "_token"))}
         out: dict = {}
         for f in fields(self):
-            if f.name in ("telegram", "tracker"):
+            if f.name in ("telegram", "tracker", "ai"):
                 continue
             value = getattr(self, f.name)
             if f.name in secret_names or f.name.endswith("_anon_key"):
@@ -191,4 +212,5 @@ class Settings:
             else:
                 out[f.name] = value
         out["telegram_enabled"] = self.telegram.enabled
+        out["ai_enabled"] = self.ai.enabled
         return out
