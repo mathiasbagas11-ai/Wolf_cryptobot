@@ -20,7 +20,7 @@ from typing import Optional
 
 import requests
 
-from wolf.exchange.sources import _split_quote
+from wolf.exchange.sources import split_quote
 
 log = logging.getLogger("wolf.exchange")
 
@@ -86,7 +86,7 @@ class OKXFunding(FundingSource):
         self._base = base_url.rstrip("/")
 
     def _request(self, symbol):
-        base, quote = _split_quote(symbol)
+        base, quote = split_quote(symbol)
         inst = f"{base}-{quote}-SWAP" if quote else symbol
         return f"{self._base}/api/v5/public/funding-rate", {"instId": inst}
 

@@ -96,7 +96,7 @@ class ExchangeSource(ABC):
             return None
 
 
-def _split_quote(symbol: str) -> tuple[str, str]:
+def split_quote(symbol: str) -> tuple[str, str]:
     """Split ``BTCUSDT`` into ``(BTC, USDT)``; falls back to (sym, '')."""
     for quote in ("USDT", "USDC", "USD", "BTC", "ETH"):
         if symbol.endswith(quote) and len(symbol) > len(quote):
@@ -140,7 +140,7 @@ class OKXSource(ExchangeSource):
         super().__init__(base_url, **kw)
 
     def _symbol(self, symbol: str) -> str:
-        base, quote = _split_quote(symbol)
+        base, quote = split_quote(symbol)
         return f"{base}-{quote}" if quote else symbol
 
     def _interval(self, interval: str) -> str:
@@ -179,7 +179,7 @@ class GateSource(ExchangeSource):
         super().__init__(base_url, **kw)
 
     def _symbol(self, symbol: str) -> str:
-        base, quote = _split_quote(symbol)
+        base, quote = split_quote(symbol)
         return f"{base}_{quote}" if quote else symbol
 
     def _interval(self, interval: str) -> str:
