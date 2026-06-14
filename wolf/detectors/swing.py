@@ -26,7 +26,7 @@ class SwingDetector(Detector):
     def __init__(self, score_threshold: int = 65) -> None:
         self.score_threshold = score_threshold
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle]) -> Optional[SignalCandidate]:
+    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
         closes = ind.closes(candles)

@@ -31,7 +31,7 @@ class PreDumpDetector(Detector):
     def __init__(self, score_threshold: int = 65) -> None:
         self.score_threshold = score_threshold
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle]) -> Optional[SignalCandidate]:
+    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
         closes = ind.closes(candles)
@@ -78,6 +78,16 @@ class PreDumpDetector(Detector):
         # 5. Risk/reward sanity
         if atr / price < 0.1:
             score += 5
+
+        # 6. Derivatives confluence (optional) — overheated positive funding
+        #    means longs are crowded and ripe for liquidation.
+        if context is not None:
+            if context.funding_overheated_long:
+                score += 15
+                reasons.append(f"Funding overheated {context.funding_rate:.3f}% — longs ripe for liquidation")
+            if context.oi_falling:
+                score += 8
+                reasons.append(f"OI falling {context.oi_change_pct:+.1f}% — positions unwinding")
 
         if score < self.score_threshold:
             return None

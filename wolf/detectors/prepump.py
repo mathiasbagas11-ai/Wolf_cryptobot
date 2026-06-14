@@ -35,7 +35,7 @@ class PrePumpDetector(Detector):
         # Current BB width must be within this multiple of the recent minimum.
         self.squeeze_ratio = squeeze_ratio
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle]) -> Optional[SignalCandidate]:
+    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
         closes = ind.closes(candles)
@@ -86,6 +86,19 @@ class PrePumpDetector(Detector):
         if ema50 and price > ema50[-1]:
             score += 10
             reasons.append("Price above EMA50 — uptrend context")
+
+        # 6. Derivatives confluence (optional) — negative funding = crowded
+        #    shorts ripe for a squeeze; rising OI = fresh positioning.
+        if context is not None:
+            if context.funding_extreme_squeeze:
+                score += 15
+                reasons.append(f"Funding extreme {context.funding_rate:.3f}% — short squeeze imminent")
+            elif context.funding_squeeze:
+                score += 10
+                reasons.append(f"Funding negative {context.funding_rate:.3f}% — short squeeze potential")
+            if context.oi_rising:
+                score += 8
+                reasons.append(f"OI rising {context.oi_change_pct:+.1f}% — accumulation")
 
         if score < self.score_threshold:
             return None

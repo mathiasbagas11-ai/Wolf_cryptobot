@@ -40,7 +40,7 @@ class MomentumBreakoutDetector(Detector):
         self.atr_tp_mults = atr_tp_mults
         self.score_threshold = score_threshold
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle]) -> Optional[SignalCandidate]:
+    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
 

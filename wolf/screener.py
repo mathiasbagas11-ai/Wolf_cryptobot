@@ -37,6 +37,7 @@ class Screener:
         universe: Sequence[str] = DEFAULT_UNIVERSE,
         interval: str = "15m",
         candle_limit: int = 150,
+        context_provider=None,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -45,16 +46,23 @@ class Screener:
         self._universe = list(universe)
         self._interval = interval
         self._candle_limit = candle_limit
+        self._context_provider = context_provider
 
     def scan_symbol(self, symbol: str) -> Optional[SignalCandidate]:
         """Return the highest-scoring candidate for ``symbol`` this cycle."""
         candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
         if not candles:
             return None
+        context = None
+        if self._context_provider is not None:
+            try:
+                context = self._context_provider.build(symbol)
+            except (ValueError, KeyError, TypeError):
+                log.exception("Context build failed for %s", symbol)
         best: Optional[SignalCandidate] = None
         for detector in self._detectors:
             try:
-                candidate = detector.evaluate(symbol, candles)
+                candidate = detector.evaluate(symbol, candles, context)
             except (ValueError, KeyError, TypeError, IndexError):
                 log.exception("Detector %s crashed on %s", detector.name, symbol)
                 continue

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from wolf.config import Settings
 from wolf.detectors import default_detectors
 from wolf.exchange import BinanceClient
+from wolf.market import ContextProvider
 from wolf.notify import TelegramNotifier
 from wolf.screener import Screener
 from wolf.state import StateStore
@@ -40,7 +41,11 @@ def build_application(settings: Settings | None = None) -> Application:
     )
     notifier = TelegramNotifier(settings.telegram, timeout=settings.http_timeout)
     tracker = Tracker(store, client, settings.tracker, notify=notifier.on_event)
-    screener = Screener(client, tracker, default_detectors(), notifier=notifier)
+    context_provider = ContextProvider(client)
+    screener = Screener(
+        client, tracker, default_detectors(), notifier=notifier,
+        context_provider=context_provider,
+    )
 
     return Application(
         settings=settings,

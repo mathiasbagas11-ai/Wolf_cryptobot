@@ -28,7 +28,7 @@ class ScalpDetector(Detector):
         self.score_threshold = score_threshold
         self.min_recovery = min_recovery
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle]) -> Optional[SignalCandidate]:
+    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
         closes = ind.closes(candles)
