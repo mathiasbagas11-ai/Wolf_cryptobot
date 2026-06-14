@@ -56,8 +56,20 @@ class TelegramNotifier:
 
     # ── transport ───────────────────────────────────────────────────────
     def send(self, text: str, thread_id: str = "") -> bool:
-        ok, _desc, _mid = self._post(text, thread_id)
+        ok, desc, _mid = self._post(text, thread_id)
+        # If the topic is misconfigured (wrong/stale thread id), don't drop the
+        # message — retry once on the main channel so the alert still lands.
+        if not ok and thread_id and self._is_bad_thread(desc):
+            log.warning(
+                "thread=%s invalid (%s) — falling back to main channel", thread_id, desc
+            )
+            ok, _desc, _mid = self._post(text, "")
         return ok
+
+    @staticmethod
+    def _is_bad_thread(description: str) -> bool:
+        d = (description or "").lower()
+        return "thread" in d or "topic" in d
 
     def _post(self, text: str, thread_id: str = "") -> tuple[bool, str, Optional[int]]:
         """Low-level send. Returns ``(ok, error_description, message_id)``."""

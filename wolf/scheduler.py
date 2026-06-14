@@ -13,12 +13,24 @@ persistence race-free.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from wolf.app import Application
 
 log = logging.getLogger("wolf.scheduler")
+
+
+def _soon() -> datetime:
+    """First-fire time: run each job right away on boot, then on its interval.
+
+    Passing ``next_run_time=None`` to APScheduler would add the job *paused* (it
+    never fires) — the bug that left every room silent. Using ``now`` schedules
+    an immediate first run so reports/tracking start without waiting a full
+    interval.
+    """
+    return datetime.now(timezone.utc)
 
 
 def _guarded(fn, label: str):
@@ -40,7 +52,7 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
         id="track",
         max_instances=1,
         coalesce=True,
-        next_run_time=None,
+        next_run_time=_soon(),
     )
     scheduler.add_job(
         _guarded(app.screener.run_cycle, "scan"),
@@ -49,7 +61,7 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
         id="scan",
         max_instances=1,
         coalesce=True,
-        next_run_time=None,
+        next_run_time=_soon(),
     )
 
     # Periodic performance summary to Telegram (0 hours disables it).
@@ -62,7 +74,7 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
             id="stats",
             max_instances=1,
             coalesce=True,
-            next_run_time=None,
+            next_run_time=_soon(),
         )
 
     # Crypto news: post fresh headlines to the News topic.
@@ -74,7 +86,7 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
             id="news",
             max_instances=1,
             coalesce=True,
-            next_run_time=None,
+            next_run_time=_soon(),
         )
 
     # Periodic market reports, each to its own topic.
@@ -104,5 +116,5 @@ def _add_report_job(scheduler, enabled: bool, job_id: str, minutes: int, fn) -> 
         id=job_id,
         max_instances=1,
         coalesce=True,
-        next_run_time=None,
+        next_run_time=_soon(),
     )

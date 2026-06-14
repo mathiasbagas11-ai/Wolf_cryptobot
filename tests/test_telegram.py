@@ -238,3 +238,14 @@ def test_report_thread_validation_silent_when_all_ok(caplog):
     n.report_thread_validation(n.validate_threads())
     # No summary message posted (only the two probes were sent).
     assert all("TOPIC CHECK" not in (c.get("text") or "") for c in sess.calls)
+
+
+# ── invalid-thread fallback to main channel ─────────────────────────────────
+def test_send_falls_back_to_main_channel_on_bad_thread():
+    sess = ThreadAwareSession(bad_threads={"999"})
+    n = TelegramNotifier(_settings(new_signal_thread_id="999"), session=sess)
+    ok = n.send("hi", thread_id="999")
+    assert ok is True
+    # First attempt targets the topic, retry drops message_thread_id.
+    assert sess.calls[0].get("message_thread_id") == "999"
+    assert "message_thread_id" not in sess.calls[1]
