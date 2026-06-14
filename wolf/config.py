@@ -117,6 +117,26 @@ class TelegramSettings:
     def route_stats(self) -> str:           # periodic performance
         return _first(self.stats_thread_id, self.system_thread_id)
 
+    def configured_threads(self) -> list[tuple[str, str]]:
+        """Return ``(label, thread_id)`` for each non-empty configured topic.
+
+        Used at startup to validate every routed topic exists, so a wrong/stale
+        thread id is reported once instead of failing silently on every message.
+        """
+        labels = [
+            ("Signal Entry", self.signal_thread_id),
+            ("New Signal", self.new_signal_thread_id),
+            ("Market Update", self.market_update_thread_id),
+            ("Trade Report", self.trade_report_thread_id),
+            ("News", self.news_thread_id),
+            ("System/General", self.system_thread_id),
+            ("Stats", self.stats_thread_id),
+            ("Whale Report", self.whale_thread_id),
+            ("Hot Ecosystem", self.radar_thread_id),
+            ("BTC/ETH/SOL", self.majors_thread_id),
+        ]
+        return [(label, tid) for label, tid in labels if tid]
+
 
 def _first(*values: str) -> str:
     for v in values:

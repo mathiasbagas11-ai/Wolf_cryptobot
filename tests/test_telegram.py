@@ -182,3 +182,59 @@ def test_reasons_are_html_escaped():
     n = TelegramNotifier(_settings(), session=sess)
     n.announce_signal(_signal(reasons=["RSI < 30 & rising"]))
     assert "RSI &lt; 30 &amp; rising" in sess.calls[0]["text"]
+
+
+# ── topic validation at startup ─────────────────────────────────────────────
+class ThreadAwareSession:
+    """Fails sendMessage for a given set of thread ids; tracks deletes."""
+
+    def __init__(self, bad_threads=()):
+        self.calls: list[dict] = []
+        self.deletes: list[dict] = []
+        self._bad = set(bad_threads)
+
+    def post(self, url, json=None, timeout=None):
+        if url.endswith("/deleteMessage"):
+            self.deletes.append(json)
+            return FakeResponse(200, {"ok": True})
+        self.calls.append(json)
+        tid = json.get("message_thread_id")
+        if tid in self._bad:
+            return FakeResponse(400, {"ok": False, "description": "message thread not found"})
+        return FakeResponse(200, {"ok": True, "result": {"message_id": 555}})
+
+
+def test_validate_threads_flags_bad_and_deletes_probes():
+    s = _settings(system_thread_id="1", news_thread_id="5", whale_thread_id="6")
+    sess = ThreadAwareSession(bad_threads={"1"})
+    n = TelegramNotifier(s, session=sess)
+    result = n.validate_threads()
+
+    bad_ids = {tid for _, tid, _ in result["bad"]}
+    ok_ids = {tid for _, tid in result["ok"]}
+    assert bad_ids == {"1"}
+    assert ok_ids == {"5", "6"}
+    # Valid probes are cleaned up; the failed one left nothing to delete.
+    assert {d["message_id"] for d in sess.deletes} == {555}
+    assert len(sess.deletes) == 2
+
+
+def test_report_thread_validation_posts_summary_to_main_when_general_bad():
+    s = _settings(system_thread_id="1", news_thread_id="5")
+    sess = ThreadAwareSession(bad_threads={"1"})
+    n = TelegramNotifier(s, session=sess)
+    n.report_thread_validation(n.validate_threads())
+    summary = sess.calls[-1]
+    # General (id 1) is itself invalid -> summary must fall back to main channel.
+    assert "message_thread_id" not in summary
+    assert "TOPIC CHECK" in summary["text"]
+    assert "System/General" in summary["text"]
+
+
+def test_report_thread_validation_silent_when_all_ok(caplog):
+    s = _settings(news_thread_id="5", whale_thread_id="6")
+    sess = ThreadAwareSession(bad_threads=set())
+    n = TelegramNotifier(s, session=sess)
+    n.report_thread_validation(n.validate_threads())
+    # No summary message posted (only the two probes were sent).
+    assert all("TOPIC CHECK" not in (c.get("text") or "") for c in sess.calls)

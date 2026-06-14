@@ -56,9 +56,14 @@ class TelegramNotifier:
 
     # ── transport ───────────────────────────────────────────────────────
     def send(self, text: str, thread_id: str = "") -> bool:
+        ok, _desc, _mid = self._post(text, thread_id)
+        return ok
+
+    def _post(self, text: str, thread_id: str = "") -> tuple[bool, str, Optional[int]]:
+        """Low-level send. Returns ``(ok, error_description, message_id)``."""
         if not self.enabled:
             log.debug("Telegram disabled; dropping message")
-            return False
+            return False, "disabled", None
         url = f"https://api.telegram.org/bot{self._settings.bot_token}/sendMessage"
         payload: dict = {
             "chat_id": self._settings.chat_id,
@@ -72,7 +77,7 @@ class TelegramNotifier:
             resp = self._session.post(url, json=payload, timeout=self._timeout)
         except requests.RequestException as exc:
             log.warning("Telegram send error: %s", exc)
-            return False
+            return False, str(exc), None
         if resp.status_code != 200:
             description = ""
             try:
@@ -83,8 +88,72 @@ class TelegramNotifier:
                 "Telegram send failed (%s) thread=%s: %s",
                 resp.status_code, thread_id or "main", description,
             )
-            return False
-        return True
+            return False, description, None
+        message_id = None
+        try:
+            message_id = resp.json().get("result", {}).get("message_id")
+        except ValueError:
+            message_id = None
+        return True, "", message_id
+
+    def _delete(self, message_id: int) -> None:
+        """Best-effort delete of a probe message; failures are non-fatal."""
+        url = f"https://api.telegram.org/bot{self._settings.bot_token}/deleteMessage"
+        try:
+            self._session.post(
+                url,
+                json={"chat_id": self._settings.chat_id, "message_id": message_id},
+                timeout=self._timeout,
+            )
+        except requests.RequestException as exc:
+            log.debug("Probe delete failed for %s: %s", message_id, exc)
+
+    def validate_threads(self) -> dict:
+        """Probe every configured topic and report which thread ids are invalid.
+
+        Sends a tiny probe message to each routed topic (deleting it again on
+        success) so a wrong or stale ``*_THREAD_ID`` is surfaced once at startup
+        — with a clear label — instead of failing silently on every later post.
+        Returns ``{"ok": [...], "bad": [(label, tid, reason)]}``.
+        """
+        result: dict = {"ok": [], "bad": []}
+        if not self.enabled:
+            return result
+        for label, tid in self._settings.configured_threads():
+            ok, desc, mid = self._post(f"🔎 thread check: {esc(label)}", tid)
+            if ok:
+                result["ok"].append((label, tid))
+                if mid is not None:
+                    self._delete(mid)
+            else:
+                result["bad"].append((label, tid, desc or "send failed"))
+        return result
+
+    def report_thread_validation(self, result: dict) -> None:
+        """Log a summary and, if any topic is misconfigured, post it to General."""
+        bad = result.get("bad", [])
+        ok = result.get("ok", [])
+        if not bad:
+            log.info("Telegram topics OK: %d configured topic(s) reachable", len(ok))
+            return
+        for label, tid, reason in bad:
+            log.warning("Telegram topic INVALID: %s (thread=%s) — %s", label, tid, reason)
+        lines = [
+            f"⚠️ <b>TOPIC CHECK</b>\n{DIVIDER}",
+            f"{len(ok)} OK · {len(bad)} misconfigured:",
+        ]
+        for label, tid, reason in bad:
+            lines.append(f"• <b>{esc(label)}</b> (id <code>{esc(str(tid))}</code>) — {esc(reason)}")
+        lines.append(
+            "Fix the matching <code>*_THREAD_ID</code> env var (or blank it to use "
+            "the main channel)."
+        )
+        lines.append(self._stamp())
+        # Post to General if it's valid, else fall back to the main channel.
+        bad_ids = {tid for _, tid, _ in bad}
+        sys_route = self._settings.route_system()
+        thread = "" if sys_route in bad_ids else sys_route
+        self.send("\n".join(lines), thread)
 
     # ── lifecycle notifications ─────────────────────────────────────────
     def notify_startup(self, info: dict) -> None:

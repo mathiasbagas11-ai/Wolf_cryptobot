@@ -36,6 +36,14 @@ def main() -> None:
         settings.screener_interval_min,
     )
 
+    # Validate every configured topic up front so a wrong/stale *_THREAD_ID is
+    # reported once (with its label) instead of failing silently on each post.
+    try:
+        validation = application.notifier.validate_threads()
+        application.notifier.report_thread_validation(validation)
+    except Exception:
+        log.exception("Telegram topic validation failed")
+
     # Announce online to Telegram so the channel confirms the bot is up (and
     # surfaces any chat/topic misconfiguration in the logs immediately).
     application.notifier.notify_startup({
