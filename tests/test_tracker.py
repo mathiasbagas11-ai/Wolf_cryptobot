@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
 from wolf.models import Candle, Status
 from wolf.tracker import Tracker, normalize_ladder
-
-from tests.conftest import FakeClient
 
 
 def _candles_after(now_ms: int, ohlc: list[tuple[float, float, float, float]]):
@@ -108,7 +107,7 @@ def test_short_signal_hits_tp(store, fake_client, tracker_settings):
 def test_retest_never_touched_invalidates(store, fake_client, tracker_settings):
     tracker = Tracker(store, fake_client, tracker_settings)
     # RETEST_WAIT entry at 90 for a LONG, but price stays above -> never active.
-    sig = tracker.record_signal(
+    tracker.record_signal(
         "ADAUSDT", "SCALP", "LONG", 90, tp=100, sl=85, entry_mode="RETEST_WAIT"
     )
     # Backdate creation beyond the SCALP timeout (2h) so it expires.
@@ -159,3 +158,44 @@ def test_stats_win_rate(store, fake_client, tracker_settings):
     assert stats["wins"] == 1
     assert stats["losses"] == 1
     assert stats["win_rate"] == 50.0
+
+
+# ── concurrency ────────────────────────────────────────────────────────────
+def test_concurrent_records_do_not_lose_signals(store, fake_client, tracker_settings):
+    """Many threads recording distinct signals must not clobber one another."""
+    tracker = Tracker(store, fake_client, tracker_settings)
+
+    def record(n: int):
+        tracker.record_signal(f"SYM{n}USDT", "SCREENER", "LONG", 100, tp=110, sl=95)
+
+    threads = [threading.Thread(target=record, args=(n,)) for n in range(40)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(tracker.active_signals()) == 40
+
+
+def test_record_concurrent_with_check_pending(store, fake_client, tracker_settings):
+    """record_signal racing check_pending must not drop the new signal."""
+    tracker = Tracker(store, fake_client, tracker_settings)
+    # Seed one pending signal with no candle data (stays pending on check).
+    tracker.record_signal("BTCUSDT", "SCREENER", "LONG", 100, tp=110, sl=95)
+
+    def checker():
+        for _ in range(20):
+            tracker.check_pending()
+
+    def recorder():
+        for n in range(20):
+            tracker.record_signal(f"ALT{n}USDT", "SCREENER", "LONG", 100, tp=110, sl=95)
+
+    threads = [threading.Thread(target=checker), threading.Thread(target=recorder)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # BTC + 20 ALT signals, none lost to a race.
+    assert len(tracker.active_signals()) == 21

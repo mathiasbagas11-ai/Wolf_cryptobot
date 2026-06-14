@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field, fields
-from typing import Optional
 
 try:  # python-dotenv is optional at runtime (always present in dev).
     from dotenv import load_dotenv
@@ -136,6 +135,9 @@ class Settings:
     # API server
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # When set, state-mutating endpoints require this value in the X-API-Key
+    # header. Empty (default) leaves the API open — convenient for local dev.
+    api_key: str = ""
 
     # Optional integrations (kept identical to the previous bot)
     gemini_api_key: str = ""
@@ -184,6 +186,7 @@ class Settings:
             tracker_interval_min=_env_int("TRACKER_INTERVAL_MIN", 5),
             api_host=_env_str("API_HOST", "0.0.0.0"),
             api_port=_env_int("API_PORT", 8000),
+            api_key=_env_str("API_KEY"),
             gemini_api_key=_env_str("GEMINI_API_KEY"),
             groq_api_key=_env_str("GROQ_API_KEY"),
             anthropic_api_key=_env_str("ANTHROPIC_API_KEY"),

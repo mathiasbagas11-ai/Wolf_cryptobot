@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from wolf.ai import DebateValidator, NullLLMClient, build_llm_client
 from wolf.ai.base import LLMClient
 from wolf.ai.debate import Decision

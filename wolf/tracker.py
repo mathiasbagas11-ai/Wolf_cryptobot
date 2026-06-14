@@ -22,6 +22,7 @@ Design notes (improvements over the previous bot):
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
@@ -114,6 +115,13 @@ class Tracker:
         self._client = client
         self._settings = settings
         self._notify = notify or (lambda *_: None)
+        # Guards the compound read-modify-write of pending_signals. StateStore
+        # makes each read/write atomic, but record_signal and check_pending each
+        # do load -> mutate -> save, which would otherwise interleave when the
+        # scheduler runs the `scan` (record) and `track` (check) jobs on separate
+        # threads — a lost-update race. This lock serialises those critical
+        # sections; reads (active_signals/outcomes/stats) stay lock-free.
+        self._lock = threading.RLock()
 
     # ── persistence helpers ────────────────────────────────────────────
     def _load_pending(self) -> list[Signal]:
@@ -191,23 +199,24 @@ class Tracker:
             timeout_hours=self._settings.timeout_for(signal_type),
         )
 
-        pending = self._load_pending()
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=self._settings.dedup_minutes)
-        for existing in pending:
-            if (
-                existing.symbol == symbol
-                and existing.direction == signal.direction
-                and existing.status in (Status.PENDING.value, Status.ACTIVE.value)
-            ):
-                try:
-                    if _parse_iso(existing.created_at) > cutoff:
-                        log.debug("Dedup %s %s within %dm", symbol, direction, self._settings.dedup_minutes)
-                        return None
-                except ValueError:
-                    continue
+        with self._lock:
+            pending = self._load_pending()
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=self._settings.dedup_minutes)
+            for existing in pending:
+                if (
+                    existing.symbol == symbol
+                    and existing.direction == signal.direction
+                    and existing.status in (Status.PENDING.value, Status.ACTIVE.value)
+                ):
+                    try:
+                        if _parse_iso(existing.created_at) > cutoff:
+                            log.debug("Dedup %s %s within %dm", symbol, direction, self._settings.dedup_minutes)
+                            return None
+                    except ValueError:
+                        continue
 
-        pending.append(signal)
-        self._save_pending(pending)
+            pending.append(signal)
+            self._save_pending(pending)
         log.info(
             "Tracked %s %s @ %.6g | TP %.6g SL %.6g",
             symbol, signal.direction, entry, tp_f, sl_f,
@@ -282,65 +291,77 @@ class Tracker:
         return res
 
     def check_pending(self) -> list[Signal]:
-        """Advance every pending/active signal; return the resolved ones."""
-        pending = self._load_pending()
+        """Advance every pending/active signal; return the resolved ones.
+
+        The load -> evaluate -> save of the pending list runs under the tracker
+        lock so a concurrent ``record_signal`` (from the scan job or the API)
+        cannot have its append clobbered by this method's save.
+        """
         now = datetime.now(timezone.utc)
         still_pending: list[Signal] = []
         resolved: list[Signal] = []
+        pending_notifications: list[tuple[Signal, str, dict]] = []
 
-        for sig in pending:
-            if sig.status not in (Status.PENDING.value, Status.ACTIVE.value):
-                continue
-            try:
-                created_at = _parse_iso(sig.created_at)
-            except (ValueError, TypeError) as exc:
-                log.warning("Bad created_at for %s: %s — keeping pending", sig.symbol, exc)
-                still_pending.append(sig)
-                continue
-
-            age_hours = (now - created_at).total_seconds() / 3600
-            try:
-                candles = self._client.get_klines(
-                    sig.symbol, interval="15m", limit=int(max(age_hours + 1, 4) * 4) + 10
-                )
-                created_ts = int(created_at.timestamp() * 1000)
-                future = [c for c in candles if c.time > created_ts]
-                res = self._evaluate(sig, future, created_at, now)
-            except (KeyError, ValueError, TypeError) as exc:
-                log.warning("Eval failed for %s: %s — keeping pending", sig.symbol, exc)
-                still_pending.append(sig)
-                continue
-
-            prev_activated = bool(sig.activated)
-            prev_tps = set(sig.tps_hit)
-
-            if res.activated and not prev_activated:
-                sig.activated = True
-                sig.activated_at = (res.activated_time or now).isoformat()
-                sig.status = Status.ACTIVE.value
-                self._safe_notify(sig, "ACTIVATED", {"price": sig.entry_price})
-
-            ladder_n = len(sig.tp_ladder or [])
-            for lvl in res.tps_hit:
-                if lvl in prev_tps:
+        with self._lock:
+            pending = self._load_pending()
+            for sig in pending:
+                if sig.status not in (Status.PENDING.value, Status.ACTIVE.value):
                     continue
-                if res.terminal == Status.TP_HIT and lvl == ladder_n:
-                    continue  # final rung is reported by the resolution notif
-                price_t = res.tps_meta.get(lvl, (None, None))[0]
-                self._safe_notify(sig, "TP_HIT", {"level": lvl, "price": price_t})
-            sig.tps_hit = res.tps_hit
+                try:
+                    created_at = _parse_iso(sig.created_at)
+                except (ValueError, TypeError) as exc:
+                    log.warning("Bad created_at for %s: %s — keeping pending", sig.symbol, exc)
+                    still_pending.append(sig)
+                    continue
 
-            if res.terminal is None:
-                sig.status = Status.ACTIVE.value if res.activated else Status.PENDING.value
-                still_pending.append(sig)
-                continue
+                age_hours = (now - created_at).total_seconds() / 3600
+                try:
+                    candles = self._client.get_klines(
+                        sig.symbol, interval="15m", limit=int(max(age_hours + 1, 4) * 4) + 10
+                    )
+                    created_ts = int(created_at.timestamp() * 1000)
+                    future = [c for c in candles if c.time > created_ts]
+                    res = self._evaluate(sig, future, created_at, now)
+                except (KeyError, ValueError, TypeError) as exc:
+                    log.warning("Eval failed for %s: %s — keeping pending", sig.symbol, exc)
+                    still_pending.append(sig)
+                    continue
 
-            self._resolve(sig, res, created_at, now)
-            resolved.append(sig)
+                prev_activated = bool(sig.activated)
+                prev_tps = set(sig.tps_hit)
 
-        self._save_pending(still_pending)
+                if res.activated and not prev_activated:
+                    sig.activated = True
+                    sig.activated_at = (res.activated_time or now).isoformat()
+                    sig.status = Status.ACTIVE.value
+                    pending_notifications.append((sig, "ACTIVATED", {"price": sig.entry_price}))
+
+                ladder_n = len(sig.tp_ladder or [])
+                for lvl in res.tps_hit:
+                    if lvl in prev_tps:
+                        continue
+                    if res.terminal == Status.TP_HIT and lvl == ladder_n:
+                        continue  # final rung is reported by the resolution notif
+                    price_t = res.tps_meta.get(lvl, (None, None))[0]
+                    pending_notifications.append((sig, "TP_HIT", {"level": lvl, "price": price_t}))
+                sig.tps_hit = res.tps_hit
+
+                if res.terminal is None:
+                    sig.status = Status.ACTIVE.value if res.activated else Status.PENDING.value
+                    still_pending.append(sig)
+                    continue
+
+                self._resolve(sig, res, created_at, now)
+                resolved.append(sig)
+
+            self._save_pending(still_pending)
+            for sig in resolved:
+                self._append_outcome(sig)
+
+        # Notifications are I/O and don't touch state — fire them outside the lock.
+        for sig, event, info in pending_notifications:
+            self._safe_notify(sig, event, info)
         for sig in resolved:
-            self._append_outcome(sig)
             self._safe_notify(sig, "RESOLVED", {})
         return resolved
 

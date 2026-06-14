@@ -6,8 +6,6 @@ import threading
 
 import pytest
 
-from wolf.state import StateStore
-
 
 def test_write_read_roundtrip(store):
     store.write("foo", {"a": 1, "b": [1, 2, 3]})

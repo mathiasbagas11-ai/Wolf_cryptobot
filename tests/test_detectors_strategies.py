@@ -8,8 +8,6 @@ confirms no false positives.
 
 from __future__ import annotations
 
-import pytest
-
 from wolf.detectors import (
     PreDumpDetector,
     PrePumpDetector,

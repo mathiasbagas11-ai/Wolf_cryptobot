@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import Body, FastAPI
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 
 from wolf.app import Application, build_application
 from wolf.config import Settings
@@ -36,6 +36,12 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         description="Signal tracking bot — lifecycle tracking, screening and stats.",
     )
     api.state.application = app_obj
+
+    def require_api_key(x_api_key: str = Header(default="")) -> None:
+        """Guard for state-mutating endpoints. No-op when no key is configured."""
+        expected = app_obj.settings.api_key
+        if expected and x_api_key != expected:
+            raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     @api.get("/health")
     def health() -> dict:
@@ -60,17 +66,17 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
     def stats() -> dict:
         return app_obj.tracker.stats()
 
-    @api.post("/scan")
+    @api.post("/scan", dependencies=[Depends(require_api_key)])
     def scan() -> dict:
         recorded = app_obj.screener.run_cycle()
         return {"recorded": len(recorded), "signals": [s.to_dict() for s in recorded]}
 
-    @api.post("/track")
+    @api.post("/track", dependencies=[Depends(require_api_key)])
     def track() -> dict:
         resolved = app_obj.tracker.check_pending()
         return {"resolved": len(resolved), "signals": [s.to_dict() for s in resolved]}
 
-    @api.post("/signals")
+    @api.post("/signals", dependencies=[Depends(require_api_key)])
     def record_manual(payload: dict = Body(...)) -> dict:
         """Manually record a signal (e.g. from an external strategy)."""
         signal = app_obj.tracker.record_signal(

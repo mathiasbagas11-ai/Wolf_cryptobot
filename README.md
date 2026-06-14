@@ -183,6 +183,7 @@ unchanged. Key knobs:
 | `TRACKER_DEDUP_MINUTES` | `30` | Suppress duplicate symbol+direction |
 | `STATE_DIR` | `state_data` | Where JSON state is persisted |
 | `API_PORT` | `8000` | REST API port |
+| `API_KEY` | _(empty)_ | If set, `POST` endpoints require it in `X-API-Key` |
 | `AI_DEBATE_ENABLED` | `false` | Enable the Bull/Bear/arbiter AI layer |
 | `CLAUDE_MODEL` | `claude-opus-4-8` | Model for the AI arbiter |
 | `AI_VETO_MIN_CONFIDENCE` | `70` | Min `REJECT` confidence to veto a signal |
