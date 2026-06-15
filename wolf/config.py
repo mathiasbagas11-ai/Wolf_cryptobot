@@ -155,6 +155,7 @@ class TrackerSettings:
     timeout_predump_h: int = 12
     timeout_scalp_h: int = 2
     timeout_swing_h: int = 24
+    timeout_trap_h: int = 4  # liquidity-trap reversals resolve fast
     # Dedup window: skip an identical symbol+direction within this many minutes.
     dedup_minutes: int = 30
     # Keep at most this many resolved outcomes on disk.
@@ -167,6 +168,7 @@ class TrackerSettings:
             "PREDUMP": self.timeout_predump_h,
             "SCALP": self.timeout_scalp_h,
             "SWING": self.timeout_swing_h,
+            "TRAP": self.timeout_trap_h,
         }.get(signal_type.upper(), self.timeout_screener_h)
 
 

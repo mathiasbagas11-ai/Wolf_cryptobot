@@ -67,3 +67,28 @@ def test_bollinger_width_smaller_when_flat():
 def test_bollinger_insufficient_data_nan():
     _, _, _, w = ind.bollinger_bands([1, 2, 3], 20)
     assert math.isnan(w)
+
+
+def test_vwap_equals_price_when_flat():
+    candles = [Candle(time=i, open=100, high=100, low=100, close=100, volume=10.0) for i in range(5)]
+    assert math.isclose(ind.vwap(candles), 100.0, rel_tol=1e-9)
+
+
+def test_vwap_weights_by_volume():
+    # Two bars: typical price 10 (vol 1) and 20 (vol 3) → (10*1 + 20*3)/4 = 17.5
+    candles = [
+        Candle(time=0, open=10, high=10, low=10, close=10, volume=1.0),
+        Candle(time=1, open=20, high=20, low=20, close=20, volume=3.0),
+    ]
+    assert math.isclose(ind.vwap(candles), 17.5, rel_tol=1e-9)
+
+
+def test_vwap_lookback_restricts_window():
+    candles = [Candle(time=i, open=100, high=100, low=100, close=100, volume=10.0) for i in range(5)]
+    candles.append(Candle(time=5, open=200, high=200, low=200, close=200, volume=10.0))
+    assert math.isclose(ind.vwap(candles, lookback=1), 200.0, rel_tol=1e-9)
+
+
+def test_vwap_nan_without_volume():
+    candles = [Candle(time=i, open=1, high=1, low=1, close=1, volume=0.0) for i in range(3)]
+    assert math.isnan(ind.vwap(candles))

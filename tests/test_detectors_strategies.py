@@ -9,6 +9,7 @@ confirms no false positives.
 from __future__ import annotations
 
 from wolf.detectors import (
+    LiquidityTrapDetector,
     PreDumpDetector,
     PrePumpDetector,
     ScalpDetector,
@@ -120,9 +121,46 @@ def test_swing_no_signal_flat():
     assert SwingDetector().evaluate("X", _flat(90)) is None
 
 
+# ── TRAP (liquidity-trap reversal, high conviction) ────────────────────────
+def test_trap_bullish_sweep_high_conviction():
+    cs = []
+    p = 110.0
+    for i in range(59):  # steady downtrend → low RSI, declining lows
+        p -= 0.4
+        cs.append(_c(i, p + 0.1, p + 0.3, p - 0.3, p, 100.0))
+    prior_low = min(x.low for x in cs[-20:])
+    # Deep sweep below the range, blow-off volume, strong reclaim with a
+    # dominant lower wick — the trap springs.
+    cs.append(_c(59, p, p + 1.0, prior_low - 3.0, p + 0.5, 600.0))
+    cand = LiquidityTrapDetector().evaluate("X", cs)
+    assert cand is not None
+    assert cand.direction == "LONG"
+    assert cand.signal_type == "TRAP"
+    assert cand.confluence_level == "HIGH"
+    assert cand.score >= 80  # high conviction only
+    assert _valid_geometry(cand)
+
+
+def test_trap_ignores_shallow_reclaim():
+    """A sweep that barely reclaims (weak recovery) is not a sprung trap."""
+    cs = []
+    p = 110.0
+    for i in range(59):
+        p -= 0.4
+        cs.append(_c(i, p + 0.1, p + 0.3, p - 0.3, p, 100.0))
+    prior_low = min(x.low for x in cs[-20:])
+    # Pierces the low but closes near the bottom → recovery below the gate.
+    cs.append(_c(59, p, p + 0.2, prior_low - 3.0, prior_low - 2.5, 600.0))
+    assert LiquidityTrapDetector().evaluate("X", cs) is None
+
+
+def test_trap_no_signal_flat():
+    assert LiquidityTrapDetector().evaluate("X", _flat(80)) is None
+
+
 # ── registry ──────────────────────────────────────────────────────────────
 def test_default_detectors_registered():
     from wolf.detectors import default_detectors
 
     names = {d.name for d in default_detectors()}
-    assert {"MOMENTUM", "PREPUMP", "PREDUMP", "SCALP", "SWING"} <= names
+    assert {"MOMENTUM", "PREPUMP", "PREDUMP", "SCALP", "SWING", "TRAP"} <= names
