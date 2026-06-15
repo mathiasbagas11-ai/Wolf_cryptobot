@@ -452,16 +452,31 @@ class Tracker:
         pnls = [o.pnl_pct for o in graded if o.pnl_pct is not None]
         avg_pnl = (sum(pnls) / len(pnls)) if pnls else 0.0
 
-        by_strategy: dict[str, dict] = {}
-        for o in graded:
-            bucket = by_strategy.setdefault(o.strategy, {"wins": 0, "total": 0, "pnl": 0.0})
-            bucket["total"] += 1
-            bucket["pnl"] += o.pnl_pct or 0.0
-            if Status(o.status).is_win:
-                bucket["wins"] += 1
-        for bucket in by_strategy.values():
-            bucket["win_rate"] = round(bucket["wins"] / bucket["total"] * 100, 1) if bucket["total"] else 0.0
-            bucket["avg_pnl"] = round(bucket["pnl"] / bucket["total"], 3) if bucket["total"] else 0.0
+        def _bucket_group(outcomes_iter, key_fn) -> dict[str, dict]:
+            buckets: dict[str, dict] = {}
+            for o in outcomes_iter:
+                b = buckets.setdefault(key_fn(o), {"wins": 0, "total": 0, "pnl": 0.0})
+                b["total"] += 1
+                b["pnl"] += o.pnl_pct or 0.0
+                if Status(o.status).is_win:
+                    b["wins"] += 1
+            for b in buckets.values():
+                b["win_rate"] = round(b["wins"] / b["total"] * 100, 1) if b["total"] else 0.0
+                b["avg_pnl"] = round(b["pnl"] / b["total"], 3) if b["total"] else 0.0
+            return buckets
+
+        by_strategy = _bucket_group(graded, lambda o: o.strategy)
+
+        # AI verdict breakdown: was the AI predictive?
+        # "NO_AI" = AI was not configured; "ABSTAIN" = AI ran but couldn't decide.
+        by_ai_verdict = _bucket_group(graded, lambda o: o.ai_verdict if o.ai_verdict else "NO_AI")
+
+        # Veto signal: win rate of signals the AI flagged as REJECT+high-confidence
+        # (ai_vetoed=True). If this is significantly lower than overall, enabling
+        # veto mode would have improved results.
+        vetoed = [o for o in graded if o.ai_vetoed]
+        vetoed_wins = sum(1 for o in vetoed if Status(o.status).is_win)
+        vetoed_win_rate = round(vetoed_wins / len(vetoed) * 100, 1) if vetoed else None
 
         return {
             "total_resolved": len(outcomes),
@@ -472,4 +487,7 @@ class Tracker:
             "avg_pnl_pct": round(avg_pnl, 3),
             "active": len(self.active_signals()),
             "by_strategy": by_strategy,
+            "by_ai_verdict": by_ai_verdict,
+            "vetoed_count": len(vetoed),
+            "vetoed_win_rate": vetoed_win_rate,
         }

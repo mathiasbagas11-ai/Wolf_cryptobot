@@ -326,13 +326,39 @@ class TelegramNotifier:
             f"· 📈 Win rate {stats.get('win_rate', 0)}%",
             f"💰 Avg PnL {stats.get('avg_pnl_pct', 0):+.2f}% · 🔵 Active {stats.get('active', 0)}",
         ]
+
         by_strategy = stats.get("by_strategy", {})
         if by_strategy:
             lines.append("\n<b>By strategy</b>")
-            for name, b in by_strategy.items():
+            for name, b in sorted(by_strategy.items()):
                 lines.append(
                     f"• {esc(name)}  {b.get('win_rate', 0)}% "
                     f"({b.get('total', 0)} trades, {b.get('avg_pnl', 0):+.2f}%)"
                 )
+
+        by_ai = stats.get("by_ai_verdict", {})
+        has_ai_data = any(k not in ("NO_AI", "") for k in by_ai)
+        if has_ai_data:
+            lines.append("\n<b>AI verdict accuracy</b>")
+            verdict_order = ["CONFIRM", "NEUTRAL", "REJECT", "ABSTAIN", "NO_AI"]
+            ordered = sorted(by_ai.items(), key=lambda kv: verdict_order.index(kv[0]) if kv[0] in verdict_order else 99)
+            for verdict, b in ordered:
+                emoji = {"CONFIRM": "✅", "NEUTRAL": "⚖️", "REJECT": "⚠️", "ABSTAIN": "🔇", "NO_AI": "—"}.get(verdict, "•")
+                lines.append(
+                    f"{emoji} {esc(verdict)}  {b.get('win_rate', 0)}% "
+                    f"({b.get('total', 0)} trades, {b.get('avg_pnl', 0):+.2f}%)"
+                )
+            # Veto readiness signal: if AI-flagged REJECT signals lose significantly
+            # more often than average, enabling veto mode is justified.
+            vetoed_wr = stats.get("vetoed_win_rate")
+            vetoed_n = stats.get("vetoed_count", 0)
+            overall_wr = stats.get("win_rate", 0)
+            if vetoed_wr is not None and vetoed_n > 0:
+                delta = vetoed_wr - overall_wr
+                readiness = "🔴 consider veto mode" if delta <= -15 else ("🟡 monitor more" if delta <= 0 else "🟢 AI over-cautious")
+                lines.append(
+                    f"🛡 Vetoed signals: {vetoed_wr}% win ({vetoed_n} total, {delta:+.0f}% vs avg) — {readiness}"
+                )
+
         lines.append(f"\n{self._stamp()}")
         return "\n".join(lines)

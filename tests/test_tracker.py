@@ -158,6 +158,37 @@ def test_stats_win_rate(store, fake_client, tracker_settings):
     assert stats["wins"] == 1
     assert stats["losses"] == 1
     assert stats["win_rate"] == 50.0
+    assert "by_ai_verdict" in stats
+    assert "vetoed_win_rate" in stats
+
+
+def test_stats_ai_verdict_breakdown(store, fake_client, tracker_settings):
+    tracker = Tracker(store, fake_client, tracker_settings)
+
+    # Win flagged CONFIRM by AI
+    sig = tracker.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", ai_verdict="CONFIRM", ai_confidence=85,
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [(100, 111, 99, 110)])
+    tracker.check_pending()
+
+    # Loss flagged REJECT (ai_vetoed=True) by AI
+    sig2 = tracker.record_signal(
+        "ETHUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", ai_verdict="REJECT", ai_confidence=80, ai_vetoed=True,
+    )
+    now_ms2 = int(datetime.fromisoformat(sig2.created_at).timestamp() * 1000)
+    fake_client.klines["ETHUSDT"] = _candles_after(now_ms2, [(100, 101, 94, 96)])
+    tracker.check_pending()
+
+    stats = tracker.stats()
+    by_ai = stats["by_ai_verdict"]
+    assert by_ai["CONFIRM"]["wins"] == 1 and by_ai["CONFIRM"]["total"] == 1
+    assert by_ai["REJECT"]["wins"] == 0 and by_ai["REJECT"]["total"] == 1
+    assert stats["vetoed_count"] == 1
+    assert stats["vetoed_win_rate"] == 0.0
 
 
 # ── trade report payload (paper account + lesson) ───────────────────────────

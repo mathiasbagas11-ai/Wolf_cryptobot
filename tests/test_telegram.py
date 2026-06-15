@@ -158,12 +158,37 @@ def test_stats_card():
     n.notify_stats({
         "wins": 12, "losses": 8, "win_rate": 60.0, "avg_pnl_pct": 1.8, "active": 3,
         "by_strategy": {"MOMENTUM": {"win_rate": 65.0, "total": 20, "avg_pnl": 1.2}},
+        "by_ai_verdict": {},
+        "vetoed_count": 0, "vetoed_win_rate": None,
     })
     text = sess.calls[0]["text"]
     assert sess.calls[0]["message_thread_id"] == "9"
     assert "PERFORMANCE SUMMARY" in text
     assert "Win rate 60.0%" in text
     assert "MOMENTUM" in text
+    # No AI section when no AI data
+    assert "AI verdict accuracy" not in text
+
+
+def test_stats_card_ai_section():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(), session=sess)
+    n.notify_stats({
+        "wins": 10, "losses": 10, "win_rate": 50.0, "avg_pnl_pct": 0.5, "active": 2,
+        "by_strategy": {},
+        "by_ai_verdict": {
+            "CONFIRM": {"win_rate": 70.0, "total": 10, "avg_pnl": 3.2},
+            "REJECT": {"win_rate": 30.0, "total": 10, "avg_pnl": -2.1},
+        },
+        "vetoed_count": 8,
+        "vetoed_win_rate": 25.0,
+    })
+    text = sess.calls[0]["text"]
+    assert "AI verdict accuracy" in text
+    assert "CONFIRM" in text and "70.0%" in text
+    assert "REJECT" in text and "30.0%" in text
+    # -25pp vs 50% overall → "consider veto mode"
+    assert "consider veto mode" in text
 
 
 # ── error handling: Telegram API failure is logged, returns False ──────────
