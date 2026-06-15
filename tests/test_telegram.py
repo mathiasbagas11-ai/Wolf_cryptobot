@@ -75,6 +75,44 @@ def test_route_stats_falls_back_to_system():
     assert _settings(stats_thread_id="7", system_thread_id="5").route_stats() == "7"
 
 
+# ── high-conviction (TRAP) topic routing ───────────────────────────────────
+def test_trap_announce_routes_to_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", high_conviction_thread_id="99"), session=sess)
+    n.announce_signal(_signal(signal_type="TRAP", strategy="TRAP"))
+    assert sess.calls[0]["message_thread_id"] == "99"
+
+
+def test_trap_lifecycle_routes_to_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(
+        _settings(signal_thread_id="2", trade_report_thread_id="4", high_conviction_thread_id="99"),
+        session=sess,
+    )
+    sig = _signal(signal_type="TRAP", strategy="TRAP")
+    n.on_event(sig, "ACTIVATED", {})
+    n.on_event(sig, "RESOLVED", {})
+    assert sess.calls[0]["message_thread_id"] == "99"  # entry, not "2"
+    assert sess.calls[1]["message_thread_id"] == "99"  # resolution, not "4"
+
+
+def test_trap_falls_back_to_normal_topics_when_unconfigured():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", trade_report_thread_id="4"), session=sess)
+    sig = _signal(signal_type="TRAP", strategy="TRAP")
+    n.announce_signal(sig)
+    n.on_event(sig, "RESOLVED", {})
+    assert sess.calls[0]["message_thread_id"] == "1"  # New Signal
+    assert sess.calls[1]["message_thread_id"] == "4"  # Trade Reports
+
+
+def test_non_trap_ignores_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", high_conviction_thread_id="99"), session=sess)
+    n.announce_signal(_signal(signal_type="PREPUMP", strategy="PREPUMP"))
+    assert sess.calls[0]["message_thread_id"] == "1"
+
+
 # ── disabled notifier is a no-op ───────────────────────────────────────────
 def test_disabled_notifier_sends_nothing():
     sess = FakeSession()

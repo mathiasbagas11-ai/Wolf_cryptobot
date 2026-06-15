@@ -136,6 +136,7 @@ configured:
 | Telegram topic | Env var | Content | Enable |
 |----------------|---------|---------|--------|
 | ‼️ New Signal | `NEW_SIGNAL_THREAD_ID` | new signal alerts | always |
+| 🎯 High-Conviction | `HIGH_CONVICTION_THREAD_ID` | full lifecycle of TRAP (premium) signals; blank → normal topics | always |
 | ⭐ Signal Entry | `SIGNAL_THREAD_ID` | entry touched + TP hits | always |
 | 📝 Trade Reports | `TRADE_REPORT_THREAD_ID` | win/loss resolutions | always |
 | 📚 Market Update | `MARKET_UPDATE_THREAD_ID` | BTC/ETH bias pulse | `MARKET_PULSE_ENABLED` |
