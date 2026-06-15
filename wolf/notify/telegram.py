@@ -27,6 +27,9 @@ from wolf.textfmt import DIVIDER, esc, fmt_price, now
 
 log = logging.getLogger("wolf.telegram")
 
+# Signal types routed to the dedicated High-Conviction topic (when configured).
+HIGH_CONVICTION_TYPES = frozenset({"TRAP"})
+
 
 def _pct(price: float, entry: float, is_long: bool) -> float:
     if not entry:
@@ -182,17 +185,30 @@ class TelegramNotifier:
         )
         self.send(text, self._settings.route_system())
 
+    def _route_signal(self, signal: Signal, default_thread: str) -> str:
+        """Divert high-conviction signal types to their own topic.
+
+        Returns the High-Conviction thread when the signal is a premium type
+        *and* that topic is configured; otherwise the message stays on its
+        normal per-event route, so behaviour is unchanged when the topic is unset.
+        """
+        if signal.signal_type in HIGH_CONVICTION_TYPES:
+            hc = self._settings.route_high_conviction()
+            if hc:
+                return hc
+        return default_thread
+
     def announce_signal(self, signal: Signal) -> None:
-        self.send(self._signal_card(signal), self._settings.route_new_signal())
+        self.send(self._signal_card(signal), self._route_signal(signal, self._settings.route_new_signal()))
 
     def on_event(self, signal: Signal, event: str, info: dict) -> None:
         """Adapter matching :data:`wolf.tracker.NotifyFn`."""
         if event == "ACTIVATED":
-            self.send(self._activated_text(signal), self._settings.route_entry())
+            self.send(self._activated_text(signal), self._route_signal(signal, self._settings.route_entry()))
         elif event == "TP_HIT":
-            self.send(self._tp_text(signal, info), self._settings.route_entry())
+            self.send(self._tp_text(signal, info), self._route_signal(signal, self._settings.route_entry()))
         elif event == "RESOLVED":
-            self.send(self._resolved_text(signal, info), self._settings.route_trade_report())
+            self.send(self._resolved_text(signal, info), self._route_signal(signal, self._settings.route_trade_report()))
 
     def notify_stats(self, stats: dict) -> None:
         self.send(self._stats_card(stats), self._settings.route_stats())
@@ -326,13 +342,39 @@ class TelegramNotifier:
             f"· 📈 Win rate {stats.get('win_rate', 0)}%",
             f"💰 Avg PnL {stats.get('avg_pnl_pct', 0):+.2f}% · 🔵 Active {stats.get('active', 0)}",
         ]
+
         by_strategy = stats.get("by_strategy", {})
         if by_strategy:
             lines.append("\n<b>By strategy</b>")
-            for name, b in by_strategy.items():
+            for name, b in sorted(by_strategy.items()):
                 lines.append(
                     f"• {esc(name)}  {b.get('win_rate', 0)}% "
                     f"({b.get('total', 0)} trades, {b.get('avg_pnl', 0):+.2f}%)"
                 )
+
+        by_ai = stats.get("by_ai_verdict", {})
+        has_ai_data = any(k not in ("NO_AI", "") for k in by_ai)
+        if has_ai_data:
+            lines.append("\n<b>AI verdict accuracy</b>")
+            verdict_order = ["CONFIRM", "NEUTRAL", "REJECT", "ABSTAIN", "NO_AI"]
+            ordered = sorted(by_ai.items(), key=lambda kv: verdict_order.index(kv[0]) if kv[0] in verdict_order else 99)
+            for verdict, b in ordered:
+                emoji = {"CONFIRM": "✅", "NEUTRAL": "⚖️", "REJECT": "⚠️", "ABSTAIN": "🔇", "NO_AI": "—"}.get(verdict, "•")
+                lines.append(
+                    f"{emoji} {esc(verdict)}  {b.get('win_rate', 0)}% "
+                    f"({b.get('total', 0)} trades, {b.get('avg_pnl', 0):+.2f}%)"
+                )
+            # Veto readiness signal: if AI-flagged REJECT signals lose significantly
+            # more often than average, enabling veto mode is justified.
+            vetoed_wr = stats.get("vetoed_win_rate")
+            vetoed_n = stats.get("vetoed_count", 0)
+            overall_wr = stats.get("win_rate", 0)
+            if vetoed_wr is not None and vetoed_n > 0:
+                delta = vetoed_wr - overall_wr
+                readiness = "🔴 consider veto mode" if delta <= -15 else ("🟡 monitor more" if delta <= 0 else "🟢 AI over-cautious")
+                lines.append(
+                    f"🛡 Vetoed signals: {vetoed_wr}% win ({vetoed_n} total, {delta:+.0f}% vs avg) — {readiness}"
+                )
+
         lines.append(f"\n{self._stamp()}")
         return "\n".join(lines)

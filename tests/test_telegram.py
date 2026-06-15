@@ -75,6 +75,44 @@ def test_route_stats_falls_back_to_system():
     assert _settings(stats_thread_id="7", system_thread_id="5").route_stats() == "7"
 
 
+# ── high-conviction (TRAP) topic routing ───────────────────────────────────
+def test_trap_announce_routes_to_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", high_conviction_thread_id="99"), session=sess)
+    n.announce_signal(_signal(signal_type="TRAP", strategy="TRAP"))
+    assert sess.calls[0]["message_thread_id"] == "99"
+
+
+def test_trap_lifecycle_routes_to_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(
+        _settings(signal_thread_id="2", trade_report_thread_id="4", high_conviction_thread_id="99"),
+        session=sess,
+    )
+    sig = _signal(signal_type="TRAP", strategy="TRAP")
+    n.on_event(sig, "ACTIVATED", {})
+    n.on_event(sig, "RESOLVED", {})
+    assert sess.calls[0]["message_thread_id"] == "99"  # entry, not "2"
+    assert sess.calls[1]["message_thread_id"] == "99"  # resolution, not "4"
+
+
+def test_trap_falls_back_to_normal_topics_when_unconfigured():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", trade_report_thread_id="4"), session=sess)
+    sig = _signal(signal_type="TRAP", strategy="TRAP")
+    n.announce_signal(sig)
+    n.on_event(sig, "RESOLVED", {})
+    assert sess.calls[0]["message_thread_id"] == "1"  # New Signal
+    assert sess.calls[1]["message_thread_id"] == "4"  # Trade Reports
+
+
+def test_non_trap_ignores_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", high_conviction_thread_id="99"), session=sess)
+    n.announce_signal(_signal(signal_type="PREPUMP", strategy="PREPUMP"))
+    assert sess.calls[0]["message_thread_id"] == "1"
+
+
 # ── disabled notifier is a no-op ───────────────────────────────────────────
 def test_disabled_notifier_sends_nothing():
     sess = FakeSession()
@@ -158,12 +196,37 @@ def test_stats_card():
     n.notify_stats({
         "wins": 12, "losses": 8, "win_rate": 60.0, "avg_pnl_pct": 1.8, "active": 3,
         "by_strategy": {"MOMENTUM": {"win_rate": 65.0, "total": 20, "avg_pnl": 1.2}},
+        "by_ai_verdict": {},
+        "vetoed_count": 0, "vetoed_win_rate": None,
     })
     text = sess.calls[0]["text"]
     assert sess.calls[0]["message_thread_id"] == "9"
     assert "PERFORMANCE SUMMARY" in text
     assert "Win rate 60.0%" in text
     assert "MOMENTUM" in text
+    # No AI section when no AI data
+    assert "AI verdict accuracy" not in text
+
+
+def test_stats_card_ai_section():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(), session=sess)
+    n.notify_stats({
+        "wins": 10, "losses": 10, "win_rate": 50.0, "avg_pnl_pct": 0.5, "active": 2,
+        "by_strategy": {},
+        "by_ai_verdict": {
+            "CONFIRM": {"win_rate": 70.0, "total": 10, "avg_pnl": 3.2},
+            "REJECT": {"win_rate": 30.0, "total": 10, "avg_pnl": -2.1},
+        },
+        "vetoed_count": 8,
+        "vetoed_win_rate": 25.0,
+    })
+    text = sess.calls[0]["text"]
+    assert "AI verdict accuracy" in text
+    assert "CONFIRM" in text and "70.0%" in text
+    assert "REJECT" in text and "30.0%" in text
+    # -25pp vs 50% overall → "consider veto mode"
+    assert "consider veto mode" in text
 
 
 # ── error handling: Telegram API failure is logged, returns False ──────────

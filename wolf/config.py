@@ -70,6 +70,7 @@ class TelegramSettings:
     # Topic/thread routing (supergroup forum topics). Empty -> main channel.
     signal_thread_id: str = ""
     new_signal_thread_id: str = ""
+    high_conviction_thread_id: str = ""  # 🎯 High-Conviction (TRAP) — premium tier
     market_update_thread_id: str = ""
     trade_report_thread_id: str = ""
     news_thread_id: str = ""
@@ -89,6 +90,12 @@ class TelegramSettings:
     # (empty thread id) when that topic isn't configured — so nothing is dropped.
     def route_new_signal(self) -> str:      # 🆕 New Signal
         return _first(self.new_signal_thread_id)
+
+    def route_high_conviction(self) -> str:  # 🎯 High-Conviction (TRAP)
+        # No fallback chain here on purpose: an empty result tells the notifier
+        # to leave the message on its normal per-event route (announce / entry /
+        # trade-report), preserving existing behaviour when the topic is unset.
+        return _first(self.high_conviction_thread_id)
 
     def route_entry(self) -> str:           # ⭐ Signal Entry (activation / TP)
         return _first(self.signal_thread_id)
@@ -126,6 +133,7 @@ class TelegramSettings:
         labels = [
             ("Signal Entry", self.signal_thread_id),
             ("New Signal", self.new_signal_thread_id),
+            ("High-Conviction", self.high_conviction_thread_id),
             ("Market Update", self.market_update_thread_id),
             ("Trade Report", self.trade_report_thread_id),
             ("News", self.news_thread_id),
@@ -155,6 +163,7 @@ class TrackerSettings:
     timeout_predump_h: int = 12
     timeout_scalp_h: int = 2
     timeout_swing_h: int = 24
+    timeout_trap_h: int = 4  # liquidity-trap reversals resolve fast
     # Dedup window: skip an identical symbol+direction within this many minutes.
     dedup_minutes: int = 30
     # Keep at most this many resolved outcomes on disk.
@@ -167,6 +176,7 @@ class TrackerSettings:
             "PREDUMP": self.timeout_predump_h,
             "SCALP": self.timeout_scalp_h,
             "SWING": self.timeout_swing_h,
+            "TRAP": self.timeout_trap_h,
         }.get(signal_type.upper(), self.timeout_screener_h)
 
 
@@ -288,6 +298,7 @@ class Settings:
             chat_id=_env_str("TELEGRAM_CHAT_ID"),
             signal_thread_id=_env_str("SIGNAL_THREAD_ID"),
             new_signal_thread_id=_env_str("NEW_SIGNAL_THREAD_ID"),
+            high_conviction_thread_id=_env_str("HIGH_CONVICTION_THREAD_ID"),
             market_update_thread_id=_env_str("MARKET_UPDATE_THREAD_ID"),
             trade_report_thread_id=_env_str("TRADE_REPORT_THREAD_ID"),
             news_thread_id=_env_str("NEWS_THREAD_ID"),

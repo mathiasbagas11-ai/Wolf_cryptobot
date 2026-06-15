@@ -9,7 +9,7 @@ monolith.
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 from wolf.models import Candle
 
@@ -178,3 +178,25 @@ def volume_ratio(candles: Sequence[Candle], lookback: int = 20) -> float:
     if baseline == 0:
         return float("nan")
     return recent / baseline
+
+
+def vwap(candles: Sequence[Candle], lookback: Optional[int] = None) -> float:
+    """Volume-weighted average price — the market's fair-value reference.
+
+    Each candle's typical price ``(high+low+close)/3`` is weighted by its volume,
+    so heavily-traded prices count more than thin wicks. A *rolling* VWAP over the
+    window (rather than a session-anchored one) suits the bot's fixed-length
+    candle series. Pass ``lookback`` to restrict it to the most recent N candles.
+    Returns NaN when the window has no traded volume.
+    """
+    window = list(candles) if lookback is None else list(candles[-lookback:])
+    if not window:
+        return float("nan")
+    pv = 0.0
+    vol = 0.0
+    for c in window:
+        pv += (c.high + c.low + c.close) / 3 * c.volume
+        vol += c.volume
+    if vol <= 0:
+        return float("nan")
+    return pv / vol
