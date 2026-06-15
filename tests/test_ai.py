@@ -109,7 +109,7 @@ def test_validator_handles_malformed_json():
     assert verdict.decision == Decision.ABSTAIN
 
 
-# ── screener integration (veto gate) ──────────────────────────────────────
+# ── screener integration (monitor mode — AI labels, never blocks) ──────────
 def _breakout_candles() -> list[Candle]:
     cs = [Candle(time=i * 900_000, open=100, high=101, low=99, close=100, volume=100.0) for i in range(60)]
     cs.append(Candle(time=60 * 900_000, open=100, high=108, low=100, close=107, volume=500.0))
@@ -125,20 +125,42 @@ def _screener(store, fake_client, tracker_settings, validator):
     ), tracker
 
 
-def test_reject_high_confidence_vetoes_signal(store, fake_client, tracker_settings):
+def test_reject_high_confidence_is_flagged_not_blocked(store, fake_client, tracker_settings):
+    """Monitor mode: a high-confidence REJECT still emits the signal, flagged ai_vetoed."""
     screener, tracker = _screener(store, fake_client, tracker_settings, DebateValidator(FakeLLM("REJECT", 90)))
-    assert screener.run_cycle() == []
-    assert tracker.active_signals() == []
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1
+    sig = recorded[0]
+    assert sig.ai_verdict == "REJECT"
+    assert sig.ai_confidence == 90
+    assert sig.ai_vetoed is True
+    assert tracker.active_signals() != []  # signal is tracked, not dropped
 
 
-def test_reject_low_confidence_does_not_veto(store, fake_client, tracker_settings):
+def test_reject_low_confidence_not_flagged(store, fake_client, tracker_settings):
+    """A low-confidence REJECT (below threshold) is recorded without the veto flag."""
     screener, tracker = _screener(store, fake_client, tracker_settings, DebateValidator(FakeLLM("REJECT", 40)))
     recorded = screener.run_cycle()
     assert len(recorded) == 1
+    assert recorded[0].ai_verdict == "REJECT"
+    assert recorded[0].ai_vetoed is False
 
 
-def test_confirm_keeps_signal_and_annotates_reason(store, fake_client, tracker_settings):
+def test_confirm_keeps_signal_and_stores_verdict(store, fake_client, tracker_settings):
     screener, tracker = _screener(store, fake_client, tracker_settings, DebateValidator(FakeLLM("CONFIRM", 85)))
     recorded = screener.run_cycle()
     assert len(recorded) == 1
-    assert any("AI[CONFIRM 85%]" in r for r in recorded[0].reasons)
+    sig = recorded[0]
+    assert sig.ai_verdict == "CONFIRM"
+    assert sig.ai_confidence == 85
+    assert sig.ai_rationale == "test rationale"
+    assert sig.ai_vetoed is False
+
+
+def test_no_validator_leaves_ai_fields_empty(store, fake_client, tracker_settings):
+    """With no AI configured, signals carry empty AI fields (backward compat)."""
+    screener, tracker = _screener(store, fake_client, tracker_settings, None)
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1
+    assert recorded[0].ai_verdict == ""
+    assert recorded[0].ai_vetoed is False

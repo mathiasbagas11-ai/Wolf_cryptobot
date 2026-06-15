@@ -8,7 +8,7 @@ the rest of the code attribute access, defaults and validation in one place.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields as dc_fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
@@ -139,6 +139,14 @@ class Signal:
     hold_hours: Optional[float] = None
     resolved_at: Optional[str] = None
 
+    # AI debate fields (empty when AI is not configured). In monitor mode the
+    # verdict is recorded but never blocks the signal; ai_vetoed flags a signal
+    # the AI would have rejected, kept for later win-rate analysis.
+    ai_verdict: str = ""
+    ai_confidence: int = 0
+    ai_rationale: str = ""
+    ai_vetoed: bool = False
+
     def __post_init__(self) -> None:
         if not self.id:
             self.id = f"{self.symbol}_{int(time.time() * 1000)}"
@@ -156,5 +164,6 @@ class Signal:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Signal":
-        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        # Unknown keys are dropped → safe to load old state files without ai_* fields.
+        known = {f.name for f in dc_fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in known})

@@ -53,6 +53,7 @@ def main() -> None:
         "scan_min": settings.screener_interval_min,
         "track_min": settings.tracker_interval_min,
         "ai": settings.ai.enabled,
+        "ai_mode": "MONITOR" if settings.ai.enabled else "OFF",
     })
 
     # Run an initial tracking pass so restarts resolve overdue signals promptly.

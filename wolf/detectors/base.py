@@ -34,6 +34,11 @@ class SignalCandidate:
     confluence_level: str = ""
     entry_mode: str = "RETEST_WAIT"
     tps: Optional[list[dict]] = None
+    # Populated by Screener after the AI debate runs (monitor mode).
+    ai_verdict: str = ""
+    ai_confidence: int = 0
+    ai_rationale: str = ""
+    ai_vetoed: bool = False
 
 
 class Detector(ABC):

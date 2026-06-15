@@ -177,7 +177,7 @@ class TelegramNotifier:
             f"🎯 Detectors: {esc(detectors)}\n"
             f"🪙 Universe: {info.get('universe', 0)} pairs\n"
             f"⏱ Scan every {info.get('scan_min', '?')}m · Track every {info.get('track_min', '?')}m\n"
-            f"🧠 AI debate: {'ON' if info.get('ai') else 'OFF'}\n"
+            f"🧠 AI debate: {info.get('ai_mode', 'OFF')}\n"
             f"{self._stamp()}"
         )
         self.send(text, self._settings.route_system())
@@ -223,6 +223,19 @@ class TelegramNotifier:
     def _dir_emoji(direction: str) -> str:
         return "🟢" if direction.upper() == "LONG" else "🔴"
 
+    def _ai_block(self, s: Signal) -> str:
+        """Return a formatted AI verdict line, or empty string if no AI ran."""
+        if not s.ai_verdict or s.ai_verdict == "ABSTAIN":
+            return ""
+        if s.ai_vetoed:
+            label = f"⚠️ REJECT ({s.ai_confidence}%) — sent anyway (monitor)"
+        elif s.ai_verdict == "CONFIRM":
+            label = f"✅ CONFIRM ({s.ai_confidence}%)"
+        else:
+            label = f"⚖️ {esc(s.ai_verdict)} ({s.ai_confidence}%)"
+        rationale = f" — {esc(s.ai_rationale)}" if s.ai_rationale else ""
+        return f"🧠 AI: {label}{rationale}\n"
+
     def _signal_card(self, s: Signal) -> str:
         is_long = s.is_long
         ladder = s.tp_ladder or [{"level": 1, "price": s.tp}]
@@ -244,6 +257,7 @@ class TelegramNotifier:
             f"🛑 SL     <code>{fmt_price(s.sl)}</code>  ({sl_pct:+.2f}%)\n"
             f"📊 Score {s.score}/100 · {esc(s.confluence_level or '—')} · R:R {rr:.1f}\n"
             f"⚡ {esc(s.strategy)} · {esc(s.entry_mode)}\n{DIVIDER}\n"
+            f"{self._ai_block(s)}"
             f"{reasons}\n{self._stamp()}"
         )
 

@@ -156,6 +156,10 @@ class Tracker:
         strategy: str = "CONFIRMED",
         entry_mode: str = EntryMode.RETEST_WAIT.value,
         tps: Optional[list[dict]] = None,
+        ai_verdict: str = "",
+        ai_confidence: int = 0,
+        ai_rationale: str = "",
+        ai_vetoed: bool = False,
     ) -> Optional[Signal]:
         """Record a freshly-emitted signal as PENDING.
 
@@ -199,6 +203,10 @@ class Tracker:
             entry_mode=(entry_mode or EntryMode.RETEST_WAIT.value).upper(),
             tp_ladder=[r.to_dict() for r in ladder],
             timeout_hours=self._settings.timeout_for(signal_type),
+            ai_verdict=ai_verdict,
+            ai_confidence=ai_confidence,
+            ai_rationale=ai_rationale,
+            ai_vetoed=ai_vetoed,
         )
 
         with self._lock:

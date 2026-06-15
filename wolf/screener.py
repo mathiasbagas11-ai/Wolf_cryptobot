@@ -88,18 +88,30 @@ class Screener:
             return None
         return self._best_candidate(symbol, candles, self._build_context(symbol))
 
-    def _apply_validator(self, candidate: SignalCandidate, context) -> bool:
-        """Run the AI debate gate. Returns False if the signal is vetoed."""
+    def _apply_validator(self, candidate: SignalCandidate, context) -> None:
+        """Run the AI debate and annotate the candidate. Monitor mode: never blocks.
+
+        The verdict is stored on the candidate (and later the Signal) so we can
+        compare AI-flagged vs AI-confirmed signals' win-rates over time.
+        """
         if self._validator is None:
-            return True
+            return
         verdict = self._validator.validate(candidate, context)
-        if verdict.rationale:
-            # Prepend so the verdict survives the Signal's top-3 reasons cap.
-            candidate.reasons = [f"AI[{verdict.decision} {verdict.confidence}%]: {verdict.rationale}"] + candidate.reasons
+        candidate.ai_verdict = verdict.decision
+        candidate.ai_confidence = verdict.confidence
+        candidate.ai_rationale = verdict.rationale
         if verdict.is_reject and verdict.confidence >= self._veto_min_confidence:
-            log.info("AI vetoed %s %s (%d%%): %s", candidate.symbol, candidate.direction, verdict.confidence, verdict.rationale)
-            return False
-        return True
+            candidate.ai_vetoed = True
+            log.info(
+                "AI would veto %s %s (%d%%) — monitor mode, sending anyway: %s",
+                candidate.symbol, candidate.direction, verdict.confidence, verdict.rationale,
+            )
+        elif verdict.rationale:
+            log.info(
+                "AI %s %s %s (%d%%): %s",
+                verdict.decision, candidate.symbol, candidate.direction,
+                verdict.confidence, verdict.rationale,
+            )
 
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""
@@ -112,8 +124,7 @@ class Screener:
             candidate = self._best_candidate(symbol, candles, context)
             if not candidate:
                 continue
-            if not self._apply_validator(candidate, context):
-                continue
+            self._apply_validator(candidate, context)
             signal = self._tracker.record_signal(
                 symbol=candidate.symbol,
                 signal_type=candidate.signal_type,
@@ -127,6 +138,10 @@ class Screener:
                 strategy=candidate.strategy,
                 entry_mode=candidate.entry_mode,
                 tps=candidate.tps,
+                ai_verdict=candidate.ai_verdict,
+                ai_confidence=candidate.ai_confidence,
+                ai_rationale=candidate.ai_rationale,
+                ai_vetoed=candidate.ai_vetoed,
             )
             if signal is None:
                 continue
