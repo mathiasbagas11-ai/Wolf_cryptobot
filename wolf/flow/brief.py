@@ -15,6 +15,7 @@ from typing import Optional
 
 from wolf.flow.coingecko import GlobalMetrics, TokenMetrics
 from wolf.flow.defillama import ChainActivity, StablecoinSupply
+from wolf.flow.sentiment import CoinbasePremium, FearGreed
 
 # ── framework thresholds (mirror the source account's filter) ──────────────
 FDV_MC_MAX = 2.0          # < 2x → low outstanding unlock pressure (good)
@@ -85,6 +86,8 @@ class Skip:
 @dataclass
 class FlowBrief:
     btc: Optional[GlobalMetrics] = None
+    fear_greed: Optional[FearGreed] = None
+    coinbase_premium: Optional[CoinbasePremium] = None
     stablecoin: Optional[StablecoinSupply] = None
     chains: list[ChainActivity] = field(default_factory=list)
     picks: list[Pick] = field(default_factory=list)
@@ -119,6 +122,8 @@ def build_brief(
     chains: list[ChainActivity],
     stablecoin: Optional[StablecoinSupply],
     *,
+    fear_greed: Optional[FearGreed] = None,
+    coinbase_premium: Optional[CoinbasePremium] = None,
     max_picks: int = 3,
     max_skips: int = 4,
     max_watch: int = 2,
@@ -181,10 +186,13 @@ def build_brief(
     watchlist = ranked[max_picks:max_picks + max_watch]
 
     chains_sorted = sorted(chains, key=lambda c: c.change_1d, reverse=True)
-    stance, conclusion = _stance(global_metrics, stablecoin, chains_sorted)
+    stance, conclusion = _stance(global_metrics, stablecoin, chains_sorted,
+                                 fear_greed, coinbase_premium)
 
     return FlowBrief(
         btc=global_metrics,
+        fear_greed=fear_greed,
+        coinbase_premium=coinbase_premium,
         stablecoin=stablecoin,
         chains=chains_sorted,
         picks=picks,
@@ -205,11 +213,20 @@ def _percentile(sorted_values: list[float], value: float) -> float:
 
 
 def _stance(g: Optional[GlobalMetrics], s: Optional[StablecoinSupply],
-            chains: list[ChainActivity]) -> tuple[str, str]:
-    """Heuristic market posture from dominance, dry-powder and chain activity."""
+            chains: list[ChainActivity], fg: Optional[FearGreed] = None,
+            cb: Optional[CoinbasePremium] = None) -> tuple[str, str]:
+    """Heuristic market posture from dominance, dry-powder, chain activity and
+    the contrarian fear/institutional-demand pair."""
     dry_powder = s is not None and s.change_7d_pct > 0.5
     chain_heat = bool(chains) and chains[0].change_1d > 0
     alts_bid = g is not None and g.market_cap_change_24h > 0 and g.btc_dominance < 56
+
+    # Contrarian read: crowd fearful + US institutions bidding + dry powder ready.
+    if fg is not None and fg.is_fear and cb is not None and cb.signal == "ACCUMULATION" and dry_powder:
+        return ("RISK-ON (contrarian)",
+                f"Fear & Greed {fg.value} ({fg.classification}) di permukaan, tapi "
+                f"Coinbase premium +{cb.premium_pct:.2f}% = institusi US lagi akumulasi + "
+                "dry powder numpuk. 'Be greedy when others are fearful.'")
 
     if dry_powder and chain_heat and alts_bid:
         top = chains[0].label if chains else "altcoin"

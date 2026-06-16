@@ -21,6 +21,7 @@ from wolf.ai.base import LLMClient, NullLLMClient
 from wolf.flow.brief import FlowBrief, Pick, build_brief
 from wolf.flow.coingecko import CoinGeckoClient
 from wolf.flow.defillama import DefiLlamaClient
+from wolf.flow.sentiment import SentimentClient
 from wolf.textfmt import DIVIDER, esc, fmt_price, fmt_usd, now
 
 log = logging.getLogger("wolf.reports")
@@ -28,7 +29,9 @@ log = logging.getLogger("wolf.reports")
 _NARRATOR_SYSTEM = (
     "Lu analis crypto on-chain. Tulis ulang DATA flow intelligence di bawah jadi "
     "thread gaya Telegram berbahasa Indonesia gaul-tapi-tajam, PERSIS gaya ini:\n"
-    "- Struktur: 1/ BTC & MARKET, 2/ STABLECOIN (dry powder), 3/ CHAIN ROTATION, "
+    "- Struktur: 1/ BTC & MARKET (sebut Fear & Greed + Coinbase premium = demand "
+    "institusi US; fear + premium positif = sinyal contrarian), 2/ STABLECOIN "
+    "(dry powder), 3/ CHAIN ROTATION, "
     "4/ TOKEN PICKS (ranked #1/#2/#3 — tiap pick sebut Mcap, Price 24h, % dari ATH, "
     "Liquidity percentile, Funding signal, FDV/MC, Quant score, thesis singkat & "
     "entry zone), 5/ WATCHLIST, 6/ SKIP (+ alasannya), 7/ KESIMPULAN + STRATEGI.\n"
@@ -46,6 +49,7 @@ class FlowReporter:
         self,
         coingecko: Optional[CoinGeckoClient] = None,
         defillama: Optional[DefiLlamaClient] = None,
+        sentiment: Optional[SentimentClient] = None,
         narrator: Optional[LLMClient] = None,
         market_client=None,
         *,
@@ -58,6 +62,7 @@ class FlowReporter:
     ) -> None:
         self._cg = coingecko or CoinGeckoClient()
         self._llama = defillama or DefiLlamaClient()
+        self._sentiment = sentiment or SentimentClient()
         self._narrator = narrator or NullLLMClient()
         self._market = market_client   # exchange client → funding rate (optional)
         self._markets_limit = markets_limit
@@ -73,8 +78,11 @@ class FlowReporter:
         global_metrics = self._cg.global_data()
         chains = self._llama.chain_activity()
         stablecoin = self._llama.stablecoin_supply()
+        fear_greed = self._sentiment.fear_greed()
+        coinbase_premium = self._sentiment.coinbase_premium()
         brief = build_brief(
             markets, global_metrics, chains, stablecoin,
+            fear_greed=fear_greed, coinbase_premium=coinbase_premium,
             max_picks=self._max_picks, max_skips=self._max_skips, max_watch=self._max_watch,
         )
         self._enrich_funding(brief.picks + brief.watchlist)
@@ -116,11 +124,21 @@ class FlowReporter:
     def _template(self, b: FlowBrief) -> str:
         lines = [f"🧠 <b>FLOW INTELLIGENCE</b>\n{DIVIDER}"]
 
-        if b.btc is not None:
-            arrow = "🟢" if b.btc.market_cap_change_24h >= 0 else "🔴"
+        if b.btc is not None or b.fear_greed is not None or b.coinbase_premium is not None:
             lines.append("<b>1/ BTC &amp; MARKET</b>")
-            lines.append(f"{arrow} Total mcap {b.btc.market_cap_change_24h:+.1f}% (24h)")
-            lines.append(f"📊 BTC dominance {b.btc.btc_dominance:.1f}%")
+            if b.btc is not None:
+                arrow = "🟢" if b.btc.market_cap_change_24h >= 0 else "🔴"
+                lines.append(f"{arrow} Total mcap {b.btc.market_cap_change_24h:+.1f}% (24h) · "
+                             f"BTC dominance {b.btc.btc_dominance:.1f}%")
+            if b.fear_greed is not None:
+                fg = b.fear_greed
+                mood = "😱" if fg.is_fear else ("🤑" if fg.is_greed else "😐")
+                lines.append(f"{mood} Fear &amp; Greed {fg.value} ({esc(fg.classification)})")
+            if b.coinbase_premium is not None:
+                cb = b.coinbase_premium
+                tag = {"ACCUMULATION": "🏦 institusi US akumulasi",
+                       "DISTRIBUTION": "🔻 institusi US distribusi"}.get(cb.signal, "netral")
+                lines.append(f"🏦 Coinbase premium {cb.premium_pct:+.2f}% — {tag}")
 
         if b.stablecoin is not None:
             s = b.stablecoin
@@ -149,17 +167,17 @@ class FlowReporter:
                 lines.append(f"   ✅ {esc(p.entry_note)}")
 
         if b.watchlist:
-            lines.append("\n<b>5/ 👀 WATCHLIST</b>")
+            lines.append("\n<b>👀 WATCHLIST</b>")
             for p in b.watchlist:
                 lines.append(f"👀 <b>${esc(p.symbol)}</b> — {p.change_24h:+.1f}% 24h · "
                              f"liquidity {p.liquidity_pctile:.0f} pctile · Quant {p.quant_score}/100")
 
         if b.skips:
-            lines.append("\n<b>6/ ❌ SKIP — dan kenapa</b>")
+            lines.append("\n<b>❌ SKIP — dan kenapa</b>")
             for sk in b.skips:
                 lines.append(f"❌ <b>${esc(sk.symbol)}</b> — {esc(sk.reason)}")
 
-        lines.append(f"\n<b>7/ KESIMPULAN: {esc(b.stance)}</b>")
+        lines.append(f"\n<b>📌 KESIMPULAN: {esc(b.stance)}</b>")
         lines.append(esc(b.conclusion))
         lines.append("\n<i>NFA — DYOR. Data: CoinGecko + DefiLlama</i>")
         return "\n".join(lines)
@@ -198,6 +216,13 @@ def _brief_payload(b: FlowBrief) -> str:
         "btc_market": None if b.btc is None else {
             "total_mcap_change_24h_pct": round(b.btc.market_cap_change_24h, 2),
             "btc_dominance_pct": round(b.btc.btc_dominance, 2),
+        },
+        "fear_greed": None if b.fear_greed is None else {
+            "value": b.fear_greed.value, "classification": b.fear_greed.classification,
+        },
+        "coinbase_premium": None if b.coinbase_premium is None else {
+            "premium_pct": round(b.coinbase_premium.premium_pct, 3),
+            "signal": b.coinbase_premium.signal,
         },
         "stablecoin_dry_powder": None if b.stablecoin is None else {
             "total_usd": round(b.stablecoin.total_usd),

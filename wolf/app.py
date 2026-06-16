@@ -123,7 +123,7 @@ def build_application(settings: Settings | None = None) -> Application:
 
     flow = None
     if settings.flow.enabled:
-        from wolf.flow import CoinGeckoClient, DefiLlamaClient
+        from wolf.flow import CoinGeckoClient, DefiLlamaClient, SentimentClient
 
         f = settings.flow
         narrator = build_llm_client(
@@ -132,6 +132,7 @@ def build_application(settings: Settings | None = None) -> Application:
         flow = FlowReporter(
             coingecko=CoinGeckoClient(timeout=settings.http_timeout),
             defillama=DefiLlamaClient(timeout=settings.http_timeout),
+            sentiment=SentimentClient(timeout=settings.http_timeout),
             narrator=narrator,
             market_client=client,
             markets_limit=f.markets_limit,

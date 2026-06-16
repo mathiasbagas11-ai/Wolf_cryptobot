@@ -126,6 +126,41 @@ def test_brief_stance_risk_on():
     assert "BNB" in brief.conclusion
 
 
+# ── sentiment (fear & greed + coinbase premium) ────────────────────────────
+def test_parse_fear_greed():
+    from wolf.flow.sentiment import SentimentClient
+    fg = SentimentClient.parse_fear_greed(
+        {"data": [{"value": "22", "value_classification": "Extreme Fear"}]})
+    assert fg.value == 22 and fg.is_fear and not fg.is_greed
+    assert SentimentClient.parse_fear_greed({"data": []}) is None
+
+
+def test_coinbase_premium_signal():
+    from wolf.flow.sentiment import CoinbasePremium
+    assert CoinbasePremium(0.12, 101200, 101080).signal == "ACCUMULATION"
+    assert CoinbasePremium(-0.10, 100900, 101000).signal == "DISTRIBUTION"
+    assert CoinbasePremium(0.0, 101000, 101000).signal == "NEUTRAL"
+
+
+def test_brief_contrarian_stance():
+    from wolf.flow.sentiment import CoinbasePremium, FearGreed
+    s = StablecoinSupply(total_usd=1.6e11, change_1d_pct=0.3, change_7d_pct=1.2)
+    fg = FearGreed(value=20, classification="Extreme Fear")
+    cb = CoinbasePremium(premium_pct=0.12, cb_price=101200, bn_price=101080)
+    brief = build_brief([], None, [], s, fear_greed=fg, coinbase_premium=cb)
+    assert brief.stance == "RISK-ON (contrarian)"
+    assert "institusi" in brief.conclusion.lower()
+
+
+def test_flow_report_renders_sentiment_section():
+    fg_cb = StubSentiment(__import__("wolf.flow.sentiment", fromlist=["FearGreed"]).FearGreed(20, "Extreme Fear"),
+                          __import__("wolf.flow.sentiment", fromlist=["CoinbasePremium"]).CoinbasePremium(0.12, 101200, 101080))
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=fg_cb, narrator=None, tz="UTC")
+    text = rep.build()
+    assert "Fear &amp; Greed 20" in text
+    assert "Coinbase premium +0.12%" in text and "institusi US akumulasi" in text
+
+
 # ── report rendering ───────────────────────────────────────────────────────
 class StubCG:
     def top_markets(self, limit=60):
@@ -141,13 +176,23 @@ class StubLlama:
         return StablecoinSupply(1.6e11, 0.2, 0.8)
 
 
+class StubSentiment:
+    def __init__(self, fg=None, cb=None):
+        self._fg = fg
+        self._cb = cb
+    def fear_greed(self):
+        return self._fg
+    def coinbase_premium(self):
+        return self._cb
+
+
 class StubFunding:
     def get_funding_rate(self, symbol):
         return -0.05 if symbol == "GOODUSDT" else None
 
 
 def test_flow_report_template_fallback():
-    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), narrator=None, tz="UTC")
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(), narrator=None, tz="UTC")
     text = rep.build()
     assert "FLOW INTELLIGENCE" in text
     assert "$GOOD" in text and "BNB" in text
@@ -155,8 +200,8 @@ def test_flow_report_template_fallback():
 
 
 def test_flow_report_enriches_funding_from_market_client():
-    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), narrator=None,
-                       market_client=StubFunding(), tz="UTC")
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(),
+                       narrator=None, market_client=StubFunding(), tz="UTC")
     brief = rep.gather()
     assert brief.picks[0].funding_rate == -0.05
     assert brief.picks[0].funding_signal == "BULLISH"
@@ -179,7 +224,7 @@ class FakeNarrator(LLMClient):
 
 def test_flow_report_uses_narrator_and_passes_numbers():
     narr = FakeNarrator()
-    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), narrator=narr, tz="UTC")
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(), narrator=narr, tz="UTC")
     text = rep.build()
     assert "risk-on bro" in text
     # narrator received the real numbers, not invented ones
@@ -193,7 +238,7 @@ def test_flow_report_empty_returns_none():
     class EmptyL:
         def chain_activity(self): return []
         def stablecoin_supply(self): return None
-    rep = FlowReporter(coingecko=Empty(), defillama=EmptyL(), narrator=None)
+    rep = FlowReporter(coingecko=Empty(), defillama=EmptyL(), sentiment=StubSentiment(), narrator=None)
     assert rep.build() is None
 
 

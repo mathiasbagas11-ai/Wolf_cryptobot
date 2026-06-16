@@ -172,6 +172,10 @@ Periodic reports each post to their own topic and are **opt-in**:
   * DefiLlama — per-chain DEX volume, aggregate stablecoin supply (dry powder).
   * Exchange perps (existing `MarketDataClient`) — **funding rate** per pick
     (negative = shorts crowded → squeeze fuel = bullish).
+  * **Fear & Greed Index** (alternative.me) + **Coinbase Premium** (Coinbase
+    BTC/USD vs Binance BTC/USDT = US institutional demand). Extreme fear + a
+    positive premium + dry powder → a *contrarian* RISK-ON read ("be greedy when
+    others are fearful"). Both free & key-less, ported from the previous bot.
 
   A deterministic *framework filter* (`wolf/flow/brief.py`) selects picks (low
   FDV/MC unlock pressure, healthy turnover, not already pumped, no wash-trading),
