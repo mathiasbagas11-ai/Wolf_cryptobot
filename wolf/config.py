@@ -159,9 +159,15 @@ class NewsSettings:
     """Crypto-news posting configuration."""
 
     enabled: bool = False
-    provider: str = "cryptocompare"  # free, key-less
+    provider: str = "cryptocompare"  # free, key-less (single-source / legacy)
+    # Multi-source fan-out (CSV): any of cryptocompare, reddit, hackernews.
+    sources: tuple[str, ...] = ("cryptocompare",)
     interval_min: int = 30
     max_items: int = 3
+    # Synthesise fresh headlines into one AI brief instead of a flat card.
+    synthesis_enabled: bool = False
+    narrator_provider: str = "deepseek"
+    narrator_model: str = ""
 
 
 @dataclass(frozen=True)
@@ -280,11 +286,17 @@ class Settings:
             flow_thread_id=_env_str("FLOW_THREAD_ID"),
             allowed_chat_ids=_env_csv("ALLOWED_CHAT_IDS"),
         )
+        news_provider = _env_str("NEWS_PROVIDER", "cryptocompare")
+        news_sources = _env_csv("NEWS_SOURCES") or (news_provider,)
         news = NewsSettings(
             enabled=_env_bool("NEWS_ENABLED", False),
-            provider=_env_str("NEWS_PROVIDER", "cryptocompare"),
+            provider=news_provider,
+            sources=tuple(news_sources),
             interval_min=_env_int("NEWS_INTERVAL_MIN", 30),
             max_items=_env_int("NEWS_MAX_ITEMS", 3),
+            synthesis_enabled=_env_bool("NEWS_SYNTHESIS_ENABLED", False),
+            narrator_provider=_env_str("NEWS_NARRATOR_PROVIDER", "deepseek"),
+            narrator_model=_env_str("NEWS_NARRATOR_MODEL", ""),
         )
         reports = ReportsSettings(
             majors_enabled=_env_bool("MAJORS_ENABLED", False),

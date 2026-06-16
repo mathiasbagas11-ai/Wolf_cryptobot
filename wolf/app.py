@@ -21,7 +21,7 @@ from wolf.exchange import (
     MarketDataClient,
 )
 from wolf.market import ContextProvider
-from wolf.news import NewsService, build_news_source
+from wolf.news import NewsService, NewsSynthesizer, build_news_source
 from wolf.notify import TelegramNotifier
 from wolf.reports import (
     FlowReporter,
@@ -44,6 +44,7 @@ class Application:
     tracker: Tracker
     screener: Screener
     news: Optional[NewsService] = None
+    news_synth: Optional[NewsSynthesizer] = None
     majors: Optional[MajorsReporter] = None
     radar: Optional[MarketRadar] = None
     pulse: Optional[MarketPulse] = None
@@ -109,10 +110,17 @@ def build_application(settings: Settings | None = None) -> Application:
     )
 
     news = None
+    news_synth = None
     if settings.news.enabled:
-        source = build_news_source(settings.news.provider, timeout=settings.http_timeout)
+        source = build_news_source(settings.news.sources, timeout=settings.http_timeout)
         if source is not None:
             news = NewsService(source, store, max_items=settings.news.max_items)
+        if settings.news.synthesis_enabled:
+            n = settings.news
+            narrator = build_llm_client(
+                n.narrator_provider, _provider_key(settings, n.narrator_provider), n.narrator_model
+            )
+            news_synth = NewsSynthesizer(narrator)
 
     r = settings.reports
     tz = settings.timezone
@@ -131,6 +139,7 @@ def build_application(settings: Settings | None = None) -> Application:
         tracker=tracker,
         screener=screener,
         news=news,
+        news_synth=news_synth,
         majors=majors,
         radar=radar,
         pulse=pulse,

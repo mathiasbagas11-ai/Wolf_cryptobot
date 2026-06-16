@@ -162,8 +162,16 @@ Periodic reports each post to their own topic and are **opt-in**:
 * **Market pulse** (`MARKET_PULSE_ENABLED`) — BTC/ETH trend + RSI bias.
 * **Whale** (`WHALE_ENABLED`) — large public trades above `WHALE_MIN_USD`,
   de-duplicated via the state store (REST only, no key, no WebSocket).
-* **News** (`NEWS_ENABLED`) — CryptoCompare headlines (free, key-less),
-  de-duplicated so the same story isn't reposted.
+* **News** (`NEWS_ENABLED`) — an automatic, multi-source headline pipeline.
+  Every `NEWS_INTERVAL_MIN` it fans out to all `NEWS_SOURCES` (free & key-less:
+  `cryptocompare`, `reddit` via Atom RSS, `hackernews` via Algolia), isolates
+  each source's failure, **dedups across sources** by normalised title, **ranks
+  by engagement** (HN points/comments), and posts only genuinely-new items
+  (seen-set in the state store, so nothing is reposted). With
+  `NEWS_SYNTHESIS_ENABLED=true` an LLM (`NEWS_NARRATOR_PROVIDER`) condenses the
+  fresh batch into a single grouped brief instead of a flat card — it only
+  phrases the fetched headlines, never invents stories. Sources adapted from the
+  `last30days` skill.
 * **Flow Intelligence** (`FLOW_ENABLED`) — a Nansen-style "flow" thread posted to
   the News topic: BTC/market posture → stablecoin dry powder → chain rotation →
   ranked token picks → watchlist → skips → conclusion + strategy. Built from

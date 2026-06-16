@@ -120,6 +120,12 @@ class TelegramNotifier:
         if items:
             self.send(self._news_card(items), self._settings.route_news())
 
+    def notify_news_digest(self, text: str) -> None:
+        """Post an AI-synthesised news brief (already plain text) to the News topic."""
+        if text:
+            body = f"📰 <b>CRYPTO NEWS</b>\n{DIVIDER}\n{esc(text)}\n{self._stamp()}"
+            self.send(body, self._settings.route_news())
+
     # ── market report notifications (text built by the reporters) ───────
     def notify_majors(self, text: str) -> None:
         if text:
