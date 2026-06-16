@@ -121,26 +121,7 @@ def build_application(settings: Settings | None = None) -> Application:
     pulse = MarketPulse(client, tz=tz) if r.pulse_enabled else None
     whale = WhaleTracker(client, store, min_usd=r.whale_min_usd, tz=tz) if r.whale_enabled else None
 
-    flow = None
-    if settings.flow.enabled:
-        from wolf.flow import CoinGeckoClient, DefiLlamaClient, SentimentClient
-
-        f = settings.flow
-        narrator = build_llm_client(
-            f.narrator_provider, _provider_key(settings, f.narrator_provider), f.narrator_model
-        )
-        flow = FlowReporter(
-            coingecko=CoinGeckoClient(timeout=settings.http_timeout),
-            defillama=DefiLlamaClient(timeout=settings.http_timeout),
-            sentiment=SentimentClient(timeout=settings.http_timeout),
-            narrator=narrator,
-            market_client=client,
-            markets_limit=f.markets_limit,
-            max_picks=f.max_picks,
-            max_skips=f.max_skips,
-            max_watch=f.max_watch,
-            tz=tz,
-        )
+    flow = build_flow_reporter(settings, client) if settings.flow.enabled else None
 
     return Application(
         settings=settings,
@@ -155,6 +136,35 @@ def build_application(settings: Settings | None = None) -> Application:
         pulse=pulse,
         whale=whale,
         flow=flow,
+    )
+
+
+def build_flow_reporter(settings: Settings, client: MarketDataClient) -> FlowReporter:
+    """Construct the flow-intelligence reporter (used by the scheduler and the
+    on-demand REST endpoints, so a deep-dive works even when scheduling is off)."""
+    from wolf.flow import (
+        CoinGeckoClient,
+        DefiLlamaClient,
+        HyperliquidPerps,
+        SentimentClient,
+    )
+
+    f = settings.flow
+    narrator = build_llm_client(
+        f.narrator_provider, _provider_key(settings, f.narrator_provider), f.narrator_model
+    )
+    return FlowReporter(
+        coingecko=CoinGeckoClient(timeout=settings.http_timeout),
+        defillama=DefiLlamaClient(timeout=settings.http_timeout),
+        sentiment=SentimentClient(timeout=settings.http_timeout),
+        hyperliquid=HyperliquidPerps(timeout=settings.http_timeout),
+        narrator=narrator,
+        market_client=client,
+        markets_limit=f.markets_limit,
+        max_picks=f.max_picks,
+        max_skips=f.max_skips,
+        max_watch=f.max_watch,
+        tz=settings.timezone,
     )
 
 

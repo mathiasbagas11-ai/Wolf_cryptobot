@@ -176,6 +176,13 @@ Periodic reports each post to their own topic and are **opt-in**:
     BTC/USD vs Binance BTC/USDT = US institutional demand). Extreme fear + a
     positive premium + dry powder → a *contrarian* RISK-ON read ("be greedy when
     others are fearful"). Both free & key-less, ported from the previous bot.
+  * **Hyperliquid** perps — funding rate + open interest per pick from a single
+    cached snapshot (`metaAndAssetCtxs`), wider alt coverage than Binance perps.
+
+  A **single-token deep-dive** (`POST /flow/{symbol}`) renders an honest bull-vs-
+  bear breakdown + playbook for one token (ENA-thread style): every bear point is
+  a real red flag computed from the data, never softened. Works on demand even
+  when the scheduled report is disabled.
 
   A deterministic *framework filter* (`wolf/flow/brief.py`) selects picks (low
   FDV/MC unlock pressure, healthy turnover, not already pumped, no wash-trading),
@@ -240,6 +247,14 @@ The API is then available at `http://localhost:8000` (interactive docs at
 | `POST` | `/scan` | Run one screening cycle now |
 | `POST` | `/track` | Advance pending signals now |
 | `POST` | `/signals` | Record a signal manually (external strategies) |
+| `POST` | `/flow` | Build the flow-intelligence brief now → News topic |
+| `POST` | `/flow/{symbol}` | Single-token contrarian deep-dive (bull vs bear) → News topic |
+
+Example — on-demand single-token deep-dive (works even when scheduled flow is off):
+
+```bash
+curl -X POST localhost:8000/flow/ENA      # → posts an ENA deep-dive to Telegram
+```
 
 Example — record a signal from an external strategy:
 

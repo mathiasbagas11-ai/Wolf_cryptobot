@@ -20,7 +20,7 @@ from typing import Optional
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 
-from wolf.app import Application, build_application
+from wolf.app import Application, build_application, build_flow_reporter
 from wolf.config import Settings
 from wolf.logging_setup import setup_logging
 
@@ -75,6 +75,28 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
     def track() -> dict:
         resolved = app_obj.tracker.check_pending()
         return {"resolved": len(resolved), "signals": [s.to_dict() for s in resolved]}
+
+    def _flow_reporter():
+        """Reuse the scheduled reporter, or build one on demand if flow is off."""
+        return app_obj.flow or build_flow_reporter(app_obj.settings, app_obj.client)
+
+    @api.post("/flow", dependencies=[Depends(require_api_key)])
+    def flow_report() -> dict:
+        """Build the flow-intelligence brief now and post it to the News topic."""
+        text = _flow_reporter().build()
+        if not text:
+            raise HTTPException(status_code=503, detail="No flow data available")
+        app_obj.notifier.notify_flow(text)
+        return {"posted": app_obj.notifier.enabled, "text": text}
+
+    @api.post("/flow/{symbol}", dependencies=[Depends(require_api_key)])
+    def flow_deep_dive(symbol: str) -> dict:
+        """Single-token contrarian deep-dive (bull vs bear) → News topic."""
+        text = _flow_reporter().build_token(symbol)
+        if not text:
+            raise HTTPException(status_code=404, detail=f"Token '{symbol}' not found")
+        app_obj.notifier.notify_flow(text)
+        return {"posted": app_obj.notifier.enabled, "text": text}
 
     @api.post("/signals", dependencies=[Depends(require_api_key)])
     def record_manual(payload: dict = Body(...)) -> dict:

@@ -155,7 +155,7 @@ def test_brief_contrarian_stance():
 def test_flow_report_renders_sentiment_section():
     fg_cb = StubSentiment(__import__("wolf.flow.sentiment", fromlist=["FearGreed"]).FearGreed(20, "Extreme Fear"),
                           __import__("wolf.flow.sentiment", fromlist=["CoinbasePremium"]).CoinbasePremium(0.12, 101200, 101080))
-    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=fg_cb, narrator=None, tz="UTC")
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=fg_cb, hyperliquid=StubHL(), narrator=None, tz="UTC")
     text = rep.build()
     assert "Fear &amp; Greed 20" in text
     assert "Coinbase premium +0.12%" in text and "institusi US akumulasi" in text
@@ -186,13 +186,23 @@ class StubSentiment:
         return self._cb
 
 
+class StubHL:
+    def __init__(self, funding=None, oi=None):
+        self._f = funding or {}
+        self._oi = oi or {}
+    def funding_rate(self, symbol):
+        return self._f.get(symbol)
+    def open_interest_usd(self, symbol):
+        return self._oi.get(symbol)
+
+
 class StubFunding:
     def get_funding_rate(self, symbol):
         return -0.05 if symbol == "GOODUSDT" else None
 
 
 def test_flow_report_template_fallback():
-    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(), narrator=None, tz="UTC")
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(), hyperliquid=StubHL(), narrator=None, tz="UTC")
     text = rep.build()
     assert "FLOW INTELLIGENCE" in text
     assert "$GOOD" in text and "BNB" in text
@@ -200,7 +210,7 @@ def test_flow_report_template_fallback():
 
 
 def test_flow_report_enriches_funding_from_market_client():
-    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(),
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(), hyperliquid=StubHL(),
                        narrator=None, market_client=StubFunding(), tz="UTC")
     brief = rep.gather()
     assert brief.picks[0].funding_rate == -0.05
@@ -224,7 +234,7 @@ class FakeNarrator(LLMClient):
 
 def test_flow_report_uses_narrator_and_passes_numbers():
     narr = FakeNarrator()
-    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(), narrator=narr, tz="UTC")
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(), hyperliquid=StubHL(), narrator=narr, tz="UTC")
     text = rep.build()
     assert "risk-on bro" in text
     # narrator received the real numbers, not invented ones
@@ -238,8 +248,77 @@ def test_flow_report_empty_returns_none():
     class EmptyL:
         def chain_activity(self): return []
         def stablecoin_supply(self): return None
-    rep = FlowReporter(coingecko=Empty(), defillama=EmptyL(), sentiment=StubSentiment(), narrator=None)
+    rep = FlowReporter(coingecko=Empty(), defillama=EmptyL(), sentiment=StubSentiment(), hyperliquid=StubHL(), narrator=None)
     assert rep.build() is None
+
+
+# ── Hyperliquid funding/OI ─────────────────────────────────────────────────
+def test_hyperliquid_parse_snapshot():
+    from wolf.flow.hyperliquid import HyperliquidPerps
+    payload = [
+        {"universe": [{"name": "BTC"}, {"name": "ENA"}]},
+        [{"funding": "0.0000125", "openInterest": "1000", "markPx": "100000"},
+         {"funding": "-0.0005", "openInterest": "2000000", "markPx": "0.076"}],
+    ]
+    snap = HyperliquidPerps.parse(payload)
+    assert round(snap["BTC"]["funding_pct"], 5) == 0.00125   # hourly rate × 100
+    assert snap["BTC"]["oi_usd"] == 1000 * 100000
+    assert round(snap["ENA"]["funding_pct"], 3) == -0.05
+    assert HyperliquidPerps.parse({"bad": 1}) == {}
+
+
+def test_hyperliquid_lookup_by_pair():
+    from wolf.flow.hyperliquid import HyperliquidPerps
+    hl = HyperliquidPerps()
+    hl._cache = {"ENA": {"funding_pct": -0.05, "oi_usd": 152000, "mark_px": 0.076}}
+    hl._cache_ts = __import__("time").time()
+    assert hl.funding_rate("ENAUSDT") == -0.05
+    assert hl.open_interest_usd("ENAUSDT") == 152000
+
+
+# ── single-token deep dive ─────────────────────────────────────────────────
+def test_build_token_view_bull_and_bear():
+    from wolf.flow.brief import build_token_view
+    # ENA-like: deep from ATH, low FDV/MC, negative funding (bullish) but small.
+    t = TokenMetrics("ENA", "Ethena", 0.076, -4.0, 735_000_000, 800_000_000,
+                     30_000_000, ath_change_pct=-95.0)
+    v = build_token_view(t, funding=-0.05, open_interest_usd=152_000)
+    assert v.symbol == "ENA"
+    assert any("squeeze" in b for b in v.bull)            # bullish funding
+    assert any("dari ATH" in b for b in v.bull)           # flushed downside
+    assert v.playbook and "Horizon" in v.playbook[-1]
+    assert v.stance in ("ACCUMULATE (conviction)", "NEUTRAL — tunggu konfirmasi", "AVOID — risiko tinggi")
+
+
+def test_build_token_view_flags_unlock_and_fomo():
+    from wolf.flow.brief import build_token_view
+    t = TokenMetrics("SPYX", "Spyx", 1.0, 60.0, 20_000_000, 120_000_000,
+                     5_000_000, ath_change_pct=-10.0)
+    v = build_token_view(t, funding=0.10)   # FDV/MC 6x, pumped +60%, funding bearish
+    assert any("unlock" in b for b in v.bear)
+    assert any("pump" in b for b in v.bear)
+    assert any("overheated" in b for b in v.bear)
+    assert "NO leverage — rawan kena likuidasi" in v.playbook
+
+
+def test_flow_build_token_deep_dive():
+    class CG250:
+        def top_markets(self, limit=60):
+            return [TokenMetrics("ENA", "Ethena", 0.076, -4.0, 735_000_000,
+                                 800_000_000, 30_000_000, ath_change_pct=-95.0)]
+    rep = FlowReporter(coingecko=CG250(), defillama=StubLlama(), sentiment=StubSentiment(),
+                       hyperliquid=StubHL(funding={"ENA": -0.05}, oi={"ENA": 152000}),
+                       narrator=None, tz="UTC")
+    text = rep.build_token("ena")
+    assert "DEEP DIVE — $ENA" in text
+    assert "Sisi BULLISH" in text and "Sisi BEARISH" in text
+    assert "Open interest" in text
+
+
+def test_flow_build_token_not_found():
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), sentiment=StubSentiment(),
+                       hyperliquid=StubHL(), narrator=None, tz="UTC")
+    assert rep.build_token("NOPE") is None
 
 
 # ── OpenAI-compatible client (DeepSeek/Groq) ───────────────────────────────
