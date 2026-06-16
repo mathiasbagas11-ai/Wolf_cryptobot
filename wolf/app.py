@@ -22,6 +22,7 @@ from wolf.exchange import (
     MarketDataClient,
 )
 from wolf.market import ContextProvider
+from wolf.regime import RegimeProvider
 from wolf.news import NewsService, build_news_source
 from wolf.notify import TelegramNotifier
 from wolf.reports import MajorsReporter, MarketPulse, MarketRadar, WhaleTracker
@@ -109,11 +110,17 @@ def build_application(settings: Settings | None = None) -> Application:
         # Reuse the (cheap) arbiter model to narrate market/session reports.
         analysis_llm = _role_client(settings.ai.arbiter)
 
+    regime_provider = RegimeProvider(
+        client, symbol=settings.risk.regime_symbol, interval=settings.risk.regime_interval
+    )
     screener = Screener(
         client, tracker, default_detectors(), notifier=notifier,
         context_provider=context_provider,
         validator=validator,
         veto_min_confidence=settings.ai.veto_min_confidence,
+        regime_provider=regime_provider,
+        account=account,
+        risk=settings.risk,
     )
 
     news = None

@@ -11,12 +11,18 @@ from __future__ import annotations
 import logging
 from typing import Optional, Sequence
 
+from wolf.config import RiskSettings
 from wolf.detectors.base import Detector, SignalCandidate
 from wolf.exchange import BinanceClient
 from wolf.notify import TelegramNotifier
+from wolf.regime import BEARISH, BULLISH, NEUTRAL, UNKNOWN
 from wolf.tracker import Tracker
 
 log = logging.getLogger("wolf.screener")
+
+# Reversal setups intentionally fade the trend, so the regime filter exempts
+# them — only trend-following detectors are blocked for fighting the tape.
+COUNTER_TREND_TYPES: frozenset[str] = frozenset({"SCALP", "PREDUMP", "TRAP"})
 
 # Liquid USDT pairs scanned each cycle. Kept as a plain constant; override via
 # the constructor for tests or custom universes.
@@ -40,6 +46,9 @@ class Screener:
         context_provider=None,
         validator=None,
         veto_min_confidence: int = 70,
+        regime_provider=None,
+        account=None,
+        risk: Optional[RiskSettings] = None,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -51,6 +60,9 @@ class Screener:
         self._context_provider = context_provider
         self._validator = validator
         self._veto_min_confidence = veto_min_confidence
+        self._regime_provider = regime_provider
+        self._account = account
+        self._risk = risk or RiskSettings()
 
     @property
     def detector_names(self) -> list[str]:
@@ -113,9 +125,68 @@ class Screener:
                 verdict.confidence, verdict.rationale,
             )
 
+    # ── risk gates (hard block) ─────────────────────────────────────────────
+    def _current_regime(self) -> str:
+        if not self._risk.regime_filter_enabled or self._regime_provider is None:
+            return UNKNOWN
+        return self._regime_provider.bias()
+
+    def _drawdown_paused(self) -> bool:
+        """True when paper equity has fallen far enough below its peak to pause."""
+        if self._account is None:
+            return False
+        try:
+            return self._account.drawdown_pct() >= self._risk.drawdown_pause_pct
+        except Exception:  # equity read must never break the scan
+            log.exception("Drawdown check failed")
+            return False
+
+    def _weak_strategies(self) -> set[str]:
+        """Strategies with enough graded trades and a win-rate below the floor."""
+        try:
+            by_strategy = self._tracker.stats().get("by_strategy", {})
+        except Exception:
+            log.exception("Stats read failed for auto-pause")
+            return set()
+        return {
+            name
+            for name, b in by_strategy.items()
+            if b.get("total", 0) >= self._risk.autopause_min_trades
+            and b.get("win_rate", 100.0) < self._risk.autopause_min_win_rate
+        }
+
+    def _fights_regime(self, candidate: SignalCandidate, regime: str) -> bool:
+        """True when a trend-following entry trades against the broad market."""
+        if regime in (NEUTRAL, UNKNOWN):
+            return False
+        if candidate.signal_type in COUNTER_TREND_TYPES:
+            return False  # reversal setups are meant to fade the tape
+        if regime == BEARISH and candidate.direction == "LONG":
+            return True
+        if regime == BULLISH and candidate.direction == "SHORT":
+            return True
+        return False
+
+    def _block_reason(self, candidate: SignalCandidate, regime: str, weak: set[str]) -> Optional[str]:
+        """Return why a candidate is blocked, or ``None`` to let it through."""
+        if candidate.strategy in weak:
+            return "strategy auto-paused (underperforming)"
+        if self._fights_regime(candidate, regime):
+            return f"against {regime} regime"
+        return None
+
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""
         recorded = []
+        # Resolve cycle-wide risk state once, not per symbol.
+        if self._drawdown_paused():
+            log.warning(
+                "Drawdown %.1f%% ≥ %.1f%% — new entries paused this cycle",
+                self._account.drawdown_pct(), self._risk.drawdown_pause_pct,
+            )
+            return recorded
+        regime = self._current_regime()
+        weak = self._weak_strategies()
         for symbol in self._universe:
             candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
             if not candles:
@@ -123,6 +194,10 @@ class Screener:
             context = self._build_context(symbol)
             candidate = self._best_candidate(symbol, candles, context)
             if not candidate:
+                continue
+            blocked = self._block_reason(candidate, regime, weak)
+            if blocked:
+                log.info("Blocked %s %s (%s): %s", candidate.symbol, candidate.direction, candidate.strategy, blocked)
                 continue
             self._apply_validator(candidate, context)
             signal = self._tracker.record_signal(

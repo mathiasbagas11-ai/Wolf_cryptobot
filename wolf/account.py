@@ -33,13 +33,31 @@ class PaperAccount:
     def _state(self) -> dict:
         st = self._store.read(ACCOUNT_KEY, default=None)
         if not isinstance(st, dict) or "balance" not in st:
-            st = {"balance": self._start, "trades": 0, "realized": 0.0}
+            st = {"balance": self._start, "trades": 0, "realized": 0.0, "peak": self._start}
+            self._store.write(ACCOUNT_KEY, st)
+        # Backfill the equity peak for accounts persisted before drawdown tracking.
+        if "peak" not in st:
+            st["peak"] = float(st["balance"])
             self._store.write(ACCOUNT_KEY, st)
         return st
 
     @property
     def balance(self) -> float:
         return float(self._state()["balance"])
+
+    @property
+    def peak(self) -> float:
+        """Highest balance the equity curve has reached."""
+        return float(self._state().get("peak", self._start))
+
+    def drawdown_pct(self) -> float:
+        """How far below its peak the balance sits, as a positive percent."""
+        st = self._state()
+        peak = float(st.get("peak", self._start))
+        bal = float(st["balance"])
+        if peak <= 0:
+            return 0.0
+        return max(0.0, (peak - bal) / peak * 100)
 
     @staticmethod
     def risk_pct_of(signal: Signal) -> float:
@@ -69,6 +87,7 @@ class PaperAccount:
 
         balance += pnl_amount
         st["balance"] = round(balance, 2)
+        st["peak"] = round(max(float(st.get("peak", balance)), balance), 2)
         st["trades"] = int(st.get("trades", 0)) + 1
         st["realized"] = round(float(st.get("realized", 0.0)) + pnl_amount, 2)
         self._store.write(ACCOUNT_KEY, st)

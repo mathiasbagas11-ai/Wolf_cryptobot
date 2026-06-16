@@ -77,6 +77,7 @@ and unit-tested.
 | `PREDUMP` | SHORT | Bearish RSI divergence + over-extension + rejection (distribution) | ≥65 |
 | `SCALP` | both | Liquidity sweep (stop-hunt) + volume spike + RSI extreme | ≥60 |
 | `SWING` | both | Trend (EMA align) + pullback to EMA20 + rejection candle | ≥65 |
+| `TRAP` | both | Failed-breakout reversal: sweep + reclaim + volume climax + VWAP grab + exhaustion (anti exit-liquidity) | ≥80 (HIGH only) |
 
 Add a detector by writing one module and appending it to `default_detectors()`
 in `wolf/detectors/__init__.py` — nothing else changes.
@@ -86,6 +87,19 @@ in `wolf/detectors/__init__.py` — nothing else changes.
 Binance futures: negative/extreme funding boosts a PREPUMP short-squeeze case,
 overheated positive funding boosts a PREDUMP. The bonus is purely additive, so
 detectors still work candle-only when futures data is unavailable.
+
+## Risk gates
+
+Detectors only decide *what* looks like a setup; **risk gates** (`wolf/regime.py`
++ the screener) decide whether it's actually emitted. They close the loop between
+the bot's own results and its next trade — all **hard blocks** (a gated signal is
+not sent), configured under `RiskSettings`:
+
+| Gate | What it does | Env |
+|------|--------------|-----|
+| **Regime filter** | Reads a bellwether's trend (BTC, price vs EMA20/EMA50) and blocks trend-following LONGs in a BEARISH market and SHORTs in a BULLISH one. Counter-trend setups (`SCALP`/`PREDUMP`/`TRAP`) are exempt — they're *meant* to fade the tape. | `REGIME_FILTER_ENABLED`, `REGIME_SYMBOL`, `REGIME_INTERVAL` |
+| **Drawdown throttle** | Tracks the paper equity's high-water mark and pauses **all** new entries once the balance falls a set % below its peak — stops a correction from giving back realized gains. | `DRAWDOWN_PAUSE_PCT` |
+| **Auto-pause** | Enforces the "lesson": once a strategy has enough graded trades and its win-rate is below a floor, it stops emitting until the record recovers. | `AUTOPAUSE_MIN_TRADES`, `AUTOPAUSE_MIN_WIN_RATE` |
 
 ## Data sources (multi-exchange fallback)
 

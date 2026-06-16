@@ -48,3 +48,35 @@ def test_invalidated_does_not_touch_balance(store):
     acc = PaperAccount(store, start_balance=1000.0)
     assert acc.apply(_signal(Status.INVALIDATED.value, 0.0)) is None
     assert acc.balance == 1000.0
+
+
+# ── drawdown tracking ───────────────────────────────────────────────────────
+def test_peak_tracks_high_water_mark(store):
+    acc = PaperAccount(store, start_balance=1000.0, risk_pct=1.0)
+    acc.apply(_signal(Status.TP_HIT.value, 10.0))   # +20 -> 1020 (new peak)
+    assert acc.peak == 1020.0
+    acc.apply(_signal(Status.SL_HIT.value, -5.0))   # -1R of 1020 -> ~989.8
+    assert acc.balance < 1020.0
+    assert acc.peak == 1020.0                        # peak holds through the dip
+
+
+def test_drawdown_pct_zero_at_peak(store):
+    acc = PaperAccount(store, start_balance=1000.0)
+    assert acc.drawdown_pct() == 0.0
+
+
+def test_drawdown_pct_after_loss(store):
+    acc = PaperAccount(store, start_balance=1000.0, risk_pct=10.0)
+    acc.apply(_signal(Status.TP_HIT.value, 10.0))   # +2R of 10% = +200 -> 1200 peak
+    acc.apply(_signal(Status.SL_HIT.value, -5.0))   # -1R of 10% of 1200 = -120 -> 1080
+    # drawdown from 1200 peak to 1080 = 10%
+    assert round(acc.drawdown_pct(), 1) == 10.0
+
+
+def test_peak_backfilled_for_legacy_state(store):
+    # State persisted before drawdown tracking has no "peak" key.
+    from wolf.account import ACCOUNT_KEY
+    store.write(ACCOUNT_KEY, {"balance": 800.0, "trades": 5, "realized": -200.0})
+    acc = PaperAccount(store, start_balance=1000.0)
+    assert acc.peak == 800.0          # backfilled to current balance
+    assert acc.drawdown_pct() == 0.0

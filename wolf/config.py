@@ -154,6 +154,31 @@ def _first(*values: str) -> str:
 
 
 @dataclass(frozen=True)
+class RiskSettings:
+    """Risk-management gates applied to signal emission.
+
+    These close the loop between the bot's own results and what it trades next:
+    align entries with the broad market regime, pause when the equity curve is
+    bleeding, and stop emitting strategies that have proven unprofitable.
+    """
+
+    # Market-regime filter: block trend-following LONGs in a BEARISH market and
+    # SHORTs in a BULLISH one. Counter-trend reversal setups are exempt.
+    regime_filter_enabled: bool = True
+    regime_symbol: str = "BTCUSDT"
+    regime_interval: str = "1h"
+
+    # Drawdown throttle: pause ALL new entries once the paper equity is this far
+    # below its peak (percent). Protects realized gains during corrections.
+    drawdown_pause_pct: float = 15.0
+
+    # Auto-pause underperformers: once a strategy has at least this many graded
+    # trades and its win-rate is below the floor, stop emitting it.
+    autopause_min_trades: int = 12
+    autopause_min_win_rate: float = 38.0
+
+
+@dataclass(frozen=True)
 class TrackerSettings:
     """Signal-tracking behaviour knobs."""
 
@@ -286,6 +311,7 @@ class Settings:
 
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
+    risk: RiskSettings = field(default_factory=RiskSettings)
     ai: AISettings = field(default_factory=AISettings)
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
@@ -331,6 +357,14 @@ class Settings:
             dedup_minutes=_env_int("TRACKER_DEDUP_MINUTES", 30),
             max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", 500),
         )
+        risk = RiskSettings(
+            regime_filter_enabled=_env_bool("REGIME_FILTER_ENABLED", True),
+            regime_symbol=_env_str("REGIME_SYMBOL", "BTCUSDT"),
+            regime_interval=_env_str("REGIME_INTERVAL", "1h"),
+            drawdown_pause_pct=_env_float("DRAWDOWN_PAUSE_PCT", 15.0),
+            autopause_min_trades=_env_int("AUTOPAUSE_MIN_TRADES", 12),
+            autopause_min_win_rate=_env_float("AUTOPAUSE_MIN_WIN_RATE", 38.0),
+        )
         ai = AISettings(
             enabled=_env_bool("AI_DEBATE_ENABLED", False),
             bull=DebateRole(
@@ -375,6 +409,7 @@ class Settings:
             timezone=_env_str("TIMEZONE", "Asia/Jakarta"),
             telegram=telegram,
             tracker=tracker,
+            risk=risk,
             ai=ai,
             news=news,
             reports=reports,
