@@ -23,6 +23,7 @@ from wolf.exchange import (
 )
 from wolf.market import ContextProvider
 from wolf.regime import RegimeProvider
+from wolf.universe import UniverseProvider
 from wolf.news import NewsService, build_news_source
 from wolf.notify import TelegramNotifier
 from wolf.reports import MajorsReporter, MarketPulse, MarketRadar, WhaleTracker
@@ -113,6 +114,16 @@ def build_application(settings: Settings | None = None) -> Application:
     regime_provider = RegimeProvider(
         client, symbol=settings.risk.regime_symbol, interval=settings.risk.regime_interval
     )
+    universe_provider = (
+        UniverseProvider(
+            client,
+            top_n=settings.universe.top_n,
+            min_quote_volume=settings.universe.min_quote_volume,
+            quote=settings.universe.quote,
+        )
+        if settings.universe.dynamic
+        else None
+    )
     screener = Screener(
         client, tracker, default_detectors(), notifier=notifier,
         context_provider=context_provider,
@@ -121,6 +132,7 @@ def build_application(settings: Settings | None = None) -> Application:
         regime_provider=regime_provider,
         account=account,
         risk=settings.risk,
+        universe_provider=universe_provider,
     )
 
     news = None

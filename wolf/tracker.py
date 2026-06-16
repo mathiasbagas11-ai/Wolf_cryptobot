@@ -160,6 +160,8 @@ class Tracker:
         ai_confidence: int = 0,
         ai_rationale: str = "",
         ai_vetoed: bool = False,
+        against_regime: bool = False,
+        weak_strategy: bool = False,
     ) -> Optional[Signal]:
         """Record a freshly-emitted signal as PENDING.
 
@@ -207,6 +209,8 @@ class Tracker:
             ai_confidence=ai_confidence,
             ai_rationale=ai_rationale,
             ai_vetoed=ai_vetoed,
+            against_regime=against_regime,
+            weak_strategy=weak_strategy,
         )
 
         with self._lock:
@@ -478,6 +482,19 @@ class Tracker:
         vetoed_wins = sum(1 for o in vetoed if Status(o.status).is_win)
         vetoed_win_rate = round(vetoed_wins / len(vetoed) * 100, 1) if vetoed else None
 
+        # Risk-gate monitoring: win-rate of signals that fought the regime or came
+        # from a flagged strategy. If these underperform, promoting the gate to a
+        # hard block (REGIME_HARD_BLOCK / AUTOPAUSE_HARD_BLOCK) is justified.
+        def _flag_win_rate(predicate) -> tuple[int, Optional[float]]:
+            sub = [o for o in graded if predicate(o)]
+            if not sub:
+                return 0, None
+            sub_wins = sum(1 for o in sub if Status(o.status).is_win)
+            return len(sub), round(sub_wins / len(sub) * 100, 1)
+
+        against_regime_count, against_regime_win_rate = _flag_win_rate(lambda o: o.against_regime)
+        weak_flag_count, weak_flag_win_rate = _flag_win_rate(lambda o: o.weak_strategy)
+
         return {
             "total_resolved": len(outcomes),
             "total_graded": total,
@@ -490,4 +507,8 @@ class Tracker:
             "by_ai_verdict": by_ai_verdict,
             "vetoed_count": len(vetoed),
             "vetoed_win_rate": vetoed_win_rate,
+            "against_regime_count": against_regime_count,
+            "against_regime_win_rate": against_regime_win_rate,
+            "weak_flag_count": weak_flag_count,
+            "weak_flag_win_rate": weak_flag_win_rate,
         }

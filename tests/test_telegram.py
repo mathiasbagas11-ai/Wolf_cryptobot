@@ -113,6 +113,39 @@ def test_non_trap_ignores_high_conviction_topic():
     assert sess.calls[0]["message_thread_id"] == "1"
 
 
+# ── risk-flag rendering ─────────────────────────────────────────────────────
+def test_signal_card_shows_risk_flags():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(), session=sess)
+    n.announce_signal(_signal(against_regime=True, weak_strategy=True))
+    text = sess.calls[0]["text"]
+    assert "against-regime" in text
+    assert "weak-strategy" in text
+    assert "monitor" in text
+
+
+def test_signal_card_no_risk_line_when_unflagged():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(), session=sess)
+    n.announce_signal(_signal())
+    assert "Risk:" not in sess.calls[0]["text"]
+
+
+def test_stats_card_risk_gate_monitor():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(), session=sess)
+    n.notify_stats({
+        "wins": 10, "losses": 10, "win_rate": 50.0, "avg_pnl_pct": 0.5, "active": 1,
+        "by_strategy": {}, "by_ai_verdict": {}, "vetoed_count": 0, "vetoed_win_rate": None,
+        "against_regime_count": 12, "against_regime_win_rate": 25.0,  # -25pp vs avg
+        "weak_flag_count": 8, "weak_flag_win_rate": 60.0,             # +10pp vs avg
+    })
+    text = sess.calls[0]["text"]
+    assert "Risk-gate monitor" in text
+    assert "Against-regime" in text and "enable REGIME_HARD_BLOCK" in text
+    assert "Weak-strategy" in text and "not hurting" in text
+
+
 # ── disabled notifier is a no-op ───────────────────────────────────────────
 def test_disabled_notifier_sends_nothing():
     sess = FakeSession()

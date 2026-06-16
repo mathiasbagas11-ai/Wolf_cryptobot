@@ -21,8 +21,13 @@ from wolf.tracker import Tracker
 log = logging.getLogger("wolf.screener")
 
 # Reversal setups intentionally fade the trend, so the regime filter exempts
-# them — only trend-following detectors are blocked for fighting the tape.
+# them — only trend-following detectors are gated for fighting the tape.
 COUNTER_TREND_TYPES: frozenset[str] = frozenset({"SCALP", "PREDUMP", "TRAP"})
+
+# Score penalties applied in monitor mode so a flagged signal reads as lower
+# quality without being dropped.
+REGIME_PENALTY = 15
+WEAK_STRATEGY_PENALTY = 10
 
 # Liquid USDT pairs scanned each cycle. Kept as a plain constant; override via
 # the constructor for tests or custom universes.
@@ -49,6 +54,7 @@ class Screener:
         regime_provider=None,
         account=None,
         risk: Optional[RiskSettings] = None,
+        universe_provider=None,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -63,14 +69,23 @@ class Screener:
         self._regime_provider = regime_provider
         self._account = account
         self._risk = risk or RiskSettings()
+        self._universe_provider = universe_provider
 
     @property
     def detector_names(self) -> list[str]:
         return [d.name for d in self._detectors]
 
+    def current_universe(self) -> list[str]:
+        """Resolve the symbols to scan — dynamic when a provider is set."""
+        if self._universe_provider is not None:
+            symbols = self._universe_provider.symbols()
+            if symbols:
+                return symbols
+        return list(self._universe)
+
     @property
     def universe_size(self) -> int:
-        return len(self._universe)
+        return len(self.current_universe())
 
     def _build_context(self, symbol: str):
         if self._context_provider is None:
@@ -125,7 +140,9 @@ class Screener:
                 verdict.confidence, verdict.rationale,
             )
 
-    # ── risk gates (hard block) ─────────────────────────────────────────────
+    # ── risk gates ──────────────────────────────────────────────────────────
+    # Drawdown is always a hard pause; regime + auto-pause default to MONITOR
+    # (flag + down-score, still emit) and become hard blocks via RiskSettings.
     def _current_regime(self) -> str:
         if not self._risk.regime_filter_enabled or self._regime_provider is None:
             return UNKNOWN
@@ -167,13 +184,29 @@ class Screener:
             return True
         return False
 
-    def _block_reason(self, candidate: SignalCandidate, regime: str, weak: set[str]) -> Optional[str]:
-        """Return why a candidate is blocked, or ``None`` to let it through."""
-        if candidate.strategy in weak:
-            return "strategy auto-paused (underperforming)"
+    def _gate_candidate(self, candidate: SignalCandidate, regime: str, weak: set[str]) -> bool:
+        """Apply the regime + auto-pause gates. Returns True if hard-blocked.
+
+        In monitor mode the candidate is flagged and down-scored in place but
+        still emitted; in hard mode the method signals the caller to drop it.
+        """
         if self._fights_regime(candidate, regime):
-            return f"against {regime} regime"
-        return None
+            if self._risk.regime_hard_block:
+                log.info("Blocked %s %s — against %s regime", candidate.symbol, candidate.direction, regime)
+                return True
+            candidate.against_regime = True
+            candidate.score = max(0, candidate.score - REGIME_PENALTY)
+            log.info("Flagged %s %s against %s regime (monitor)", candidate.symbol, candidate.direction, regime)
+
+        if candidate.strategy in weak:
+            if self._risk.autopause_hard_block:
+                log.info("Blocked %s — strategy %s auto-paused", candidate.symbol, candidate.strategy)
+                return True
+            candidate.weak_strategy = True
+            candidate.score = max(0, candidate.score - WEAK_STRATEGY_PENALTY)
+            log.info("Flagged %s — strategy %s underperforming (monitor)", candidate.symbol, candidate.strategy)
+
+        return False
 
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""
@@ -187,7 +220,7 @@ class Screener:
             return recorded
         regime = self._current_regime()
         weak = self._weak_strategies()
-        for symbol in self._universe:
+        for symbol in self.current_universe():
             candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
             if not candles:
                 continue
@@ -195,9 +228,7 @@ class Screener:
             candidate = self._best_candidate(symbol, candles, context)
             if not candidate:
                 continue
-            blocked = self._block_reason(candidate, regime, weak)
-            if blocked:
-                log.info("Blocked %s %s (%s): %s", candidate.symbol, candidate.direction, candidate.strategy, blocked)
+            if self._gate_candidate(candidate, regime, weak):
                 continue
             self._apply_validator(candidate, context)
             signal = self._tracker.record_signal(
@@ -217,6 +248,8 @@ class Screener:
                 ai_confidence=candidate.ai_confidence,
                 ai_rationale=candidate.ai_rationale,
                 ai_vetoed=candidate.ai_vetoed,
+                against_regime=candidate.against_regime,
+                weak_strategy=candidate.weak_strategy,
             )
             if signal is None:
                 continue

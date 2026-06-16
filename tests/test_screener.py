@@ -79,7 +79,7 @@ def test_scan_symbol_picks_highest_score(store, fake_client, tracker_settings):
     assert candidate is not None and candidate.direction == "LONG"
 
 
-# ── regime filter (hard block) ──────────────────────────────────────────────
+# ── regime filter ───────────────────────────────────────────────────────────
 def _momentum_screener(store, fake_client, tracker_settings, **kw):
     fake_client.klines["BTCUSDT"] = _breakout_candles()
     tracker = Tracker(store, fake_client, tracker_settings)
@@ -88,15 +88,38 @@ def _momentum_screener(store, fake_client, tracker_settings, **kw):
     ), tracker
 
 
-def test_regime_bearish_blocks_long(store, fake_client, tracker_settings):
+def test_regime_bearish_flags_long_in_monitor_mode(store, fake_client, tracker_settings):
+    """Campur default: an against-regime LONG is still emitted, flagged + down-scored."""
     screener, tracker = _momentum_screener(store, fake_client, tracker_settings, regime_provider=_FakeRegime(BEARISH))
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1
+    assert recorded[0].against_regime is True
+    assert tracker.active_signals() != []
+
+
+def test_regime_bearish_hard_block_drops_long(store, fake_client, tracker_settings):
+    screener, tracker = _momentum_screener(
+        store, fake_client, tracker_settings,
+        regime_provider=_FakeRegime(BEARISH), risk=RiskSettings(regime_hard_block=True),
+    )
     assert screener.run_cycle() == []
     assert tracker.active_signals() == []
 
 
-def test_regime_bullish_allows_long(store, fake_client, tracker_settings):
+def test_regime_flag_down_scores(fake_client):
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[])
+    cand = _cand(signal_type="SCREENER")  # trend-following LONG, score 80
+    base = cand.score
+    assert screener._gate_candidate(cand, BEARISH, set()) is False  # monitor: not blocked
+    assert cand.against_regime is True
+    assert cand.score < base
+
+
+def test_regime_bullish_allows_long_unflagged(store, fake_client, tracker_settings):
     screener, _ = _momentum_screener(store, fake_client, tracker_settings, regime_provider=_FakeRegime(BULLISH))
-    assert len(screener.run_cycle()) == 1
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1
+    assert recorded[0].against_regime is False
 
 
 def test_regime_neutral_allows_long(store, fake_client, tracker_settings):
@@ -109,7 +132,9 @@ def test_regime_filter_can_be_disabled(store, fake_client, tracker_settings):
         store, fake_client, tracker_settings,
         regime_provider=_FakeRegime(BEARISH), risk=RiskSettings(regime_filter_enabled=False),
     )
-    assert len(screener.run_cycle()) == 1
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1
+    assert recorded[0].against_regime is False
 
 
 def test_counter_trend_setups_exempt_from_regime(store, fake_client, tracker_settings):
@@ -140,16 +165,47 @@ def test_shallow_drawdown_allows_entries(store, fake_client, tracker_settings):
     assert len(screener.run_cycle()) == 1
 
 
-# ── auto-pause underperformers (hard block) ─────────────────────────────────
-def test_weak_strategy_is_auto_paused(fake_client):
+# ── auto-pause underperformers ──────────────────────────────────────────────
+def test_weak_strategy_flagged_in_monitor_mode(store, fake_client, tracker_settings):
+    """Campur default: a weak-strategy signal is emitted, flagged + down-scored."""
+    fake_client.klines["BTCUSDT"] = _breakout_candles()
+
+    class _StatsTracker(Tracker):
+        def stats(self):
+            return {"by_strategy": {"MOMENTUM": {"total": 15, "win_rate": 30.0}}}
+
+    tracker = _StatsTracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client, tracker, [MomentumBreakoutDetector()], universe=["BTCUSDT"],
+        risk=RiskSettings(autopause_min_trades=12, autopause_min_win_rate=38.0),
+    )
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1
+    assert recorded[0].weak_strategy is True
+
+
+def test_weak_strategy_hard_block_drops_signal(store, fake_client, tracker_settings):
+    fake_client.klines["BTCUSDT"] = _breakout_candles()
+
+    class _StatsTracker(Tracker):
+        def stats(self):
+            return {"by_strategy": {"MOMENTUM": {"total": 15, "win_rate": 30.0}}}
+
+    tracker = _StatsTracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client, tracker, [MomentumBreakoutDetector()], universe=["BTCUSDT"],
+        risk=RiskSettings(autopause_min_trades=12, autopause_min_win_rate=38.0, autopause_hard_block=True),
+    )
+    assert screener.run_cycle() == []
+
+
+def test_weak_strategy_detected(fake_client):
     stats = {"by_strategy": {"MOMENTUM": {"total": 15, "win_rate": 30.0}}}
     screener = Screener(
         fake_client, _FakeTracker(stats), [], universe=[],
         risk=RiskSettings(autopause_min_trades=12, autopause_min_win_rate=38.0),
     )
-    weak = screener._weak_strategies()
-    assert "MOMENTUM" in weak
-    assert screener._block_reason(_cand(strategy="MOMENTUM"), UNKNOWN, weak) is not None
+    assert "MOMENTUM" in screener._weak_strategies()
 
 
 def test_strategy_not_paused_below_min_trades(fake_client):
@@ -168,3 +224,34 @@ def test_healthy_strategy_not_paused(fake_client):
         risk=RiskSettings(autopause_min_trades=12, autopause_min_win_rate=38.0),
     )
     assert screener._weak_strategies() == set()
+
+
+# ── dynamic universe ────────────────────────────────────────────────────────
+class _FakeUniverse:
+    def __init__(self, symbols):
+        self._symbols = symbols
+
+    def symbols(self):
+        return list(self._symbols)
+
+
+def test_dynamic_universe_drives_the_scan(store, fake_client, tracker_settings):
+    fake_client.klines["WIFUSDT"] = _breakout_candles()  # only the dynamic pick has data
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client, tracker, [MomentumBreakoutDetector()],
+        universe=["BTCUSDT"],  # static fallback ignored when a provider yields symbols
+        universe_provider=_FakeUniverse(["WIFUSDT"]),
+    )
+    assert screener.current_universe() == ["WIFUSDT"]
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1 and recorded[0].symbol == "WIFUSDT"
+
+
+def test_universe_falls_back_to_static_when_provider_empty(store, fake_client, tracker_settings):
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client, tracker, [MomentumBreakoutDetector()],
+        universe=["BTCUSDT"], universe_provider=_FakeUniverse([]),
+    )
+    assert screener.current_universe() == ["BTCUSDT"]

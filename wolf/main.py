@@ -24,9 +24,11 @@ def _risk_gates_label(risk) -> str:
     """One-line summary of the active risk gates for the startup message."""
     parts = []
     if risk.regime_filter_enabled:
-        parts.append(f"regime({risk.regime_symbol})")
-    parts.append(f"drawdown≥{risk.drawdown_pause_pct:.0f}%")
-    parts.append(f"autopause<{risk.autopause_min_win_rate:.0f}%/{risk.autopause_min_trades}")
+        mode = "hard" if risk.regime_hard_block else "monitor"
+        parts.append(f"regime({risk.regime_symbol},{mode})")
+    parts.append(f"drawdown≥{risk.drawdown_pause_pct:.0f}%(hard)")
+    ap_mode = "hard" if risk.autopause_hard_block else "monitor"
+    parts.append(f"autopause<{risk.autopause_min_win_rate:.0f}%/{risk.autopause_min_trades}({ap_mode})")
     return " · ".join(parts)
 
 

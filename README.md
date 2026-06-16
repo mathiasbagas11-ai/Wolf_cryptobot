@@ -92,14 +92,31 @@ detectors still work candle-only when futures data is unavailable.
 
 Detectors only decide *what* looks like a setup; **risk gates** (`wolf/regime.py`
 + the screener) decide whether it's actually emitted. They close the loop between
-the bot's own results and its next trade — all **hard blocks** (a gated signal is
-not sent), configured under `RiskSettings`:
+the bot's own results and its next trade. The default is **"Campur"** (hybrid):
+drawdown is always a hard pause (it protects equity), while the two judgement
+gates run in **monitor mode** — the signal is still emitted but flagged and
+down-scored, so their win-rates can be measured before promoting either to a
+hard block (`REGIME_HARD_BLOCK` / `AUTOPAUSE_HARD_BLOCK`). Configured under
+`RiskSettings`:
 
-| Gate | What it does | Env |
-|------|--------------|-----|
-| **Regime filter** | Reads a bellwether's trend (BTC, price vs EMA20/EMA50) and blocks trend-following LONGs in a BEARISH market and SHORTs in a BULLISH one. Counter-trend setups (`SCALP`/`PREDUMP`/`TRAP`) are exempt — they're *meant* to fade the tape. | `REGIME_FILTER_ENABLED`, `REGIME_SYMBOL`, `REGIME_INTERVAL` |
-| **Drawdown throttle** | Tracks the paper equity's high-water mark and pauses **all** new entries once the balance falls a set % below its peak — stops a correction from giving back realized gains. | `DRAWDOWN_PAUSE_PCT` |
-| **Auto-pause** | Enforces the "lesson": once a strategy has enough graded trades and its win-rate is below a floor, it stops emitting until the record recovers. | `AUTOPAUSE_MIN_TRADES`, `AUTOPAUSE_MIN_WIN_RATE` |
+| Gate | Default | What it does | Env |
+|------|---------|--------------|-----|
+| **Regime filter** | monitor | Reads a bellwether's trend (BTC, price vs EMA20/EMA50) and flags trend-following LONGs in a BEARISH market and SHORTs in a BULLISH one. Counter-trend setups (`SCALP`/`PREDUMP`/`TRAP`) are exempt — they're *meant* to fade the tape. | `REGIME_FILTER_ENABLED`, `REGIME_HARD_BLOCK`, `REGIME_SYMBOL`, `REGIME_INTERVAL` |
+| **Drawdown throttle** | **hard** | Tracks the paper equity's high-water mark and pauses **all** new entries once the balance falls a set % below its peak — stops a correction from giving back realized gains. | `DRAWDOWN_PAUSE_PCT` |
+| **Auto-pause** | monitor | Watches the "lesson": once a strategy has enough graded trades and its win-rate is below a floor, it flags (or, when hard, stops emitting) it. | `AUTOPAUSE_MIN_TRADES`, `AUTOPAUSE_MIN_WIN_RATE`, `AUTOPAUSE_HARD_BLOCK` |
+
+Flagged signals carry `against_regime` / `weak_strategy` on the outcome record,
+and the periodic stats card shows a **Risk-gate monitor** comparing their
+win-rate to the overall — your evidence for whether to flip a gate to hard.
+
+## Universe
+
+The screener can scan a **dynamic universe** (`wolf/universe.py`): it ranks the
+whole market by 24h quote volume in one API call and scans the most liquid pairs,
+with the core majors always included. Liquidity is the gate, so meme coins and
+other ecosystems rotate in as they heat up instead of only the same hardcoded
+majors. Set `UNIVERSE_DYNAMIC=false` to scan the fixed majors list only.
+Tuned via `UNIVERSE_TOP_N` and `UNIVERSE_MIN_QUOTE_VOLUME`.
 
 ## Data sources (multi-exchange fallback)
 

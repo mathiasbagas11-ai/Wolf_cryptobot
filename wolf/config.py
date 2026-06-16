@@ -162,20 +162,45 @@ class RiskSettings:
     bleeding, and stop emitting strategies that have proven unprofitable.
     """
 
-    # Market-regime filter: block trend-following LONGs in a BEARISH market and
+    # Market-regime filter: flag trend-following LONGs in a BEARISH market and
     # SHORTs in a BULLISH one. Counter-trend reversal setups are exempt.
     regime_filter_enabled: bool = True
     regime_symbol: str = "BTCUSDT"
     regime_interval: str = "1h"
 
-    # Drawdown throttle: pause ALL new entries once the paper equity is this far
-    # below its peak (percent). Protects realized gains during corrections.
+    # Drawdown throttle (always a HARD gate): pause ALL new entries once the paper
+    # equity is this far below its peak (percent). Protects realized gains.
     drawdown_pause_pct: float = 15.0
 
     # Auto-pause underperformers: once a strategy has at least this many graded
-    # trades and its win-rate is below the floor, stop emitting it.
+    # trades and its win-rate is below the floor, flag it.
     autopause_min_trades: int = 12
     autopause_min_win_rate: float = 38.0
+
+    # Enforcement mode for the regime + auto-pause gates.
+    #   False (default) = MONITOR: still emit, but flag + down-score so we collect
+    #     the "what if we'd traded it" record before committing to a block.
+    #   True            = HARD: drop the signal outright.
+    # Drawdown is always hard regardless of these. This default is the "Campur"
+    # (hybrid) setup: equity protection is enforced, judgement gates are observed.
+    regime_hard_block: bool = False
+    autopause_hard_block: bool = False
+
+
+@dataclass(frozen=True)
+class UniverseSettings:
+    """How the screener chooses which symbols to scan.
+
+    Static mode scans a fixed majors list. Dynamic mode ranks the whole market
+    by 24h quote volume (one API call) and scans the most liquid pairs — so meme
+    coins and other ecosystems rotate in as they get active, instead of only the
+    same hardcoded majors. The core majors are always included as a stable base.
+    """
+
+    dynamic: bool = True
+    top_n: int = 30                       # how many volume leaders to scan
+    min_quote_volume: float = 10_000_000  # liquidity floor (USDT 24h quote vol)
+    quote: str = "USDT"
 
 
 @dataclass(frozen=True)
@@ -312,6 +337,7 @@ class Settings:
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
     risk: RiskSettings = field(default_factory=RiskSettings)
+    universe: UniverseSettings = field(default_factory=UniverseSettings)
     ai: AISettings = field(default_factory=AISettings)
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
@@ -364,6 +390,13 @@ class Settings:
             drawdown_pause_pct=_env_float("DRAWDOWN_PAUSE_PCT", 15.0),
             autopause_min_trades=_env_int("AUTOPAUSE_MIN_TRADES", 12),
             autopause_min_win_rate=_env_float("AUTOPAUSE_MIN_WIN_RATE", 38.0),
+            regime_hard_block=_env_bool("REGIME_HARD_BLOCK", False),
+            autopause_hard_block=_env_bool("AUTOPAUSE_HARD_BLOCK", False),
+        )
+        universe = UniverseSettings(
+            dynamic=_env_bool("UNIVERSE_DYNAMIC", True),
+            top_n=_env_int("UNIVERSE_TOP_N", 30),
+            min_quote_volume=_env_float("UNIVERSE_MIN_QUOTE_VOLUME", 10_000_000),
         )
         ai = AISettings(
             enabled=_env_bool("AI_DEBATE_ENABLED", False),
@@ -410,6 +443,7 @@ class Settings:
             telegram=telegram,
             tracker=tracker,
             risk=risk,
+            universe=universe,
             ai=ai,
             news=news,
             reports=reports,

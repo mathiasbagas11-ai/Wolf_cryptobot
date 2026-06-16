@@ -147,6 +147,12 @@ class Signal:
     ai_rationale: str = ""
     ai_vetoed: bool = False
 
+    # Risk-gate flags (monitor mode). against_regime: the entry fought the broad
+    # market trend; weak_strategy: emitted by an underperforming strategy. Both
+    # are recorded but don't block, so we can later compare their win-rates.
+    against_regime: bool = False
+    weak_strategy: bool = False
+
     def __post_init__(self) -> None:
         if not self.id:
             self.id = f"{self.symbol}_{int(time.time() * 1000)}"
