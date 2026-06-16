@@ -91,6 +91,11 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
     _add_report_job(scheduler, app.notifier.enabled and app.whale is not None,
                     "whale", r.whale_interval_min,
                     lambda: app.notifier.notify_whale(app.whale.build()))
+
+    # Flow-intelligence brief (Nansen-style thread) → News topic.
+    _add_report_job(scheduler, app.notifier.enabled and app.flow is not None,
+                    "flow", app.settings.flow.interval_min,
+                    lambda: app.notifier.notify_flow(app.flow.build()))
     return scheduler
 
 

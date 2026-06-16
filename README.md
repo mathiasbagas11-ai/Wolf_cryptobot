@@ -52,7 +52,9 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/structure.py` | Price-action helpers (swing points, liquidity sweep, RSI divergence) |
 | `wolf/detectors/` | One detector per module (`momentum`, `prepump`, `predump`, `scalp`, `swing`) |
 | `wolf/market.py` | Futures market context (funding rate, open interest) + provider |
-| `wolf/ai/` | AI debate layer — Bull/Bear + arbiter verdict (Anthropic SDK) |
+| `wolf/ai/` | AI debate layer + LLM clients (Anthropic / DeepSeek / Groq) |
+| `wolf/flow/` | Flow-intelligence data (CoinGecko + DefiLlama) + framework-filter brief |
+| `wolf/reports/flow.py` | Nansen-style flow-intelligence thread → News topic |
 | `wolf/tracker.py` | Signal lifecycle engine + stats — the core |
 | `wolf/notify/telegram.py` | Telegram notifier + message builders |
 | `wolf/screener.py` | Thin orchestration (replaces the old 11k-line hub) |
@@ -162,9 +164,20 @@ Periodic reports each post to their own topic and are **opt-in**:
   de-duplicated via the state store (REST only, no key, no WebSocket).
 * **News** (`NEWS_ENABLED`) — CryptoCompare headlines (free, key-less),
   de-duplicated so the same story isn't reposted.
+* **Flow Intelligence** (`FLOW_ENABLED`) — a Nansen-style "flow" thread posted to
+  the News topic: BTC/market posture → stablecoin dry powder → chain rotation →
+  token picks/skips → conclusion + strategy. Built from **free** data
+  (CoinGecko for FDV/MC, market cap & turnover; DefiLlama for per-chain DEX
+  volume & stablecoin supply). A deterministic *framework filter*
+  (`wolf/flow/brief.py`) selects picks (low FDV/MC unlock pressure, healthy
+  turnover, not already pumped, no wash-trading) and explains every skip. An LLM
+  **narrator** (`FLOW_NARRATOR_PROVIDER` = `deepseek` | `groq` | `gemini` |
+  `anthropic`) phrases the brief in the thread style; **without an API key it
+  falls back to a built-in template**, so it always works. The narrator only
+  ever phrases the computed numbers — it never invents wallet-level metrics.
 
-Each is a small module behind the exchange `MarketDataClient`; they never touch
-the signal pipeline and degrade to nothing if their data is unavailable.
+Each is a small module that never touches the signal pipeline and degrades to
+nothing if its data is unavailable.
 
 ## Signal lifecycle
 

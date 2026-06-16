@@ -78,6 +78,7 @@ class TelegramSettings:
     whale_thread_id: str = ""    # 👁 Whale Report (large trades)
     radar_thread_id: str = ""    # 🔥 Hot Ecosystem (market radar)
     majors_thread_id: str = ""   # 🐝 BTC/ETH/SOL (majors session report)
+    flow_thread_id: str = ""     # 🧠 Flow Intelligence (defaults to News topic)
     allowed_chat_ids: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -101,6 +102,9 @@ class TelegramSettings:
 
     def route_news(self) -> str:            # 🗞 News Update
         return _first(self.news_thread_id)
+
+    def route_flow(self) -> str:            # 🧠 Flow Intelligence → News topic by default
+        return _first(self.flow_thread_id, self.news_thread_id)
 
     def route_whale(self) -> str:           # 👁 Whale Report
         return _first(self.whale_thread_id)
@@ -181,6 +185,20 @@ class ReportsSettings:
 
 
 @dataclass(frozen=True)
+class FlowSettings:
+    """On-chain flow-intelligence report (Nansen-style thread → News topic)."""
+
+    enabled: bool = False
+    interval_min: int = 240            # 4h — flows move slowly; avoid spam
+    markets_limit: int = 60           # CoinGecko coins to scan (by volume)
+    max_picks: int = 3
+    max_skips: int = 4
+    # LLM narrator: which provider phrases the brief. Empty/no key → template.
+    narrator_provider: str = "deepseek"
+    narrator_model: str = ""
+
+
+@dataclass(frozen=True)
 class AISettings:
     """AI debate-layer configuration."""
 
@@ -240,6 +258,7 @@ class Settings:
     ai: AISettings = field(default_factory=AISettings)
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
+    flow: FlowSettings = field(default_factory=FlowSettings)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -257,6 +276,7 @@ class Settings:
             whale_thread_id=_env_str("WHALE_THREAD_ID"),
             radar_thread_id=_env_str("RADAR_THREAD_ID"),
             majors_thread_id=_env_str("MAJORS_THREAD_ID"),
+            flow_thread_id=_env_str("FLOW_THREAD_ID"),
             allowed_chat_ids=_env_csv("ALLOWED_CHAT_IDS"),
         )
         news = NewsSettings(
@@ -276,6 +296,15 @@ class Settings:
             whale_enabled=_env_bool("WHALE_ENABLED", False),
             whale_interval_min=_env_int("WHALE_INTERVAL_MIN", 5),
             whale_min_usd=_env_float("WHALE_MIN_USD", 250_000),
+        )
+        flow = FlowSettings(
+            enabled=_env_bool("FLOW_ENABLED", False),
+            interval_min=_env_int("FLOW_INTERVAL_MIN", 240),
+            markets_limit=_env_int("FLOW_MARKETS_LIMIT", 60),
+            max_picks=_env_int("FLOW_MAX_PICKS", 3),
+            max_skips=_env_int("FLOW_MAX_SKIPS", 4),
+            narrator_provider=_env_str("FLOW_NARRATOR_PROVIDER", "deepseek"),
+            narrator_model=_env_str("FLOW_NARRATOR_MODEL", ""),
         )
         tracker = TrackerSettings(
             dedup_minutes=_env_int("TRACKER_DEDUP_MINUTES", 30),
@@ -315,6 +344,7 @@ class Settings:
             ai=ai,
             news=news,
             reports=reports,
+            flow=flow,
         )
 
     def describe(self) -> dict:
@@ -322,7 +352,7 @@ class Settings:
         secret_names = {f.name for f in fields(self) if f.name.endswith(("_key", "_token"))}
         out: dict = {}
         for f in fields(self):
-            if f.name in ("telegram", "tracker", "ai", "news", "reports"):
+            if f.name in ("telegram", "tracker", "ai", "news", "reports", "flow"):
                 continue
             value = getattr(self, f.name)
             if f.name in secret_names or f.name.endswith("_anon_key"):
@@ -332,4 +362,5 @@ class Settings:
         out["telegram_enabled"] = self.telegram.enabled
         out["ai_enabled"] = self.ai.enabled
         out["news_enabled"] = self.news.enabled
+        out["flow_enabled"] = self.flow.enabled
         return out

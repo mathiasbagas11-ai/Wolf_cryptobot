@@ -13,14 +13,25 @@ __all__ = [
 ]
 
 
-def build_llm_client(provider: str, api_key: str, model: str):
+def build_llm_client(provider: str, api_key: str, model: str = ""):
     """Construct an :class:`LLMClient` for ``provider``.
 
+    Supports ``anthropic`` (official SDK) and any OpenAI-compatible provider in
+    :data:`~wolf.ai.openai_compat.PROVIDER_ENDPOINTS` (``deepseek``, ``groq``).
     Returns a :class:`NullLLMClient` when the provider is unknown or no key is
     available, so callers can always rely on a usable client object.
     """
-    if provider == "anthropic" and api_key:
+    if not api_key:
+        return NullLLMClient()
+    if provider == "anthropic":
         from wolf.ai.anthropic_client import AnthropicLLMClient
 
-        return AnthropicLLMClient(api_key=api_key, model=model)
+        return AnthropicLLMClient(api_key=api_key, model=model or "claude-opus-4-8")
+
+    from wolf.ai.openai_compat import PROVIDER_ENDPOINTS, OpenAICompatLLMClient
+
+    endpoint = PROVIDER_ENDPOINTS.get(provider)
+    if endpoint is not None:
+        base_url, default_model = endpoint
+        return OpenAICompatLLMClient(api_key=api_key, base_url=base_url, model=model or default_model)
     return NullLLMClient()

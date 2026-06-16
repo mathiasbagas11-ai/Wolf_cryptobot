@@ -23,7 +23,13 @@ from wolf.exchange import (
 from wolf.market import ContextProvider
 from wolf.news import NewsService, build_news_source
 from wolf.notify import TelegramNotifier
-from wolf.reports import MajorsReporter, MarketPulse, MarketRadar, WhaleTracker
+from wolf.reports import (
+    FlowReporter,
+    MajorsReporter,
+    MarketPulse,
+    MarketRadar,
+    WhaleTracker,
+)
 from wolf.screener import Screener
 from wolf.state import StateStore
 from wolf.tracker import Tracker
@@ -42,6 +48,7 @@ class Application:
     radar: Optional[MarketRadar] = None
     pulse: Optional[MarketPulse] = None
     whale: Optional[WhaleTracker] = None
+    flow: Optional[FlowReporter] = None
 
 
 def _build_market_client(settings: Settings) -> MarketDataClient:
@@ -114,6 +121,24 @@ def build_application(settings: Settings | None = None) -> Application:
     pulse = MarketPulse(client, tz=tz) if r.pulse_enabled else None
     whale = WhaleTracker(client, store, min_usd=r.whale_min_usd, tz=tz) if r.whale_enabled else None
 
+    flow = None
+    if settings.flow.enabled:
+        from wolf.flow import CoinGeckoClient, DefiLlamaClient
+
+        f = settings.flow
+        narrator = build_llm_client(
+            f.narrator_provider, _provider_key(settings, f.narrator_provider), f.narrator_model
+        )
+        flow = FlowReporter(
+            coingecko=CoinGeckoClient(timeout=settings.http_timeout),
+            defillama=DefiLlamaClient(timeout=settings.http_timeout),
+            narrator=narrator,
+            markets_limit=f.markets_limit,
+            max_picks=f.max_picks,
+            max_skips=f.max_skips,
+            tz=tz,
+        )
+
     return Application(
         settings=settings,
         store=store,
@@ -126,4 +151,15 @@ def build_application(settings: Settings | None = None) -> Application:
         radar=radar,
         pulse=pulse,
         whale=whale,
+        flow=flow,
     )
+
+
+def _provider_key(settings: Settings, provider: str) -> str:
+    """Resolve the API key for an LLM provider from settings."""
+    return {
+        "anthropic": settings.anthropic_api_key,
+        "deepseek": settings.deepseek_api_key,
+        "groq": settings.groq_api_key,
+        "gemini": settings.gemini_api_key,
+    }.get(provider, "")

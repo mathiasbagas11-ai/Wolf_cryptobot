@@ -1,0 +1,159 @@
+"""Flow brief — turn raw metrics into the structured intelligence the report needs.
+
+This is the deterministic core that encodes the *framework filter* from the
+source account (FDV/MC unlock pressure, liquidity/turnover, wash-trading and
+already-pumped FOMO guards) and classifies tokens into PICKS vs SKIPS with a
+human-readable reason for each. It is a pure function of the fetched metrics so
+it unit-tests with canned data — the LLM narrator (or the template fallback)
+only ever *renders* this brief, never invents the numbers.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+from wolf.flow.coingecko import GlobalMetrics, TokenMetrics
+from wolf.flow.defillama import ChainActivity, StablecoinSupply
+
+# ── framework thresholds (mirror the source account's filter) ──────────────
+FDV_MC_MAX = 2.0          # < 2x → low outstanding unlock pressure (good)
+VOL_MC_MIN = 0.10         # > 10% mcap turnover → liquid enough to exit
+VOL_MC_WASH = 3.0         # > 3x mcap turnover → likely wash / artificial volume
+PUMP_MAX = 25.0           # already +25% in 24h → FOMO trap, skip
+PULLBACK_MIN = -12.0      # deeper than -12% in 24h → not a healthy pullback
+PICK_MCAP_MAX = 750_000_000   # "runway besar" — favour smaller caps for picks
+PICK_MCAP_MIN = 3_000_000     # ignore dust / illiquid micro caps
+
+#: Excluded from PICKS — stablecoins & wrapped/pegged tokens are not alpha plays.
+NON_ALPHA = {
+    "USDT", "USDC", "DAI", "FDUSD", "TUSD", "USDE", "USDS", "PYUSD",
+    "WETH", "WBTC", "WBETH", "STETH", "WSTETH", "WEETH", "CBBTC", "TBTC",
+    "BTC", "ETH",  # majors get their own BTC FLOW section
+}
+
+
+@dataclass
+class Pick:
+    symbol: str
+    name: str
+    price: float
+    change_24h: float
+    market_cap: float
+    fdv_mc: Optional[float]
+    vol_mc: Optional[float]
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Skip:
+    symbol: str
+    reason: str
+
+
+@dataclass
+class FlowBrief:
+    btc: Optional[GlobalMetrics] = None
+    stablecoin: Optional[StablecoinSupply] = None
+    chains: list[ChainActivity] = field(default_factory=list)
+    picks: list[Pick] = field(default_factory=list)
+    skips: list[Skip] = field(default_factory=list)
+    conclusion: str = ""
+    stance: str = "NEUTRAL"   # RISK-ON | RISK-OFF | ROTATION | NEUTRAL
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.picks or self.chains or self.btc or self.stablecoin)
+
+
+def _quality(t: TokenMetrics) -> float:
+    """Rank picks: reward low unlock pressure + healthy turnover."""
+    fdv_mc = t.fdv_mc or 1.0
+    vol_mc = t.vol_mc or 0.0
+    return (2.0 - min(fdv_mc, 2.0)) + min(vol_mc, 1.0)
+
+
+def build_brief(
+    markets: list[TokenMetrics],
+    global_metrics: Optional[GlobalMetrics],
+    chains: list[ChainActivity],
+    stablecoin: Optional[StablecoinSupply],
+    *,
+    max_picks: int = 3,
+    max_skips: int = 4,
+) -> FlowBrief:
+    candidates: list[tuple[float, Pick]] = []
+    skips: list[Skip] = []
+
+    for t in markets:
+        if t.symbol in NON_ALPHA:
+            continue
+        fdv_mc, vol_mc = t.fdv_mc, t.vol_mc
+
+        # ── SKIP rules (FOMO / wash / unlock pressure) ──
+        if t.change_24h > PUMP_MAX:
+            skips.append(Skip(t.symbol, f"udah pump +{t.change_24h:.1f}% hari ini — FOMO trap"))
+            continue
+        if vol_mc is not None and vol_mc > VOL_MC_WASH:
+            skips.append(Skip(t.symbol, f"volume {vol_mc:.1f}x mcap — sinyal wash/artificial"))
+            continue
+        if fdv_mc is not None and fdv_mc >= FDV_MC_MAX:
+            skips.append(Skip(t.symbol, f"FDV/MC {fdv_mc:.1f}x — tekanan unlock besar"))
+            continue
+
+        # ── PICK gating ──
+        if not (PICK_MCAP_MIN <= t.market_cap <= PICK_MCAP_MAX):
+            continue
+        if t.change_24h < PULLBACK_MIN:
+            continue
+        if vol_mc is None or vol_mc < VOL_MC_MIN:
+            continue
+        if fdv_mc is None:
+            continue
+
+        reasons = [f"FDV/MC {fdv_mc:.1f}x = tekanan unlock minim"]
+        reasons.append(f"likuiditas {vol_mc * 100:.0f}% mcap = turnover sehat")
+        reasons.append("mcap kecil = runway masih besar")
+        if t.change_24h < 0:
+            reasons.append(f"pullback {t.change_24h:.1f}% = timing entry lebih baik")
+        candidates.append((_quality(t), Pick(
+            symbol=t.symbol, name=t.name, price=t.price, change_24h=t.change_24h,
+            market_cap=t.market_cap, fdv_mc=fdv_mc, vol_mc=vol_mc, reasons=reasons,
+        )))
+
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    picks = [p for _, p in candidates[:max_picks]]
+
+    chains_sorted = sorted(chains, key=lambda c: c.change_1d, reverse=True)
+    stance, conclusion = _stance(global_metrics, stablecoin, chains_sorted)
+
+    return FlowBrief(
+        btc=global_metrics,
+        stablecoin=stablecoin,
+        chains=chains_sorted,
+        picks=picks,
+        skips=skips[:max_skips],
+        conclusion=conclusion,
+        stance=stance,
+    )
+
+
+def _stance(g: Optional[GlobalMetrics], s: Optional[StablecoinSupply],
+            chains: list[ChainActivity]) -> tuple[str, str]:
+    """Heuristic market posture from dominance, dry-powder and chain activity."""
+    dry_powder = s is not None and s.change_7d_pct > 0.5
+    chain_heat = bool(chains) and chains[0].change_1d > 0
+    alts_bid = g is not None and g.market_cap_change_24h > 0 and g.btc_dominance < 56
+
+    if dry_powder and chain_heat and alts_bid:
+        top = chains[0].label if chains else "altcoin"
+        return ("RISK-ON", f"Dry powder numpuk + aktivitas rotasi ke {top}. "
+                           "Smart money positioning buat naik — bukan kabur.")
+    if dry_powder and not alts_bid:
+        return ("ROTATION", "Stablecoin numpuk jadi amunisi, tapi modal belum agresif "
+                            "masuk altcoin — tunggu konfirmasi rotasi.")
+    if g is not None and g.market_cap_change_24h < -2:
+        return ("RISK-OFF", "Market cap turun & dry powder belum dilepas — hati-hati, "
+                            "tunggu smart money mulai deploy.")
+    return ("NEUTRAL", "Sinyal campur — belum ada arah modal yang jelas. "
+                       "Pantau dry powder & rotasi chain sebelum eksekusi.")

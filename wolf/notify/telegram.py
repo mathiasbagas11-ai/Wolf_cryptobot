@@ -137,6 +137,10 @@ class TelegramNotifier:
         if text:
             self.send(text, self._settings.route_whale())
 
+    def notify_flow(self, text: str) -> None:
+        if text:
+            self.send(text, self._settings.route_flow())
+
     # ── message builders ────────────────────────────────────────────────
     @staticmethod
     def _dir_emoji(direction: str) -> str:
