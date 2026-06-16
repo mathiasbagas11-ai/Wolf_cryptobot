@@ -133,9 +133,11 @@ def build_application(settings: Settings | None = None) -> Application:
             coingecko=CoinGeckoClient(timeout=settings.http_timeout),
             defillama=DefiLlamaClient(timeout=settings.http_timeout),
             narrator=narrator,
+            market_client=client,
             markets_limit=f.markets_limit,
             max_picks=f.max_picks,
             max_skips=f.max_skips,
+            max_watch=f.max_watch,
             tz=tz,
         )
 

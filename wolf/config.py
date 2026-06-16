@@ -193,6 +193,7 @@ class FlowSettings:
     markets_limit: int = 60           # CoinGecko coins to scan (by volume)
     max_picks: int = 3
     max_skips: int = 4
+    max_watch: int = 2
     # LLM narrator: which provider phrases the brief. Empty/no key → template.
     narrator_provider: str = "deepseek"
     narrator_model: str = ""
@@ -303,6 +304,7 @@ class Settings:
             markets_limit=_env_int("FLOW_MARKETS_LIMIT", 60),
             max_picks=_env_int("FLOW_MAX_PICKS", 3),
             max_skips=_env_int("FLOW_MAX_SKIPS", 4),
+            max_watch=_env_int("FLOW_MAX_WATCH", 2),
             narrator_provider=_env_str("FLOW_NARRATOR_PROVIDER", "deepseek"),
             narrator_model=_env_str("FLOW_NARRATOR_MODEL", ""),
         )

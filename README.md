@@ -166,15 +166,22 @@ Periodic reports each post to their own topic and are **opt-in**:
   de-duplicated so the same story isn't reposted.
 * **Flow Intelligence** (`FLOW_ENABLED`) — a Nansen-style "flow" thread posted to
   the News topic: BTC/market posture → stablecoin dry powder → chain rotation →
-  token picks/skips → conclusion + strategy. Built from **free** data
-  (CoinGecko for FDV/MC, market cap & turnover; DefiLlama for per-chain DEX
-  volume & stablecoin supply). A deterministic *framework filter*
-  (`wolf/flow/brief.py`) selects picks (low FDV/MC unlock pressure, healthy
-  turnover, not already pumped, no wash-trading) and explains every skip. An LLM
-  **narrator** (`FLOW_NARRATOR_PROVIDER` = `deepseek` | `groq` | `gemini` |
-  `anthropic`) phrases the brief in the thread style; **without an API key it
-  falls back to a built-in template**, so it always works. The narrator only
-  ever phrases the computed numbers — it never invents wallet-level metrics.
+  ranked token picks → watchlist → skips → conclusion + strategy. Built from
+  **free** data plus signals the bot already has:
+  * CoinGecko — market cap, FDV/MC (unlock pressure), turnover, % from ATH.
+  * DefiLlama — per-chain DEX volume, aggregate stablecoin supply (dry powder).
+  * Exchange perps (existing `MarketDataClient`) — **funding rate** per pick
+    (negative = shorts crowded → squeeze fuel = bullish).
+
+  A deterministic *framework filter* (`wolf/flow/brief.py`) selects picks (low
+  FDV/MC unlock pressure, healthy turnover, not already pumped, no wash-trading),
+  ranks them by a **Quant score** (unlock pressure + cross-sectional **liquidity
+  percentile** + funding tailwind), surfaces near-misses as a watchlist, and
+  explains every skip. An LLM **narrator** (`FLOW_NARRATOR_PROVIDER` = `deepseek`
+  | `groq` | `gemini` | `anthropic`) phrases the brief in the thread style;
+  **without an API key it falls back to a built-in template**, so it always
+  works. The narrator only ever phrases the computed numbers — it never invents
+  wallet-level metrics (real netflow / whale wallets need a paid Nansen key).
 
 Each is a small module that never touches the signal pipeline and degrades to
 nothing if its data is unavailable.

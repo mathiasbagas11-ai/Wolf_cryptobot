@@ -42,7 +42,38 @@ class Pick:
     market_cap: float
     fdv_mc: Optional[float]
     vol_mc: Optional[float]
+    ath_change_pct: float = 0.0
+    liquidity_pctile: float = 0.0          # turnover rank within the scanned universe
+    funding_rate: Optional[float] = None   # percent; enriched post-build by the reporter
     reasons: list[str] = field(default_factory=list)
+
+    @property
+    def funding_signal(self) -> Optional[str]:
+        return funding_signal(self.funding_rate)
+
+    @property
+    def quant_score(self) -> int:
+        """0–100 composite: low unlock + healthy turnover + funding tailwind."""
+        score = 0.0
+        if self.fdv_mc is not None:
+            # FDV/MC 1.0 (fully circulating, no unlocks) → full credit; ≥2.0 → none.
+            unlock = max(0.0, min(1.0, (FDV_MC_MAX - self.fdv_mc) / (FDV_MC_MAX - 1.0)))
+            score += unlock * 40                                          # ≤40
+        score += min(self.liquidity_pctile, 100.0) / 100.0 * 35           # ≤35
+        sig = self.funding_signal
+        if sig == "BULLISH":
+            score += 25
+        elif sig == "NEUTRAL":
+            score += 12
+        return int(round(min(score, 100.0)))
+
+    @property
+    def entry_note(self) -> str:
+        if self.change_24h <= 0:
+            return "entry zone: sekarang (pullback sehat)"
+        if self.change_24h >= 12:
+            return "udah naik — tunggu pullback sebelum entry"
+        return "entry zone: sekarang"
 
 
 @dataclass
@@ -57,6 +88,7 @@ class FlowBrief:
     stablecoin: Optional[StablecoinSupply] = None
     chains: list[ChainActivity] = field(default_factory=list)
     picks: list[Pick] = field(default_factory=list)
+    watchlist: list[Pick] = field(default_factory=list)
     skips: list[Skip] = field(default_factory=list)
     conclusion: str = ""
     stance: str = "NEUTRAL"   # RISK-ON | RISK-OFF | ROTATION | NEUTRAL
@@ -66,11 +98,19 @@ class FlowBrief:
         return bool(self.picks or self.chains or self.btc or self.stablecoin)
 
 
-def _quality(t: TokenMetrics) -> float:
-    """Rank picks: reward low unlock pressure + healthy turnover."""
-    fdv_mc = t.fdv_mc or 1.0
-    vol_mc = t.vol_mc or 0.0
-    return (2.0 - min(fdv_mc, 2.0)) + min(vol_mc, 1.0)
+def funding_signal(rate: Optional[float]) -> Optional[str]:
+    """Map a funding rate (percent) to a directional read.
+
+    Negative funding → shorts pay longs → shorts crowded → squeeze fuel (BULLISH).
+    High positive funding → longs overheated (BEARISH). Mirrors ``wolf.market``.
+    """
+    if rate is None:
+        return None
+    if rate < -0.01:
+        return "BULLISH"
+    if rate > 0.05:
+        return "BEARISH"
+    return "NEUTRAL"
 
 
 def build_brief(
@@ -81,9 +121,16 @@ def build_brief(
     *,
     max_picks: int = 3,
     max_skips: int = 4,
+    max_watch: int = 2,
 ) -> FlowBrief:
     candidates: list[tuple[float, Pick]] = []
     skips: list[Skip] = []
+
+    # Liquidity percentile is cross-sectional: rank each token's turnover against
+    # the whole scanned, tradable universe (excluding stables/wrapped).
+    universe_vol_mc = sorted(
+        t.vol_mc for t in markets if t.symbol not in NON_ALPHA and t.vol_mc is not None
+    )
 
     for t in markets:
         if t.symbol in NON_ALPHA:
@@ -111,18 +158,27 @@ def build_brief(
         if fdv_mc is None:
             continue
 
+        pctile = _percentile(universe_vol_mc, vol_mc)
         reasons = [f"FDV/MC {fdv_mc:.1f}x = tekanan unlock minim"]
-        reasons.append(f"likuiditas {vol_mc * 100:.0f}% mcap = turnover sehat")
+        reasons.append(f"likuiditas {pctile:.0f} percentile (turnover {vol_mc * 100:.0f}% mcap)")
         reasons.append("mcap kecil = runway masih besar")
+        if t.ath_change_pct <= -70:
+            reasons.append(f"{t.ath_change_pct:.0f}% dari ATH = downside udah banyak ke-flush")
         if t.change_24h < 0:
             reasons.append(f"pullback {t.change_24h:.1f}% = timing entry lebih baik")
-        candidates.append((_quality(t), Pick(
+        pick = Pick(
             symbol=t.symbol, name=t.name, price=t.price, change_24h=t.change_24h,
-            market_cap=t.market_cap, fdv_mc=fdv_mc, vol_mc=vol_mc, reasons=reasons,
-        )))
+            market_cap=t.market_cap, fdv_mc=fdv_mc, vol_mc=vol_mc,
+            ath_change_pct=t.ath_change_pct, liquidity_pctile=pctile, reasons=reasons,
+        )
+        # Rank by the funding-agnostic part of the quant score (funding is enriched
+        # later, only for the displayed set, to bound API calls).
+        candidates.append((pick.quant_score, pick))
 
     candidates.sort(key=lambda c: c[0], reverse=True)
-    picks = [p for _, p in candidates[:max_picks]]
+    ranked = [p for _, p in candidates]
+    picks = ranked[:max_picks]
+    watchlist = ranked[max_picks:max_picks + max_watch]
 
     chains_sorted = sorted(chains, key=lambda c: c.change_1d, reverse=True)
     stance, conclusion = _stance(global_metrics, stablecoin, chains_sorted)
@@ -132,10 +188,20 @@ def build_brief(
         stablecoin=stablecoin,
         chains=chains_sorted,
         picks=picks,
+        watchlist=watchlist,
         skips=skips[:max_skips],
         conclusion=conclusion,
         stance=stance,
     )
+
+
+def _percentile(sorted_values: list[float], value: float) -> float:
+    """Percentile rank (0–100) of ``value`` within ``sorted_values``."""
+    n = len(sorted_values)
+    if n <= 1:
+        return 100.0
+    below = sum(1 for v in sorted_values if v < value)
+    return below / (n - 1) * 100.0
 
 
 def _stance(g: Optional[GlobalMetrics], s: Optional[StablecoinSupply],

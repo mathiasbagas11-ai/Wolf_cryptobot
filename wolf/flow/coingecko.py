@@ -26,6 +26,7 @@ class TokenMetrics:
     market_cap: float
     fdv: float                 # fully-diluted valuation
     volume_24h: float
+    ath_change_pct: float = 0.0   # percent from all-time high (negative = below ATH)
 
     @property
     def fdv_mc(self) -> Optional[float]:
@@ -100,6 +101,7 @@ class CoinGeckoClient:
                 market_cap=_f(r.get("market_cap")),
                 fdv=_f(r.get("fully_diluted_valuation")),
                 volume_24h=_f(r.get("total_volume")),
+                ath_change_pct=_f(r.get("ath_change_percentage")),
             ))
         return out
 

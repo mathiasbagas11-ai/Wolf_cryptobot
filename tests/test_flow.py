@@ -19,12 +19,14 @@ def test_coingecko_parse_markets():
     payload = [
         {"symbol": "aero", "name": "Aerodrome", "current_price": 0.43,
          "price_change_percentage_24h": 14.7, "market_cap": 300_000_000,
-         "fully_diluted_valuation": 330_000_000, "total_volume": 60_000_000},
+         "fully_diluted_valuation": 330_000_000, "total_volume": 60_000_000,
+         "ath_change_percentage": -62.5},
     ]
     items = CoinGeckoClient.parse_markets(payload)
     assert items[0].symbol == "AERO"
     assert round(items[0].fdv_mc, 1) == 1.1
     assert round(items[0].vol_mc, 1) == 0.2
+    assert items[0].ath_change_pct == -62.5
 
 
 def test_coingecko_parse_markets_bad_input():
@@ -84,6 +86,37 @@ def test_brief_picks_and_skips():
     assert "USDT" not in skip_syms
 
 
+def test_brief_liquidity_percentile_and_watchlist():
+    # 5 tradable tokens with increasing turnover → percentile ranks them.
+    markets = [
+        _tok("A", 1.0, 50_000_000, 55_000_000, 6_000_000),    # vol_mc 0.12
+        _tok("B", 1.0, 50_000_000, 55_000_000, 10_000_000),   # 0.20
+        _tok("C", 1.0, 50_000_000, 55_000_000, 20_000_000),   # 0.40
+        _tok("D", 1.0, 50_000_000, 55_000_000, 30_000_000),   # 0.60
+    ]
+    brief = build_brief(markets, None, [], None, max_picks=2, max_watch=2)
+    assert len(brief.picks) == 2 and len(brief.watchlist) == 2
+    # Highest turnover token ranks at the top percentile.
+    top = max(brief.picks + brief.watchlist, key=lambda p: p.liquidity_pctile)
+    assert top.symbol == "D" and top.liquidity_pctile == 100.0
+
+
+def test_funding_signal_thresholds():
+    from wolf.flow.brief import funding_signal
+    assert funding_signal(-0.05) == "BULLISH"   # shorts crowded
+    assert funding_signal(0.10) == "BEARISH"    # longs overheated
+    assert funding_signal(0.0) == "NEUTRAL"
+    assert funding_signal(None) is None
+
+
+def test_pick_quant_score_rewards_funding_and_low_fdv():
+    from wolf.flow.brief import Pick
+    p = Pick("X", "X", 1, 2.0, 50e6, fdv_mc=1.0, vol_mc=0.5,
+             liquidity_pctile=90.0, funding_rate=-0.05)
+    assert p.funding_signal == "BULLISH"
+    assert p.quant_score >= 80   # low unlock + high liquidity + bullish funding
+
+
 def test_brief_stance_risk_on():
     g = GlobalMetrics(btc_dominance=52.0, total_market_cap=2.5e12, market_cap_change_24h=2.0)
     s = StablecoinSupply(total_usd=1.6e11, change_1d_pct=0.3, change_7d_pct=1.2)
@@ -108,12 +141,27 @@ class StubLlama:
         return StablecoinSupply(1.6e11, 0.2, 0.8)
 
 
+class StubFunding:
+    def get_funding_rate(self, symbol):
+        return -0.05 if symbol == "GOODUSDT" else None
+
+
 def test_flow_report_template_fallback():
     rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), narrator=None, tz="UTC")
     text = rep.build()
     assert "FLOW INTELLIGENCE" in text
     assert "$GOOD" in text and "BNB" in text
-    assert "KESIMPULAN" in text
+    assert "Quant" in text and "KESIMPULAN" in text
+
+
+def test_flow_report_enriches_funding_from_market_client():
+    rep = FlowReporter(coingecko=StubCG(), defillama=StubLlama(), narrator=None,
+                       market_client=StubFunding(), tz="UTC")
+    brief = rep.gather()
+    assert brief.picks[0].funding_rate == -0.05
+    assert brief.picks[0].funding_signal == "BULLISH"
+    text = rep.build()
+    assert "Funding BULLISH" in text
 
 
 class FakeNarrator(LLMClient):

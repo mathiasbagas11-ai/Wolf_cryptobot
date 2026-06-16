@@ -18,7 +18,7 @@ import logging
 from typing import Optional
 
 from wolf.ai.base import LLMClient, NullLLMClient
-from wolf.flow.brief import FlowBrief, build_brief
+from wolf.flow.brief import FlowBrief, Pick, build_brief
 from wolf.flow.coingecko import CoinGeckoClient
 from wolf.flow.defillama import DefiLlamaClient
 from wolf.textfmt import DIVIDER, esc, fmt_price, fmt_usd, now
@@ -29,10 +29,13 @@ _NARRATOR_SYSTEM = (
     "Lu analis crypto on-chain. Tulis ulang DATA flow intelligence di bawah jadi "
     "thread gaya Telegram berbahasa Indonesia gaul-tapi-tajam, PERSIS gaya ini:\n"
     "- Struktur: 1/ BTC & MARKET, 2/ STABLECOIN (dry powder), 3/ CHAIN ROTATION, "
-    "4/ TOKEN PICKS, 5/ SKIP (+ alasannya), 6/ KESIMPULAN + STRATEGI.\n"
-    "- Pakai emoji (🟢🔥📈✅❌⚠️🥇), kalimat pendek nan tegas, sebut angkanya.\n"
-    "- WAJIB cuma pakai angka dari DATA. JANGAN ngarang metrik (mis. whale wallet) "
-    "yang nggak ada di DATA.\n"
+    "4/ TOKEN PICKS (ranked #1/#2/#3 — tiap pick sebut Mcap, Price 24h, % dari ATH, "
+    "Liquidity percentile, Funding signal, FDV/MC, Quant score, thesis singkat & "
+    "entry zone), 5/ WATCHLIST, 6/ SKIP (+ alasannya), 7/ KESIMPULAN + STRATEGI.\n"
+    "- Pakai emoji (🟢🔥📈✅❌⚠️🥇🥈🥉👀), kalimat pendek nan tegas, sebut angkanya.\n"
+    "- Funding BULLISH = shorts crowded (bahan bakar squeeze); BEARISH = longs overheated.\n"
+    "- WAJIB cuma pakai angka dari DATA. JANGAN ngarang metrik (mis. whale wallet / "
+    "netflow) yang nggak ada di DATA.\n"
     "- Tutup dengan 'NFA — DYOR'.\n"
     "- Output teks polos saja: TANPA tag HTML/markdown."
 )
@@ -44,18 +47,24 @@ class FlowReporter:
         coingecko: Optional[CoinGeckoClient] = None,
         defillama: Optional[DefiLlamaClient] = None,
         narrator: Optional[LLMClient] = None,
+        market_client=None,
         *,
         markets_limit: int = 60,
         max_picks: int = 3,
         max_skips: int = 4,
+        max_watch: int = 2,
+        quote: str = "USDT",
         tz: str = "UTC",
     ) -> None:
         self._cg = coingecko or CoinGeckoClient()
         self._llama = defillama or DefiLlamaClient()
         self._narrator = narrator or NullLLMClient()
+        self._market = market_client   # exchange client → funding rate (optional)
         self._markets_limit = markets_limit
         self._max_picks = max_picks
         self._max_skips = max_skips
+        self._max_watch = max_watch
+        self._quote = quote
         self._tz = tz
 
     # ── orchestration ──────────────────────────────────────────────────
@@ -64,10 +73,22 @@ class FlowReporter:
         global_metrics = self._cg.global_data()
         chains = self._llama.chain_activity()
         stablecoin = self._llama.stablecoin_supply()
-        return build_brief(
+        brief = build_brief(
             markets, global_metrics, chains, stablecoin,
-            max_picks=self._max_picks, max_skips=self._max_skips,
+            max_picks=self._max_picks, max_skips=self._max_skips, max_watch=self._max_watch,
         )
+        self._enrich_funding(brief.picks + brief.watchlist)
+        return brief
+
+    def _enrich_funding(self, picks: list[Pick]) -> None:
+        """Fill each pick's funding rate from the exchange perp (best-effort)."""
+        if self._market is None:
+            return
+        for p in picks:
+            try:
+                p.funding_rate = self._market.get_funding_rate(f"{p.symbol}{self._quote}")
+            except Exception:  # funding is optional — never break the report
+                log.debug("funding lookup failed for %s", p.symbol)
 
     def build(self) -> Optional[str]:
         brief = self.gather()
@@ -120,19 +141,55 @@ class FlowReporter:
             medals = ["🥇", "🥈", "🥉"]
             for i, p in enumerate(b.picks):
                 medal = medals[i] if i < len(medals) else "•"
-                lines.append(f"{medal} <b>${esc(p.symbol)}</b> — {esc(p.name)}")
-                lines.append(f"   Harga ${fmt_price(p.price)} ({p.change_24h:+.1f}%) · mcap {fmt_usd(p.market_cap)}")
-                lines.append("   " + " · ".join(esc(r) for r in p.reasons))
+                lines.append(f"{medal} <b>#{i + 1} — ${esc(p.symbol)}</b> ({esc(p.name)})")
+                lines.append(f"   💰 mcap {fmt_usd(p.market_cap)} · 💧 liquidity {p.liquidity_pctile:.0f} pctile")
+                ath = f" · 📉 {p.ath_change_pct:.0f}% dari ATH" if p.ath_change_pct <= -1 else ""
+                lines.append(f"   Price 24h {p.change_24h:+.1f}%{ath}")
+                lines.append(f"   🎯 Quant {p.quant_score}/100 · {esc(_quant_line(p))}")
+                lines.append(f"   ✅ {esc(p.entry_note)}")
+
+        if b.watchlist:
+            lines.append("\n<b>5/ 👀 WATCHLIST</b>")
+            for p in b.watchlist:
+                lines.append(f"👀 <b>${esc(p.symbol)}</b> — {p.change_24h:+.1f}% 24h · "
+                             f"liquidity {p.liquidity_pctile:.0f} pctile · Quant {p.quant_score}/100")
 
         if b.skips:
-            lines.append("\n<b>5/ ❌ SKIP — dan kenapa</b>")
+            lines.append("\n<b>6/ ❌ SKIP — dan kenapa</b>")
             for sk in b.skips:
                 lines.append(f"❌ <b>${esc(sk.symbol)}</b> — {esc(sk.reason)}")
 
-        lines.append(f"\n<b>6/ KESIMPULAN: {esc(b.stance)}</b>")
+        lines.append(f"\n<b>7/ KESIMPULAN: {esc(b.stance)}</b>")
         lines.append(esc(b.conclusion))
         lines.append("\n<i>NFA — DYOR. Data: CoinGecko + DefiLlama</i>")
         return "\n".join(lines)
+
+
+def _quant_line(p: Pick) -> str:
+    """Compact 'Funding X · FDV/MC Yx · turnover' quant summary for a pick."""
+    parts = []
+    sig = p.funding_signal
+    if sig is not None:
+        parts.append(f"Funding {sig}")
+    if p.fdv_mc is not None:
+        parts.append(f"FDV/MC {p.fdv_mc:.1f}x")
+    parts.append(f"turnover {(p.vol_mc or 0) * 100:.0f}% mcap")
+    return " · ".join(parts)
+
+
+def _pick_payload(p: Pick) -> dict:
+    return {
+        "symbol": p.symbol, "name": p.name, "price": p.price,
+        "change_24h_pct": round(p.change_24h, 2), "market_cap_usd": round(p.market_cap),
+        "fdv_mc": round(p.fdv_mc, 2) if p.fdv_mc else None,
+        "pct_from_ath": round(p.ath_change_pct, 1),
+        "liquidity_percentile": round(p.liquidity_pctile, 1),
+        "funding_rate_pct": round(p.funding_rate, 4) if p.funding_rate is not None else None,
+        "funding_signal": p.funding_signal,
+        "quant_score": p.quant_score,
+        "entry_note": p.entry_note,
+        "reasons": p.reasons,
+    }
 
 
 def _brief_payload(b: FlowBrief) -> str:
@@ -152,13 +209,8 @@ def _brief_payload(b: FlowBrief) -> str:
              "change_1d_pct": round(c.change_1d, 1)}
             for c in b.chains[:5]
         ],
-        "token_picks": [
-            {"symbol": p.symbol, "name": p.name, "price": p.price,
-             "change_24h_pct": round(p.change_24h, 2), "market_cap_usd": round(p.market_cap),
-             "fdv_mc": round(p.fdv_mc, 2) if p.fdv_mc else None,
-             "liquidity_pct_mcap": round((p.vol_mc or 0) * 100, 1), "reasons": p.reasons}
-            for p in b.picks
-        ],
+        "token_picks": [_pick_payload(p) for p in b.picks],
+        "watchlist": [_pick_payload(p) for p in b.watchlist],
         "skip": [{"symbol": s.symbol, "reason": s.reason} for s in b.skips],
         "stance": b.stance,
         "conclusion": b.conclusion,
