@@ -24,9 +24,15 @@ from wolf.exchange import (
 from wolf.market import ContextProvider
 from wolf.regime import RegimeProvider
 from wolf.universe import UniverseProvider
-from wolf.news import NewsService, build_news_source
+from wolf.news import NewsService, NewsSynthesizer, build_news_source
 from wolf.notify import TelegramNotifier
-from wolf.reports import MajorsReporter, MarketPulse, MarketRadar, WhaleTracker
+from wolf.reports import (
+    FlowReporter,
+    MajorsReporter,
+    MarketPulse,
+    MarketRadar,
+    WhaleTracker,
+)
 from wolf.screener import Screener
 from wolf.state import StateStore
 from wolf.tracker import Tracker
@@ -41,10 +47,12 @@ class Application:
     tracker: Tracker
     screener: Screener
     news: Optional[NewsService] = None
+    news_synth: Optional[NewsSynthesizer] = None
     majors: Optional[MajorsReporter] = None
     radar: Optional[MarketRadar] = None
     pulse: Optional[MarketPulse] = None
     whale: Optional[WhaleTracker] = None
+    flow: Optional[FlowReporter] = None
 
 
 def _build_market_client(settings: Settings) -> MarketDataClient:
@@ -136,10 +144,17 @@ def build_application(settings: Settings | None = None) -> Application:
     )
 
     news = None
+    news_synth = None
     if settings.news.enabled:
-        source = build_news_source(settings.news.provider, timeout=settings.http_timeout)
+        source = build_news_source(settings.news.sources, timeout=settings.http_timeout)
         if source is not None:
             news = NewsService(source, store, max_items=settings.news.max_items)
+        if settings.news.synthesis_enabled:
+            n = settings.news
+            narrator = build_llm_client(
+                n.narrator_provider, settings.api_key_for(n.narrator_provider), n.narrator_model
+            )
+            news_synth = NewsSynthesizer(narrator)
 
     r = settings.reports
     tz = settings.timezone
@@ -147,6 +162,8 @@ def build_application(settings: Settings | None = None) -> Application:
     radar = MarketRadar(client, min_quote_volume=r.radar_min_quote_volume, tz=tz) if r.radar_enabled else None
     pulse = MarketPulse(client, tz=tz, llm=analysis_llm) if r.pulse_enabled else None
     whale = WhaleTracker(client, store, min_usd=r.whale_min_usd, tz=tz) if r.whale_enabled else None
+
+    flow = build_flow_reporter(settings, client) if settings.flow.enabled else None
 
     return Application(
         settings=settings,
@@ -156,8 +173,41 @@ def build_application(settings: Settings | None = None) -> Application:
         tracker=tracker,
         screener=screener,
         news=news,
+        news_synth=news_synth,
         majors=majors,
         radar=radar,
         pulse=pulse,
         whale=whale,
+        flow=flow,
     )
+
+
+def build_flow_reporter(settings: Settings, client: MarketDataClient) -> FlowReporter:
+    """Construct the flow-intelligence reporter (used by the scheduler and the
+    on-demand REST endpoints, so a deep-dive works even when scheduling is off)."""
+    from wolf.flow import (
+        CoinGeckoClient,
+        DefiLlamaClient,
+        HyperliquidPerps,
+        SentimentClient,
+    )
+
+    f = settings.flow
+    narrator = build_llm_client(
+        f.narrator_provider, settings.api_key_for(f.narrator_provider), f.narrator_model
+    )
+    return FlowReporter(
+        coingecko=CoinGeckoClient(timeout=settings.http_timeout),
+        defillama=DefiLlamaClient(timeout=settings.http_timeout),
+        sentiment=SentimentClient(timeout=settings.http_timeout),
+        hyperliquid=HyperliquidPerps(timeout=settings.http_timeout),
+        narrator=narrator,
+        market_client=client,
+        markets_limit=f.markets_limit,
+        max_picks=f.max_picks,
+        max_skips=f.max_skips,
+        max_watch=f.max_watch,
+        tz=settings.timezone,
+    )
+
+

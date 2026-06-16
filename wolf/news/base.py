@@ -24,10 +24,12 @@ class NewsItem:
     url: str
     source: str = ""
     published_ts: int = 0  # epoch seconds
+    score: int = 0         # engagement (upvotes/points); 0 when a source has none
 
     def to_dict(self) -> dict:
         return {"id": self.id, "title": self.title, "url": self.url,
-                "source": self.source, "published_ts": self.published_ts}
+                "source": self.source, "published_ts": self.published_ts,
+                "score": self.score}
 
 
 class NewsSource(ABC):

@@ -83,10 +83,12 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
             next_run_time=_soon(),
         )
 
-    # Crypto news: post fresh headlines to the News topic.
+    # Crypto news: fetch fresh headlines and auto-post to the News topic. When a
+    # synthesizer is configured, the batch is condensed into one AI brief;
+    # otherwise the plain card is posted.
     if app.news is not None and app.notifier.enabled:
         scheduler.add_job(
-            _guarded(lambda: app.notifier.notify_news(app.news.fetch_new()), "news"),
+            _guarded(lambda: _post_news(app), "news"),
             "interval",
             minutes=app.settings.news.interval_min,
             id="news",
@@ -109,7 +111,27 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
     _add_report_job(scheduler, app.notifier.enabled and app.whale is not None,
                     "whale", r.whale_interval_min,
                     lambda: app.notifier.notify_whale(app.whale.build()))
+
+    # Flow-intelligence brief (Nansen-style thread) → News topic.
+    if getattr(app, "flow", None) is not None:
+        _add_report_job(scheduler, app.notifier.enabled, "flow",
+                        app.settings.flow.interval_min,
+                        lambda: app.notifier.notify_flow(app.flow.build()))
     return scheduler
+
+
+def _post_news(app: Application) -> None:
+    """One news cycle: fetch fresh, synthesise if possible, else post the card."""
+    items = app.news.fetch_new()
+    if not items:
+        return
+    synth = getattr(app, "news_synth", None)
+    if synth is not None and synth.available:
+        brief = synth.build(items)
+        if brief:
+            app.notifier.notify_news_digest(brief)
+            return
+    app.notifier.notify_news(items)
 
 
 def _add_report_job(scheduler, enabled: bool, job_id: str, minutes: int, fn) -> None:

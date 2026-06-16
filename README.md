@@ -52,7 +52,9 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/structure.py` | Price-action helpers (swing points, liquidity sweep, RSI divergence) |
 | `wolf/detectors/` | One detector per module (`momentum`, `prepump`, `predump`, `scalp`, `swing`) |
 | `wolf/market.py` | Futures market context (funding rate, open interest) + provider |
-| `wolf/ai/` | AI debate layer — Bull/Bear + arbiter verdict (Anthropic SDK) |
+| `wolf/ai/` | AI debate layer + LLM clients (Anthropic / DeepSeek / Groq) |
+| `wolf/flow/` | Flow-intelligence data (CoinGecko + DefiLlama) + framework-filter brief |
+| `wolf/reports/flow.py` | Nansen-style flow-intelligence thread → News topic |
 | `wolf/tracker.py` | Signal lifecycle engine + stats — the core |
 | `wolf/notify/telegram.py` | Telegram notifier + message builders |
 | `wolf/screener.py` | Thin orchestration (replaces the old 11k-line hub) |
@@ -192,11 +194,48 @@ Periodic reports each post to their own topic and are **opt-in**:
 * **Market pulse** (`MARKET_PULSE_ENABLED`) — BTC/ETH trend + RSI bias.
 * **Whale** (`WHALE_ENABLED`) — large public trades above `WHALE_MIN_USD`,
   de-duplicated via the state store (REST only, no key, no WebSocket).
-* **News** (`NEWS_ENABLED`) — CryptoCompare headlines (free, key-less),
-  de-duplicated so the same story isn't reposted.
+* **News** (`NEWS_ENABLED`) — an automatic, multi-source headline pipeline.
+  Every `NEWS_INTERVAL_MIN` it fans out to all `NEWS_SOURCES` (free & key-less:
+  `cryptocompare`, `reddit` via Atom RSS, `hackernews` via Algolia), isolates
+  each source's failure, **dedups across sources** by normalised title, **ranks
+  by engagement** (HN points/comments), and posts only genuinely-new items
+  (seen-set in the state store, so nothing is reposted). With
+  `NEWS_SYNTHESIS_ENABLED=true` an LLM (`NEWS_NARRATOR_PROVIDER`) condenses the
+  fresh batch into a single grouped brief instead of a flat card — it only
+  phrases the fetched headlines, never invents stories. Sources adapted from the
+  `last30days` skill.
+* **Flow Intelligence** (`FLOW_ENABLED`) — a Nansen-style "flow" thread posted to
+  the News topic: BTC/market posture → stablecoin dry powder → chain rotation →
+  ranked token picks → watchlist → skips → conclusion + strategy. Built from
+  **free** data plus signals the bot already has:
+  * CoinGecko — market cap, FDV/MC (unlock pressure), turnover, % from ATH.
+  * DefiLlama — per-chain DEX volume, aggregate stablecoin supply (dry powder).
+  * Exchange perps (existing `MarketDataClient`) — **funding rate** per pick
+    (negative = shorts crowded → squeeze fuel = bullish).
+  * **Fear & Greed Index** (alternative.me) + **Coinbase Premium** (Coinbase
+    BTC/USD vs Binance BTC/USDT = US institutional demand). Extreme fear + a
+    positive premium + dry powder → a *contrarian* RISK-ON read ("be greedy when
+    others are fearful"). Both free & key-less, ported from the previous bot.
+  * **Hyperliquid** perps — funding rate + open interest per pick from a single
+    cached snapshot (`metaAndAssetCtxs`), wider alt coverage than Binance perps.
 
-Each is a small module behind the exchange `MarketDataClient`; they never touch
-the signal pipeline and degrade to nothing if their data is unavailable.
+  A **single-token deep-dive** (`POST /flow/{symbol}`) renders an honest bull-vs-
+  bear breakdown + playbook for one token (ENA-thread style): every bear point is
+  a real red flag computed from the data, never softened. Works on demand even
+  when the scheduled report is disabled.
+
+  A deterministic *framework filter* (`wolf/flow/brief.py`) selects picks (low
+  FDV/MC unlock pressure, healthy turnover, not already pumped, no wash-trading),
+  ranks them by a **Quant score** (unlock pressure + cross-sectional **liquidity
+  percentile** + funding tailwind), surfaces near-misses as a watchlist, and
+  explains every skip. An LLM **narrator** (`FLOW_NARRATOR_PROVIDER` = `deepseek`
+  | `groq` | `gemini` | `anthropic`) phrases the brief in the thread style;
+  **without an API key it falls back to a built-in template**, so it always
+  works. The narrator only ever phrases the computed numbers — it never invents
+  wallet-level metrics (real netflow / whale wallets need a paid Nansen key).
+
+Each is a small module that never touches the signal pipeline and degrades to
+nothing if its data is unavailable.
 
 ## Signal lifecycle
 
@@ -248,6 +287,14 @@ The API is then available at `http://localhost:8000` (interactive docs at
 | `POST` | `/scan` | Run one screening cycle now |
 | `POST` | `/track` | Advance pending signals now |
 | `POST` | `/signals` | Record a signal manually (external strategies) |
+| `POST` | `/flow` | Build the flow-intelligence brief now → News topic |
+| `POST` | `/flow/{symbol}` | Single-token contrarian deep-dive (bull vs bear) → News topic |
+
+Example — on-demand single-token deep-dive (works even when scheduled flow is off):
+
+```bash
+curl -X POST localhost:8000/flow/ENA      # → posts an ENA deep-dive to Telegram
+```
 
 Example — record a signal from an external strategy:
 

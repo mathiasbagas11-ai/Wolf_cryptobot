@@ -25,7 +25,8 @@ def _app():
         settings=settings, notifier=notifier,
         tracker=SimpleNamespace(check_pending=lambda: None, stats=lambda: {}),
         screener=SimpleNamespace(run_cycle=lambda: None),
-        news=None, majors=None, radar=None, pulse=None, whale=None,
+        news=None, news_synth=None, majors=None, radar=None, pulse=None,
+        whale=None, flow=None,
     )
 
 
