@@ -20,6 +20,18 @@ from wolf.scheduler import build_scheduler
 log = logging.getLogger("wolf.main")
 
 
+def _risk_gates_label(risk) -> str:
+    """One-line summary of the active risk gates for the startup message."""
+    parts = []
+    if risk.regime_filter_enabled:
+        mode = "hard" if risk.regime_hard_block else "monitor"
+        parts.append(f"regime({risk.regime_symbol},{mode})")
+    parts.append(f"drawdown≥{risk.drawdown_pause_pct:.0f}%(hard)")
+    ap_mode = "hard" if risk.autopause_hard_block else "monitor"
+    parts.append(f"autopause<{risk.autopause_min_win_rate:.0f}%/{risk.autopause_min_trades}({ap_mode})")
+    return " · ".join(parts)
+
+
 def main() -> None:
     settings = Settings.from_env()
     setup_logging(settings.log_level)
@@ -54,6 +66,7 @@ def main() -> None:
         "track_min": settings.tracker_interval_min,
         "ai": settings.ai.enabled,
         "ai_mode": "MONITOR" if settings.ai.enabled else "OFF",
+        "risk_gates": _risk_gates_label(settings.risk),
     })
 
     # Run an initial tracking pass so restarts resolve overdue signals promptly.

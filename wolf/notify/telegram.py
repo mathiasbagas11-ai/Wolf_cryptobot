@@ -180,6 +180,7 @@ class TelegramNotifier:
             f"🎯 Detectors: {esc(detectors)}\n"
             f"🪙 Universe: {info.get('universe', 0)} pairs\n"
             f"⏱ Scan every {info.get('scan_min', '?')}m · Track every {info.get('track_min', '?')}m\n"
+            f"🛡 Risk gates: {info.get('risk_gates', '—')}\n"
             f"🧠 AI debate: {info.get('ai_mode', 'OFF')}\n"
             f"{self._stamp()}"
         )
@@ -252,6 +253,17 @@ class TelegramNotifier:
         rationale = f" — {esc(s.ai_rationale)}" if s.ai_rationale else ""
         return f"🧠 AI: {label}{rationale}\n"
 
+    def _risk_block(self, s: Signal) -> str:
+        """Return a formatted risk-flag line, or empty string if unflagged."""
+        flags = []
+        if s.against_regime:
+            flags.append("against-regime")
+        if s.weak_strategy:
+            flags.append("weak-strategy")
+        if not flags:
+            return ""
+        return f"🛡 Risk: {esc(' · '.join(flags))} (monitor)\n"
+
     def _signal_card(self, s: Signal) -> str:
         is_long = s.is_long
         ladder = s.tp_ladder or [{"level": 1, "price": s.tp}]
@@ -273,6 +285,7 @@ class TelegramNotifier:
             f"🛑 SL     <code>{fmt_price(s.sl)}</code>  ({sl_pct:+.2f}%)\n"
             f"📊 Score {s.score}/100 · {esc(s.confluence_level or '—')} · R:R {rr:.1f}\n"
             f"⚡ {esc(s.strategy)} · {esc(s.entry_mode)}\n{DIVIDER}\n"
+            f"{self._risk_block(s)}"
             f"{self._ai_block(s)}"
             f"{reasons}\n{self._stamp()}"
         )
@@ -375,6 +388,24 @@ class TelegramNotifier:
                 lines.append(
                     f"🛡 Vetoed signals: {vetoed_wr}% win ({vetoed_n} total, {delta:+.0f}% vs avg) — {readiness}"
                 )
+
+        # Risk-gate monitor: compare flagged signals' win-rate to overall, so a
+        # monitored gate can be promoted to a hard block once it's proven.
+        overall_wr = stats.get("win_rate", 0)
+        gate_lines = []
+        for label, n_key, wr_key, hard_hint in (
+            ("Against-regime", "against_regime_count", "against_regime_win_rate", "REGIME_HARD_BLOCK"),
+            ("Weak-strategy", "weak_flag_count", "weak_flag_win_rate", "AUTOPAUSE_HARD_BLOCK"),
+        ):
+            wr = stats.get(wr_key)
+            n = stats.get(n_key, 0)
+            if wr is not None and n > 0:
+                delta = wr - overall_wr
+                hint = f"🔴 enable {hard_hint}" if delta <= -15 else ("🟡 keep monitoring" if delta <= 0 else "🟢 not hurting")
+                gate_lines.append(f"• {label}: {wr}% win ({n} total, {delta:+.0f}% vs avg) — {hint}")
+        if gate_lines:
+            lines.append("\n<b>Risk-gate monitor</b>")
+            lines += gate_lines
 
         lines.append(f"\n{self._stamp()}")
         return "\n".join(lines)

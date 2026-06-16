@@ -39,6 +39,10 @@ class SignalCandidate:
     ai_confidence: int = 0
     ai_rationale: str = ""
     ai_vetoed: bool = False
+    # Risk gates (monitor mode): set when the signal trades against the market
+    # regime or comes from an underperforming strategy. Kept for win-rate study.
+    against_regime: bool = False
+    weak_strategy: bool = False
 
 
 class Detector(ABC):
