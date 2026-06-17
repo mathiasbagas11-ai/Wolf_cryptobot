@@ -32,7 +32,7 @@ class MomentumBreakoutDetector(Detector):
         rsi_long: float = 58.0,
         rsi_short: float = 42.0,
         min_volume_ratio: float = 1.8,
-        atr_sl_mult: float = 1.5,
+        atr_sl_mult: float = 0.75,
         atr_tp_mults: tuple[float, ...] = (1.5, 3.0),
         score_threshold: int = 70,
         breakout_lookback: int = 30,
@@ -150,24 +150,28 @@ class MomentumBreakoutDetector(Detector):
         if score < self.score_threshold:
             return None
 
+        # RETEST_WAIT: enter at the broken structural level (now support/resistance),
+        # not at the breakout candle close — avoids chasing and tightens the SL.
         if direction == "LONG":
-            sl = price - atr * self.atr_sl_mult
-            tps = [{"level": i + 1, "price": price + atr * m} for i, m in enumerate(self.atr_tp_mults)]
+            entry = recent_high
+            sl = recent_high - atr * self.atr_sl_mult
+            tps = [{"level": i + 1, "price": entry + atr * m} for i, m in enumerate(self.atr_tp_mults)]
         else:
-            sl = price + atr * self.atr_sl_mult
-            tps = [{"level": i + 1, "price": price - atr * m} for i, m in enumerate(self.atr_tp_mults)]
+            entry = recent_low
+            sl = recent_low + atr * self.atr_sl_mult
+            tps = [{"level": i + 1, "price": entry - atr * m} for i, m in enumerate(self.atr_tp_mults)]
 
         return SignalCandidate(
             symbol=symbol,
             signal_type="SCREENER",
             direction=direction,
-            entry_price=price,
+            entry_price=entry,
             tp=tps[-1]["price"],
             sl=sl,
             score=min(score, 100),
             strategy=self.name,
             reasons=reasons,
             confluence_level="HIGH" if score >= 85 else "MEDIUM",
-            entry_mode="MOMENTUM_NOW",
+            entry_mode="RETEST_WAIT",
             tps=tps,
         )
