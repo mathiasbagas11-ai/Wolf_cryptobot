@@ -119,9 +119,9 @@ class ScalpDetector(Detector):
             sl = last.low - atr * 0.25
         else:
             sl = last.high + atr * 0.25
-        risk = abs(price - sl)
+        risk = (price - sl) if is_long else (sl - price)
         if risk <= 0 or (risk / price) * 100 > 8.0:
-            return None  # risk inverted or sweep too deep (skip)
+            return None  # geometry inverted or sweep too deep
         if is_long:
             ladder = [
                 {"level": 1, "price": price + risk * 1.5},

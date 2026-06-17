@@ -32,7 +32,7 @@ class MomentumBreakoutDetector(Detector):
         rsi_long: float = 58.0,
         rsi_short: float = 42.0,
         min_volume_ratio: float = 1.8,
-        atr_sl_mult: float = 1.5,
+        atr_sl_mult: float = 0.75,
         atr_tp_mults: tuple[float, ...] = (1.5, 3.0),
         score_threshold: int = 70,
         breakout_lookback: int = 30,
@@ -154,11 +154,11 @@ class MomentumBreakoutDetector(Detector):
         # not at the breakout candle close — avoids chasing and tightens the SL.
         if direction == "LONG":
             entry = recent_high
-            sl = recent_high - atr * 0.75
+            sl = recent_high - atr * self.atr_sl_mult
             tps = [{"level": i + 1, "price": entry + atr * m} for i, m in enumerate(self.atr_tp_mults)]
         else:
             entry = recent_low
-            sl = recent_low + atr * 0.75
+            sl = recent_low + atr * self.atr_sl_mult
             tps = [{"level": i + 1, "price": entry - atr * m} for i, m in enumerate(self.atr_tp_mults)]
 
         return SignalCandidate(
