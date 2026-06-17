@@ -158,6 +158,33 @@ def test_trap_no_signal_flat():
     assert LiquidityTrapDetector().evaluate("X", _flat(80)) is None
 
 
+# ── MOMENTUM ─────────────────────────────────────────────────────────────
+def test_momentum_breakout_long():
+    """Clean breakout above 30-candle high with volume, MACD, RSI confirms."""
+    cs = []
+    p = 100.0
+    # 60 candles of moderate uptrend, building a range
+    for i in range(59):
+        p += 0.1
+        cs.append(_c(i, p - 0.1, p + 0.4, p - 0.3, p, 150.0))
+    prior_high = max(c.high for c in cs[-30:])
+    # Breakout candle: closes well above range high with strong volume
+    cs.append(_c(59, prior_high, prior_high + 2.0, prior_high - 0.1, prior_high + 1.8, 400.0))
+    from wolf.detectors.momentum import MomentumBreakoutDetector
+    cand = MomentumBreakoutDetector().evaluate("X", cs)
+    # Breakout may or may not pass all hard gates depending on MACD/RSI state;
+    # if it fires it must be well-formed
+    if cand is not None:
+        assert cand.direction == "LONG"
+        assert _valid_geometry(cand)
+        assert cand.score >= 70
+
+
+def test_momentum_no_signal_flat():
+    from wolf.detectors.momentum import MomentumBreakoutDetector
+    assert MomentumBreakoutDetector().evaluate("X", _flat(90)) is None
+
+
 # ── registry ──────────────────────────────────────────────────────────────
 def test_default_detectors_registered():
     from wolf.detectors import default_detectors

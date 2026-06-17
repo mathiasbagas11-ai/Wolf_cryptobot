@@ -92,3 +92,53 @@ def test_vwap_lookback_restricts_window():
 def test_vwap_nan_without_volume():
     candles = [Candle(time=i, open=1, high=1, low=1, close=1, volume=0.0) for i in range(3)]
     assert math.isnan(ind.vwap(candles))
+
+
+# ── FvG detection ─────────────────────────────────────────────────────────
+def _c(t, o, h, l, c, v=100.0):
+    return Candle(time=t * 900_000, open=o, high=h, low=l, close=c, volume=v)
+
+
+def test_find_fvgs_bullish():
+    """Three-candle gap where c3.low > c1.high is a bullish FvG."""
+    cs = [
+        _c(0, 100, 101, 99, 100),   # c1: high=101
+        _c(1, 102, 103, 101, 102),   # c2: middle (ignored)
+        _c(2, 103, 104, 102, 103),   # c3: low=102 > c1.high=101 → gap 101-102
+    ]
+    gaps = ind.find_fvgs(cs)
+    assert len(gaps) == 1
+    assert gaps[0]["type"] == "BULL"
+    assert gaps[0]["bottom"] == 101
+    assert gaps[0]["top"] == 102
+
+
+def test_find_fvgs_bearish():
+    """Three-candle gap where c3.high < c1.low is a bearish FvG."""
+    cs = [
+        _c(0, 100, 101, 98, 99),    # c1: low=98
+        _c(1, 97, 98, 96, 97),       # c2: middle
+        _c(2, 95, 97, 94, 95),       # c3: high=97 < c1.low=98 → gap 97-98
+    ]
+    gaps = ind.find_fvgs(cs)
+    assert len(gaps) == 1
+    assert gaps[0]["type"] == "BEAR"
+    assert gaps[0]["bottom"] == 97
+    assert gaps[0]["top"] == 98
+
+
+def test_price_in_fvg():
+    gaps = [{"type": "BULL", "top": 105.0, "bottom": 103.0}]
+    assert ind.price_in_fvg(104.0, gaps, "BULL") is True
+    assert ind.price_in_fvg(106.0, gaps, "BULL") is False
+    assert ind.price_in_fvg(104.0, gaps, "BEAR") is False
+
+
+def test_find_fvgs_no_gap_when_overlap():
+    """No FvG when candles overlap — normal price action."""
+    cs = [
+        _c(0, 100, 102, 99, 101),
+        _c(1, 101, 103, 100, 102),
+        _c(2, 102, 104, 101, 103),  # c3.low=101 <= c1.high=102 → no gap
+    ]
+    assert ind.find_fvgs(cs) == []
