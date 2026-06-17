@@ -121,7 +121,7 @@ class SwingDetector(Detector):
             return None
 
         entry = fast
-        sl, tp, ladder = build_targets(entry, atr, is_long=is_long, sl_mult=2.0, tp_mults=(2.0, 4.0))
+        sl, tp, ladder = build_targets(entry, atr, is_long=is_long, sl_mult=1.5, tp_mults=(2.5, 4.0))
         if (is_long and not (tp > entry > sl)) or (not is_long and not (tp < entry < sl)):
             return None
         return SignalCandidate(

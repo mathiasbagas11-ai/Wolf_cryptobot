@@ -17,7 +17,7 @@ from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf import structure as struct
-from wolf.detectors.base import Detector, SignalCandidate, build_targets
+from wolf.detectors.base import Detector, SignalCandidate
 from wolf.models import Candle
 
 
@@ -113,7 +113,26 @@ class ScalpDetector(Detector):
         if score < self.score_threshold:
             return None
 
-        sl, tp, ladder = build_targets(price, atr, is_long=is_long, sl_mult=1.0, tp_mults=(1.0, 2.0))
+        # Structural SL: just beyond the swept wick (not an arbitrary ATR from entry)
+        last = candles[-1]
+        if is_long:
+            sl = last.low - atr * 0.25
+        else:
+            sl = last.high + atr * 0.25
+        risk = abs(price - sl)
+        if risk <= 0 or (risk / price) * 100 > 8.0:
+            return None  # risk inverted or sweep too deep (skip)
+        if is_long:
+            ladder = [
+                {"level": 1, "price": price + risk * 1.5},
+                {"level": 2, "price": price + risk * 2.5},
+            ]
+        else:
+            ladder = [
+                {"level": 1, "price": price - risk * 1.5},
+                {"level": 2, "price": price - risk * 2.5},
+            ]
+        tp = ladder[-1]["price"]
         return SignalCandidate(
             symbol=symbol,
             signal_type="SCALP",
