@@ -1,13 +1,15 @@
 """Momentum breakout detector.
 
-A deliberately simple, fully-deterministic detector used as the reference
-implementation of the :class:`~wolf.detectors.base.Detector` contract. It looks
-for a breakout above the recent range confirmed by RSI strength, a positive
-MACD histogram and a volume expansion, and sizes TP/SL from ATR.
+Fires on a clean breakout above/below a **30-candle structural level** — a
+longer lookback than the old 20-candle window, producing stronger reference
+points. Three hard gates filter noise before scoring begins:
+  1. MACD histogram must confirm the breakout direction.
+  2. Volume must be >= 1.8x average (real momentum, not a fake-out).
+  3. RSI must show conviction (>= 58 long / <= 42 short).
 
-It is intentionally conservative and easy to reason about — richer SMC/funding
-detectors from the old bot can be added as sibling modules without touching this
-one or the tracker.
+VWAP context and a Fair Value Gap launch zone add bonus points, rewarding
+breakouts that start from a structurally significant area rather than random
+mid-range price action.
 """
 
 from __future__ import annotations
@@ -26,12 +28,13 @@ class MomentumBreakoutDetector(Detector):
 
     def __init__(
         self,
-        rsi_long: float = 55.0,
-        rsi_short: float = 45.0,
-        min_volume_ratio: float = 1.5,
+        rsi_long: float = 58.0,
+        rsi_short: float = 42.0,
+        min_volume_ratio: float = 1.8,
         atr_sl_mult: float = 1.5,
         atr_tp_mults: tuple[float, ...] = (1.5, 3.0),
-        score_threshold: int = 65,
+        score_threshold: int = 70,
+        breakout_lookback: int = 30,
     ) -> None:
         self.rsi_long = rsi_long
         self.rsi_short = rsi_short
@@ -39,6 +42,7 @@ class MomentumBreakoutDetector(Detector):
         self.atr_sl_mult = atr_sl_mult
         self.atr_tp_mults = atr_tp_mults
         self.score_threshold = score_threshold
+        self.breakout_lookback = breakout_lookback
 
     def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
         if not self._ready(candles):
@@ -53,9 +57,8 @@ class MomentumBreakoutDetector(Detector):
         if any(math.isnan(x) for x in (rsi, hist, vol_ratio, atr)) or atr <= 0:
             return None
 
-        # Breakout reference: highest high / lowest low of the prior 20 candles
-        # (excluding the current one).
-        window = candles[-21:-1]
+        # Structural breakout reference: 30-candle high/low (stronger level)
+        window = candles[-self.breakout_lookback - 1 : -1]
         recent_high = max(c.high for c in window)
         recent_low = min(c.low for c in window)
 
@@ -63,30 +66,60 @@ class MomentumBreakoutDetector(Detector):
         short_break = price < recent_low
 
         direction: Optional[str] = None
-        reasons: list[str] = []
-        score = 0
-
         if long_break and rsi >= self.rsi_long:
             direction = "LONG"
-            score += 35
-            reasons.append(f"Breakout > 20-candle high ({recent_high:.6g})")
-            reasons.append(f"RSI {rsi:.0f} >= {self.rsi_long:.0f}")
         elif short_break and rsi <= self.rsi_short:
             direction = "SHORT"
-            score += 35
-            reasons.append(f"Breakdown < 20-candle low ({recent_low:.6g})")
-            reasons.append(f"RSI {rsi:.0f} <= {self.rsi_short:.0f}")
         else:
             return None
 
-        if (direction == "LONG" and hist > 0) or (direction == "SHORT" and hist < 0):
+        # Hard gates — all three must pass before any scoring
+        if (direction == "LONG" and hist <= 0) or (direction == "SHORT" and hist >= 0):
+            return None  # MACD must confirm the breakout
+        if vol_ratio < self.min_volume_ratio:
+            return None  # volume expansion is non-negotiable
+
+        reasons: list[str] = []
+        score = 0
+
+        ref_level = recent_high if direction == "LONG" else recent_low
+        score += 35
+        reasons.append(f"{'Break' if direction == 'LONG' else 'Break'}out {'above' if direction == 'LONG' else 'below'} {self.breakout_lookback}-candle level ({ref_level:.6g})")
+        reasons.append(f"RSI {rsi:.0f} — momentum confirms")
+
+        score += 20
+        reasons.append("MACD histogram confirms direction")
+
+        # Volume bonus (already passed the 1.8x gate; reward higher expansion)
+        if vol_ratio >= 2.5:
             score += 20
-            reasons.append("MACD histogram confirms")
-        if vol_ratio >= self.min_volume_ratio:
-            score += 20
+            reasons.append(f"Volume surge {vol_ratio:.1f}x — breakout conviction")
+        else:
+            score += 10
             reasons.append(f"Volume {vol_ratio:.1f}x average")
+
+        # VWAP context: breakout should be with the fair-value bias (+20/-10)
+        vwap_val = ind.vwap(candles, lookback=40)
+        if not math.isnan(vwap_val):
+            if direction == "LONG" and price > vwap_val:
+                score += 20
+                reasons.append(f"Breaking above VWAP {vwap_val:.6g} — momentum with fair value")
+            elif direction == "SHORT" and price < vwap_val:
+                score += 20
+                reasons.append(f"Breaking below VWAP {vwap_val:.6g} — momentum with fair value")
+            else:
+                score -= 10  # breaking against fair value — reduce confidence
+
+        # FvG launch zone: breakout starting from inside an imbalance (+15)
+        fvgs = ind.find_fvgs(candles, lookback=40)
+        fvg_kind = "BULL" if direction == "LONG" else "BEAR"
+        if ind.price_in_fvg(recent_low if direction == "LONG" else recent_high, fvgs, fvg_kind):
+            score += 15
+            reasons.append(f"Breakout launching from {fvg_kind} FvG — imbalance resolved")
+
+        # Not over-extended
         if (direction == "LONG" and rsi < 75) or (direction == "SHORT" and rsi > 25):
-            score += 10  # not yet over-extended
+            score += 5
 
         if score < self.score_threshold:
             return None

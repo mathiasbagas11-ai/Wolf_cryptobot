@@ -30,7 +30,7 @@ class PrePumpDetector(Detector):
     name = "PREPUMP"
     min_candles = 60
 
-    def __init__(self, score_threshold: int = 65, squeeze_ratio: float = 1.15) -> None:
+    def __init__(self, score_threshold: int = 70, squeeze_ratio: float = 1.15) -> None:
         self.score_threshold = score_threshold
         # Current BB width must be within this multiple of the recent minimum.
         self.squeeze_ratio = squeeze_ratio
@@ -87,7 +87,20 @@ class PrePumpDetector(Detector):
             score += 10
             reasons.append("Price above EMA50 — uptrend context")
 
-        # 6. Derivatives confluence (optional) — negative funding = crowded
+        # 6. VWAP discount — accumulation at fair value or below (+15)
+        vwap_val = ind.vwap(candles, lookback=50)
+        if not math.isnan(vwap_val) and price <= vwap_val:
+            score += 15
+            reasons.append(f"Price at VWAP discount {vwap_val:.6g} — value-zone accumulation")
+
+        # 7. Bullish FvG below price — structural support under the setup (+10)
+        fvgs = ind.find_fvgs(candles, lookback=50)
+        bull_fvg = next((g for g in fvgs if g["type"] == "BULL" and g["top"] <= price), None)
+        if bull_fvg:
+            score += 10
+            reasons.append(f"Bullish FvG below ({bull_fvg['bottom']:.6g}–{bull_fvg['top']:.6g}) — demand zone support")
+
+        # 8. Derivatives confluence (optional) — negative funding = crowded
         #    shorts ripe for a squeeze; rising OI = fresh positioning.
         if context is not None:
             if context.funding_extreme_squeeze:
