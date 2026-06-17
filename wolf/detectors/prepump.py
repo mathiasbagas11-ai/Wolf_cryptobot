@@ -35,31 +35,49 @@ class PrePumpDetector(Detector):
         # Current BB width must be within this multiple of the recent minimum.
         self.squeeze_ratio = squeeze_ratio
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
+    def evaluate(
+        self, symbol: str, candles: Sequence[Candle], context=None, features=None
+    ) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
-        closes = ind.closes(candles)
-        price = closes[-1]
-        atr = ind.atr(candles, 14)
-        rsi = ind.rsi(closes, 14)
-        _, _, hist = ind.macd(closes)
-        if any(math.isnan(x) for x in (atr, rsi, hist)) or atr <= 0:
-            return None
+
+        if features is not None and features.valid:
+            price = features.price
+            atr = features.atr
+            rsi = features.rsi
+            hist = features.macd_hist
+            vr = features.vol_ratio
+            ema50_last = features.ema50_last
+            bb_widths_seq = features.bb_widths
+            bb_width_now = features.bb_width_now
+            if math.isnan(hist) or math.isnan(ema50_last):
+                return None
+        else:
+            closes = ind.closes(candles)
+            price = closes[-1]
+            atr = ind.atr(candles, 14)
+            rsi = ind.rsi(closes, 14)
+            _, _, hist = ind.macd(closes)
+            if any(math.isnan(x) for x in (atr, rsi, hist)) or atr <= 0:
+                return None
+            vr = ind.volume_ratio(candles, 20)
+            ema50 = ind.ema(closes, 50)
+            ema50_last = ema50[-1] if ema50 else float("nan")
+            bb_widths_seq = ind.bb_width_series(closes, 20)
+            _, _, _, bb_width_now = ind.bollinger_bands(closes, 20)
 
         score = 0
         reasons: list[str] = []
 
         # 1. Bollinger squeeze
-        widths = [w for w in ind.bb_width_series(closes, 20)[-30:] if not math.isnan(w)]
-        _, _, _, width = ind.bollinger_bands(closes, 20)
-        if widths and not math.isnan(width):
+        widths = [w for w in bb_widths_seq[-30:] if not math.isnan(w)]
+        if widths and not math.isnan(bb_width_now):
             recent_min = min(widths)
-            if recent_min > 0 and width <= recent_min * self.squeeze_ratio:
+            if recent_min > 0 and bb_width_now <= recent_min * self.squeeze_ratio:
                 score += 30
                 reasons.append("Bollinger squeeze — consolidation near range low")
 
         # 2. Volume coil
-        vr = ind.volume_ratio(candles, 20)
         if not math.isnan(vr) and vr >= 1.8:
             score += 25
             reasons.append(f"Volume coil released: {vr:.1f}x average")
@@ -82,8 +100,7 @@ class PrePumpDetector(Detector):
             reasons.append("Bullish RSI divergence — hidden accumulation")
 
         # 5. Trend context
-        ema50 = ind.ema(closes, 50)
-        if ema50 and price > ema50[-1]:
+        if not math.isnan(ema50_last) and price > ema50_last:
             score += 10
             reasons.append("Price above EMA50 — uptrend context")
 

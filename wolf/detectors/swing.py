@@ -28,19 +28,31 @@ class SwingDetector(Detector):
     def __init__(self, score_threshold: int = 70) -> None:
         self.score_threshold = score_threshold
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
+    def evaluate(
+        self, symbol: str, candles: Sequence[Candle], context=None, features=None
+    ) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
-        closes = ind.closes(candles)
-        price = closes[-1]
-        atr = ind.atr(candles, 14)
-        rsi = ind.rsi(closes, 14)
-        ema20 = ind.ema(closes, 20)
-        ema50 = ind.ema(closes, 50)
-        if any(math.isnan(x) for x in (atr, rsi)) or atr <= 0 or not ema20 or not ema50:
-            return None
 
-        fast, slow = ema20[-1], ema50[-1]
+        if features is not None and features.valid:
+            price = features.price
+            atr = features.atr
+            rsi = features.rsi
+            fast = features.ema20_last
+            slow = features.ema50_last
+            if any(math.isnan(x) for x in (fast, slow)):
+                return None
+        else:
+            closes = ind.closes(candles)
+            price = closes[-1]
+            atr = ind.atr(candles, 14)
+            rsi = ind.rsi(closes, 14)
+            ema20 = ind.ema(closes, 20)
+            ema50 = ind.ema(closes, 50)
+            if any(math.isnan(x) for x in (atr, rsi)) or atr <= 0 or not ema20 or not ema50:
+                return None
+            fast, slow = ema20[-1], ema50[-1]
+
         uptrend = fast > slow and price > slow
         downtrend = fast < slow and price < slow
         if not (uptrend or downtrend):

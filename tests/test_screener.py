@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from wolf.config import RiskSettings
 from wolf.detectors import MomentumBreakoutDetector
-from wolf.detectors.base import SignalCandidate
+from wolf.detectors.base import Detector, SignalCandidate
 from wolf.models import Candle
 from wolf.regime import BEARISH, BULLISH, NEUTRAL, UNKNOWN
 from wolf.screener import Screener
@@ -49,6 +49,52 @@ def _cand(direction="LONG", signal_type="SCREENER", strategy="MOMENTUM") -> Sign
         entry_price=100, tp=110, sl=95, score=80, strategy=strategy,
         reasons=["x"], tps=[{"level": 1, "price": 110}],
     )
+
+
+# ── minimal fake detector for orchestration tests ──────────────────────────
+
+
+class _FixedDetector(Detector):
+    """Returns a fixed-score candidate regardless of candle content."""
+
+    min_candles = 1
+
+    def __init__(self, name: str, direction: str, score: int) -> None:
+        self._det_name = name
+        self._direction = direction
+        self._score = score
+
+    @property
+    def name(self) -> str:  # type: ignore[override]
+        return self._det_name
+
+    def evaluate(self, symbol, candles, context=None, features=None):
+        if not candles:
+            return None
+        entry = candles[-1].close
+        if self._direction == "LONG":
+            tp, sl = entry * 1.05, entry * 0.95
+        else:
+            tp, sl = entry * 0.95, entry * 1.05
+        return SignalCandidate(
+            symbol=symbol,
+            signal_type=self._det_name,
+            direction=self._direction,
+            entry_price=entry,
+            tp=tp,
+            sl=sl,
+            score=self._score,
+            strategy=self._det_name,
+        )
+
+
+_SMALL_CANDLES = [
+    Candle(time=i * 900_000, open=100, high=101, low=99, close=100, volume=100.0)
+    for i in range(10)
+]
+
+
+# ── existing orchestration tests ────────────────────────────────────────────
 
 
 def test_run_cycle_records_signal(store, fake_client, tracker_settings):
@@ -255,3 +301,108 @@ def test_universe_falls_back_to_static_when_provider_empty(store, fake_client, t
         universe=["BTCUSDT"], universe_provider=_FakeUniverse([]),
     )
     assert screener.current_universe() == ["BTCUSDT"]
+
+
+# ── conflict detection tests ────────────────────────────────────────────────
+
+
+def test_conflict_detection_skips_choppy_symbol(store, fake_client, tracker_settings):
+    """Both a LONG and a SHORT detector trigger on the same symbol → skip."""
+    fake_client.klines["ETHUSDT"] = _SMALL_CANDLES
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client,
+        tracker,
+        [_FixedDetector("A", "LONG", 70), _FixedDetector("B", "SHORT", 65)],
+        universe=["ETHUSDT"],
+    )
+    recorded = screener.run_cycle()
+    assert recorded == [], "Conflicting LONG/SHORT signals should be suppressed"
+
+
+def test_conflict_detection_allows_single_direction(store, fake_client, tracker_settings):
+    """Two detectors, both LONG — no conflict, signal should be emitted."""
+    fake_client.klines["SOLUSDT"] = _SMALL_CANDLES
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client,
+        tracker,
+        [_FixedDetector("X", "LONG", 70), _FixedDetector("Y", "LONG", 65)],
+        universe=["SOLUSDT"],
+    )
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1
+
+
+# ── multi-detector confluence bonus tests ───────────────────────────────────
+
+
+def test_confluence_bonus_raises_score(store, fake_client, tracker_settings):
+    """Best candidate (score 70) gets +10 when a second detector agrees."""
+    fake_client.klines["SOLUSDT"] = _SMALL_CANDLES
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client,
+        tracker,
+        [_FixedDetector("X", "LONG", 70), _FixedDetector("Y", "LONG", 65)],
+        universe=["SOLUSDT"],
+    )
+    candidate = screener.scan_symbol("SOLUSDT")
+    assert candidate is not None
+    assert candidate.score == 80, "Expected base 70 + confluence bonus 10"
+
+
+def test_confluence_bonus_sets_high_confluence(store, fake_client, tracker_settings):
+    candidate = screener_for_long_agreement(fake_client, store, tracker_settings)
+    assert candidate is not None
+    assert candidate.confluence_level == "HIGH"
+
+
+def test_confluence_bonus_inserts_reason(store, fake_client, tracker_settings):
+    candidate = screener_for_long_agreement(fake_client, store, tracker_settings)
+    assert candidate is not None
+    assert any("Confluence" in r for r in candidate.reasons)
+
+
+def test_confluence_score_capped_at_100(store, fake_client, tracker_settings):
+    """Score must never exceed 100 even with the confluence bonus."""
+    fake_client.klines["BNBUSDT"] = _SMALL_CANDLES
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client,
+        tracker,
+        [_FixedDetector("X", "LONG", 95), _FixedDetector("Y", "LONG", 90)],
+        universe=["BNBUSDT"],
+    )
+    candidate = screener.scan_symbol("BNBUSDT")
+    assert candidate is not None
+    assert candidate.score == 100
+
+
+def test_single_detector_no_confluence_bonus(store, fake_client, tracker_settings):
+    """One detector only — no confluence bonus should be applied."""
+    fake_client.klines["XRPUSDT"] = _SMALL_CANDLES
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client,
+        tracker,
+        [_FixedDetector("Z", "LONG", 70)],
+        universe=["XRPUSDT"],
+    )
+    candidate = screener.scan_symbol("XRPUSDT")
+    assert candidate is not None
+    assert candidate.score == 70
+    assert not any("Confluence" in r for r in candidate.reasons)
+
+
+# helper reused by multiple confluence assertions
+def screener_for_long_agreement(fake_client, store, tracker_settings):
+    fake_client.klines["SOLUSDT"] = _SMALL_CANDLES
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client,
+        tracker,
+        [_FixedDetector("X", "LONG", 70), _FixedDetector("Y", "LONG", 65)],
+        universe=["SOLUSDT"],
+    )
+    return screener.scan_symbol("SOLUSDT")

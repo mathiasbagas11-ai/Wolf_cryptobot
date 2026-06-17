@@ -213,9 +213,10 @@ class Tracker:
             weak_strategy=weak_strategy,
         )
 
+        dedup_min = self._settings.dedup_for(signal.signal_type)
         with self._lock:
             pending = self._load_pending()
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=self._settings.dedup_minutes)
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=dedup_min)
             for existing in pending:
                 if (
                     existing.symbol == symbol
@@ -224,7 +225,7 @@ class Tracker:
                 ):
                     try:
                         if _parse_iso(existing.created_at) > cutoff:
-                            log.debug("Dedup %s %s within %dm", symbol, direction, self._settings.dedup_minutes)
+                            log.debug("Dedup %s %s within %dm", symbol, direction, dedup_min)
                             return None
                     except ValueError:
                         continue

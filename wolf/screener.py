@@ -4,6 +4,17 @@ The :class:`Screener` is the thin replacement for the old 11k-line "hub". It
 fetches candles for a universe of symbols, runs each detector, records the best
 candidate per symbol with the tracker, and announces it. All collaborators are
 injected, so the orchestration logic itself is tiny and testable.
+
+Improvements over the original:
+* **Shared indicator cache** — :class:`~wolf.indicator_cache.CandleFeatures` is
+  built once per symbol and passed to every detector so RSI / ATR / MACD /
+  volume-ratio are computed a single time instead of five.
+* **Conflict detection** — when both a LONG and a SHORT detector trigger on the
+  same symbol in the same cycle, the market is likely choppy; the symbol is
+  skipped rather than arbitrarily picking the higher score.
+* **Multi-detector confluence bonus** — when two or more detectors agree on
+  direction, the best candidate earns +10 score points and is promoted to HIGH
+  confluence, signalling unusually strong agreement.
 """
 
 from __future__ import annotations
@@ -14,6 +25,7 @@ from typing import Optional, Sequence
 from wolf.config import RiskSettings
 from wolf.detectors.base import Detector, SignalCandidate
 from wolf.exchange import BinanceClient
+from wolf.indicator_cache import CandleFeatures
 from wolf.notify import TelegramNotifier
 from wolf.regime import BEARISH, BULLISH, NEUTRAL, UNKNOWN
 from wolf.tracker import Tracker
@@ -96,16 +108,58 @@ class Screener:
             log.exception("Context build failed for %s", symbol)
             return None
 
-    def _best_candidate(self, symbol: str, candles, context) -> Optional[SignalCandidate]:
-        best: Optional[SignalCandidate] = None
+    def _build_features(self, candles) -> Optional[CandleFeatures]:
+        """Compute shared indicators once for the given candle set."""
+        if not candles:
+            return None
+        try:
+            return CandleFeatures.build(candles)
+        except Exception:
+            log.exception("Feature pre-computation failed")
+            return None
+
+    def _best_candidate(
+        self, symbol: str, candles, context, features: Optional[CandleFeatures] = None
+    ) -> Optional[SignalCandidate]:
+        """Evaluate all detectors; apply conflict check and confluence bonus."""
+        all_candidates: list[SignalCandidate] = []
         for detector in self._detectors:
             try:
-                candidate = detector.evaluate(symbol, candles, context)
+                candidate = detector.evaluate(symbol, candles, context, features)
             except (ValueError, KeyError, TypeError, IndexError):
                 log.exception("Detector %s crashed on %s", detector.name, symbol)
                 continue
-            if candidate and (best is None or candidate.score > best.score):
-                best = candidate
+            if candidate:
+                all_candidates.append(candidate)
+
+        if not all_candidates:
+            return None
+
+        # Conflict detection: if detectors disagree on direction (both LONG and
+        # SHORT passed their own quality threshold), the market is choppy or
+        # transitioning — emit nothing rather than guess.
+        long_triggered = any(c.direction == "LONG" for c in all_candidates)
+        short_triggered = any(c.direction == "SHORT" for c in all_candidates)
+        if long_triggered and short_triggered:
+            log.info(
+                "Signal conflict on %s (LONG vs SHORT both triggered) — skipping choppy setup",
+                symbol,
+            )
+            return None
+
+        # Select best by score.
+        best = max(all_candidates, key=lambda c: c.score)
+
+        # Multi-detector confluence: when ≥2 detectors agree on direction, the
+        # setup is stronger than any single indicator suggests.  Add a flat
+        # bonus and promote confluence_level so the operator can see it.
+        agreeing = [c for c in all_candidates if c.direction == best.direction and c is not best]
+        if agreeing:
+            best.score = min(best.score + 10, 100)
+            strats = "+".join(c.strategy for c in agreeing)
+            best.reasons.insert(0, f"Confluence [{best.strategy}+{strats}]")
+            best.confluence_level = "HIGH"
+
         return best
 
     def scan_symbol(self, symbol: str) -> Optional[SignalCandidate]:
@@ -113,7 +167,8 @@ class Screener:
         candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
         if not candles:
             return None
-        return self._best_candidate(symbol, candles, self._build_context(symbol))
+        features = self._build_features(candles)
+        return self._best_candidate(symbol, candles, self._build_context(symbol), features)
 
     def _apply_validator(self, candidate: SignalCandidate, context) -> None:
         """Run the AI debate and annotate the candidate. Monitor mode: never blocks.
@@ -224,8 +279,9 @@ class Screener:
             candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
             if not candles:
                 continue
+            features = self._build_features(candles)
             context = self._build_context(symbol)
-            candidate = self._best_candidate(symbol, candles, context)
+            candidate = self._best_candidate(symbol, candles, context, features)
             if not candidate:
                 continue
             if self._gate_candidate(candidate, regime, weak):
