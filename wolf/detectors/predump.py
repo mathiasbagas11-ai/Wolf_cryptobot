@@ -31,15 +31,25 @@ class PreDumpDetector(Detector):
     def __init__(self, score_threshold: int = 70) -> None:
         self.score_threshold = score_threshold
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
+    def evaluate(
+        self, symbol: str, candles: Sequence[Candle], context=None, features=None
+    ) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
-        closes = ind.closes(candles)
-        price = closes[-1]
-        atr = ind.atr(candles, 14)
-        rsi = ind.rsi(closes, 14)
-        if any(math.isnan(x) for x in (atr, rsi)) or atr <= 0:
-            return None
+
+        if features is not None and features.valid:
+            price = features.price
+            atr = features.atr
+            rsi = features.rsi
+            vr = features.vol_ratio
+        else:
+            closes = ind.closes(candles)
+            price = closes[-1]
+            atr = ind.atr(candles, 14)
+            rsi = ind.rsi(closes, 14)
+            if any(math.isnan(x) for x in (atr, rsi)) or atr <= 0:
+                return None
+            vr = ind.volume_ratio(candles, 20)
 
         score = 0
         reasons: list[str] = []
@@ -70,7 +80,6 @@ class PreDumpDetector(Detector):
             reasons.append("Bearish rejection candle — upper-wick selling")
 
         # 4. Distribution — volume fading vs average
-        vr = ind.volume_ratio(candles, 20)
         if not math.isnan(vr) and vr < 0.8:
             score += 15
             reasons.append(f"Volume fading: {vr:.1f}x average — distribution")

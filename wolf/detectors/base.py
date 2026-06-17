@@ -56,13 +56,16 @@ class Detector(ABC):
 
     @abstractmethod
     def evaluate(
-        self, symbol: str, candles: Sequence[Candle], context=None
+        self, symbol: str, candles: Sequence[Candle], context=None, features=None
     ) -> Optional[SignalCandidate]:
         """Return a candidate if the setup triggers, else ``None``.
 
         ``context`` is an optional :class:`~wolf.market.MarketContext` carrying
-        derivatives data (funding, OI). Detectors that don't need it ignore it;
-        passing ``None`` keeps every detector fully usable from candles alone.
+        derivatives data (funding, OI).  ``features`` is an optional
+        :class:`~wolf.indicator_cache.CandleFeatures` with pre-computed
+        indicators shared across all detectors in one cycle; when present
+        detectors skip redundant computation.  Both default to ``None`` so
+        every detector remains fully usable with candles alone.
         """
         raise NotImplementedError
 

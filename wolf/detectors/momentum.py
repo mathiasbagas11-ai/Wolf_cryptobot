@@ -45,18 +45,29 @@ class MomentumBreakoutDetector(Detector):
         self.score_threshold = score_threshold
         self.breakout_lookback = breakout_lookback
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
+    def evaluate(
+        self, symbol: str, candles: Sequence[Candle], context=None, features=None
+    ) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
 
-        closes = ind.closes(candles)
-        price = closes[-1]
-        rsi = ind.rsi(closes, 14)
-        _, _, hist = ind.macd(closes)
-        vol_ratio = ind.volume_ratio(candles, 20)
-        atr = ind.atr(candles, 14)
-        if any(math.isnan(x) for x in (rsi, hist, vol_ratio, atr)) or atr <= 0:
-            return None
+        if features is not None and features.valid:
+            price = features.price
+            rsi = features.rsi
+            hist = features.macd_hist
+            vol_ratio = features.vol_ratio
+            atr = features.atr
+            if math.isnan(hist):
+                return None
+        else:
+            closes = ind.closes(candles)
+            price = closes[-1]
+            rsi = ind.rsi(closes, 14)
+            _, _, hist = ind.macd(closes)
+            vol_ratio = ind.volume_ratio(candles, 20)
+            atr = ind.atr(candles, 14)
+            if any(math.isnan(x) for x in (rsi, hist, vol_ratio, atr)) or atr <= 0:
+                return None
 
         # Structural breakout reference: 30-candle high/low (stronger level)
         window = candles[-self.breakout_lookback - 1 : -1]

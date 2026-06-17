@@ -218,8 +218,17 @@ class TrackerSettings:
     timeout_scalp_h: int = 2
     timeout_swing_h: int = 24
     timeout_trap_h: int = 4  # liquidity-trap reversals resolve fast
-    # Dedup window: skip an identical symbol+direction within this many minutes.
-    dedup_minutes: int = 30
+    # Per-strategy dedup windows (minutes).  Tighter for fast setups (SCALP
+    # expires in 2 h so there is no point blocking a fresh sweep for 30 min),
+    # wider for slow setups (SWING holds 24 h, so 60 min avoids noise re-entries).
+    # ``dedup_minutes`` is kept as the legacy fallback for unknown strategy types.
+    dedup_minutes: int = 30       # legacy / fallback
+    dedup_scalp_min: int = 10
+    dedup_prepump_min: int = 20
+    dedup_predump_min: int = 20
+    dedup_screener_min: int = 30
+    dedup_swing_min: int = 60
+
     # Keep at most this many resolved outcomes on disk.
     max_outcomes: int = 500
 
@@ -232,6 +241,16 @@ class TrackerSettings:
             "SWING": self.timeout_swing_h,
             "TRAP": self.timeout_trap_h,
         }.get(signal_type.upper(), self.timeout_screener_h)
+
+    def dedup_for(self, signal_type: str) -> int:
+        """Return the dedup window in minutes for a given signal type."""
+        return {
+            "SCALP": self.dedup_scalp_min,
+            "PREPUMP": self.dedup_prepump_min,
+            "PREDUMP": self.dedup_predump_min,
+            "SCREENER": self.dedup_screener_min,
+            "SWING": self.dedup_swing_min,
+        }.get(signal_type.upper(), self.dedup_minutes)
 
 
 @dataclass(frozen=True)
@@ -422,8 +441,14 @@ class Settings:
             narrator_provider=_env_str("FLOW_NARRATOR_PROVIDER", "deepseek"),
             narrator_model=_env_str("FLOW_NARRATOR_MODEL", ""),
         )
+        dedup_default = _env_int("TRACKER_DEDUP_MINUTES", 30)
         tracker = TrackerSettings(
-            dedup_minutes=_env_int("TRACKER_DEDUP_MINUTES", 30),
+            dedup_minutes=dedup_default,
+            dedup_scalp_min=_env_int("TRACKER_DEDUP_SCALP_MIN", 10),
+            dedup_prepump_min=_env_int("TRACKER_DEDUP_PREPUMP_MIN", 20),
+            dedup_predump_min=_env_int("TRACKER_DEDUP_PREDUMP_MIN", 20),
+            dedup_screener_min=_env_int("TRACKER_DEDUP_SCREENER_MIN", dedup_default),
+            dedup_swing_min=_env_int("TRACKER_DEDUP_SWING_MIN", 60),
             max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", 500),
         )
         risk = RiskSettings(
