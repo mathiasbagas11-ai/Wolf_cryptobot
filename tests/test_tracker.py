@@ -258,3 +258,23 @@ def test_record_concurrent_with_check_pending(store, fake_client, tracker_settin
 
     # BTC + 20 ALT signals, none lost to a race.
     assert len(tracker.active_signals()) == 21
+
+
+# ── emit count tracking ─────────────────────────────────────────────────────
+def test_stats_emit_count_per_strategy(store, fake_client, tracker_settings):
+    """by_strategy['emitted'] counts all recorded signals, not just graded ones."""
+    tracker = Tracker(store, fake_client, tracker_settings)
+    # Two SCALP signals — different symbols so dedup doesn't block them.
+    tracker.record_signal(
+        "BTCUSDT", "SCALP", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", strategy="SCALP",
+    )
+    tracker.record_signal(
+        "ETHUSDT", "SCALP", "SHORT", 100, tp=90, sl=105,
+        entry_mode="MOMENTUM_NOW", strategy="SCALP",
+    )
+    stats = tracker.stats()
+    scalp = stats["by_strategy"].get("SCALP", {})
+    assert scalp.get("emitted", 0) == 2    # both recorded
+    assert scalp.get("active", 0) == 2     # both still pending
+    assert scalp.get("total", 0) == 0      # none graded yet

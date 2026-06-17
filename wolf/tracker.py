@@ -449,6 +449,7 @@ class Tracker:
     def stats(self) -> dict:
         """Aggregate win-rate / PnL stats over resolved outcomes."""
         outcomes = self.outcomes()
+        active_sigs = self.active_signals()
         graded = [o for o in outcomes if Status(o.status).is_win or Status(o.status).is_loss]
         wins = [o for o in graded if Status(o.status).is_win]
         total = len(graded)
@@ -470,6 +471,29 @@ class Tracker:
             return buckets
 
         by_strategy = _bucket_group(graded, lambda o: o.strategy)
+
+        # Emit counts: all recorded signals (active + all resolved), not just graded.
+        # This lets us compare "how many fired" vs "how many got resolved" per detector.
+        emitted_by_strategy: dict[str, int] = {}
+        active_count_by_strategy: dict[str, int] = {}
+        for sig in active_sigs:
+            emitted_by_strategy[sig.strategy] = emitted_by_strategy.get(sig.strategy, 0) + 1
+            active_count_by_strategy[sig.strategy] = active_count_by_strategy.get(sig.strategy, 0) + 1
+        for o in outcomes:  # ALL resolved (graded + invalidated + expired)
+            emitted_by_strategy[o.strategy] = emitted_by_strategy.get(o.strategy, 0) + 1
+        for name, bucket in by_strategy.items():
+            bucket["emitted"] = emitted_by_strategy.get(name, bucket["total"])
+            bucket["active"] = active_count_by_strategy.get(name, 0)
+        # Create zero-stat entries for strategies that only have active signals
+        # (no resolved outcomes yet), so the per-detector emit count is visible.
+        for name, emitted in emitted_by_strategy.items():
+            if name not in by_strategy:
+                by_strategy[name] = {
+                    "wins": 0, "total": 0, "pnl": 0.0,
+                    "win_rate": 0.0, "avg_pnl": 0.0,
+                    "emitted": emitted,
+                    "active": active_count_by_strategy.get(name, 0),
+                }
 
         # AI verdict breakdown: was the AI predictive?
         # "NO_AI" = AI was not configured; "ABSTAIN" = AI ran but couldn't decide.
@@ -502,7 +526,7 @@ class Tracker:
             "losses": total - len(wins),
             "win_rate": round(win_rate, 1),
             "avg_pnl_pct": round(avg_pnl, 3),
-            "active": len(self.active_signals()),
+            "active": len(active_sigs),
             "by_strategy": by_strategy,
             "by_ai_verdict": by_ai_verdict,
             "vetoed_count": len(vetoed),

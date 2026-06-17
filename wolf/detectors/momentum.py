@@ -18,6 +18,7 @@ import math
 from typing import Optional, Sequence
 
 from wolf import indicators as ind
+from wolf import structure as struct
 from wolf.detectors.base import Detector, SignalCandidate
 from wolf.models import Candle
 
@@ -116,6 +117,20 @@ class MomentumBreakoutDetector(Detector):
         if ind.price_in_fvg(recent_low if direction == "LONG" else recent_high, fvgs, fvg_kind):
             score += 15
             reasons.append(f"Breakout launching from {fvg_kind} FvG — imbalance resolved")
+
+        # BOS/ChoCh: breakout aligns with a structural break (+15 BOS, +20 ChoCh)
+        sb = struct.find_structure_break(candles, lookback=40)
+        bos_match = sb is not None and (
+            (direction == "LONG" and sb.direction == "BULLISH") or
+            (direction == "SHORT" and sb.direction == "BEARISH")
+        )
+        if bos_match:
+            bonus = 20 if sb.kind == "CHOCH" else 15
+            score += bonus
+            reasons.append(
+                f"{'ChoCh' if sb.kind == 'CHOCH' else 'BOS'} {sb.direction} "
+                f"— structural break at {sb.broken_level:.6g}"
+            )
 
         # Not over-extended
         if (direction == "LONG" and rsi < 75) or (direction == "SHORT" and rsi > 25):

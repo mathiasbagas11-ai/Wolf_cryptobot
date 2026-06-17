@@ -94,6 +94,13 @@ class ScalpDetector(Detector):
                 score += 10
                 reasons.append(f"Sweep above VWAP {vwap_val:.6g} — premium entry")
 
+        # 6. Order Block: sweep targeted a smart-money institutional zone (+10)
+        obs = struct.find_order_blocks(candles, lookback=40)
+        ob_kind = "BULL" if is_long else "BEAR"
+        if struct.price_in_ob(sweep.level, obs, ob_kind):
+            score += 10
+            reasons.append(f"Sweep into {ob_kind} OB — smart-money zone hunted")
+
         if score < self.score_threshold:
             return None
 

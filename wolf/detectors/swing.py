@@ -16,6 +16,7 @@ import math
 from typing import Optional, Sequence
 
 from wolf import indicators as ind
+from wolf import structure as struct
 from wolf.detectors.base import Detector, SignalCandidate, build_targets
 from wolf.models import Candle
 
@@ -67,6 +68,13 @@ class SwingDetector(Detector):
         if ind.price_in_fvg(price, fvgs, fvg_kind):
             score += 20
             reasons.append(f"Pullback inside {fvg_kind} FvG — imbalance support")
+
+        # 3b. Order Block: pullback into institutional demand/supply zone (+20)
+        obs = struct.find_order_blocks(candles, lookback=50)
+        ob_kind = "BULL" if is_long else "BEAR"
+        if struct.price_in_ob(price, obs, ob_kind):
+            score += 20
+            reasons.append(f"Pullback inside {ob_kind} Order Block — institutional zone")
 
         # 4. VWAP as dynamic support/resistance
         vwap_val = ind.vwap(candles, lookback=50)

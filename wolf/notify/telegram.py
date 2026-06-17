@@ -370,9 +370,13 @@ class TelegramNotifier:
         if by_strategy:
             lines.append("\n<b>By strategy</b>")
             for name, b in sorted(by_strategy.items()):
+                fired = b.get("emitted", b.get("total", 0))
+                graded_n = b.get("total", 0)
+                active_n = b.get("active", 0)
+                active_tag = f" · {active_n} active" if active_n else ""
                 lines.append(
-                    f"• {esc(name)}  {b.get('win_rate', 0)}% "
-                    f"({b.get('total', 0)} trades, {b.get('avg_pnl', 0):+.2f}%)"
+                    f"• {esc(name)}  {b.get('win_rate', 0)}% WR "
+                    f"({graded_n}/{fired} graded{active_tag}, avg {b.get('avg_pnl', 0):+.2f}%)"
                 )
 
         by_ai = stats.get("by_ai_verdict", {})
