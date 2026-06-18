@@ -216,10 +216,43 @@ class TelegramNotifier:
         by_strategy = stats.get("by_strategy", {})
         if by_strategy:
             lines.append("\n<b>By strategy</b>")
-            for name, b in by_strategy.items():
+            for name, b in sorted(by_strategy.items()):
+                graded = b.get("total", 0)
+                active_n = b.get("active", 0)
+                active_str = f" · {active_n} active" if active_n else ""
                 lines.append(
-                    f"• {esc(name)}  {b.get('win_rate', 0)}% "
+                    f"• {esc(name)}  {b.get('win_rate', 0)}% WR "
+                    f"({graded} graded{active_str}, avg {b.get('avg_pnl', 0):+.2f}%)"
+                )
+
+        by_verdict = stats.get("by_verdict", {})
+        if by_verdict:
+            lines.append("\n<b>AI verdict accuracy</b>")
+            verdict_icons = {"CONFIRM": "✅", "REJECT": "🚫", "NEUTRAL": "⚪", "ABSTAIN": "🔇"}
+            for verdict, b in sorted(by_verdict.items()):
+                icon = verdict_icons.get(verdict, "❓")
+                lines.append(
+                    f"{icon} {esc(verdict)}  {b.get('win_rate', 0)}% "
                     f"({b.get('total', 0)} trades, {b.get('avg_pnl', 0):+.2f}%)"
                 )
+
+        by_regime = stats.get("by_regime", {})
+        overall_wr = stats.get("win_rate", 0)
+        if by_regime:
+            lines.append("\n<b>Risk-gate monitor</b>")
+            against = by_regime.get("against_regime", {})
+            with_r = by_regime.get("with_regime", {})
+            if against:
+                wr = against.get("win_rate", 0)
+                delta = round(wr - overall_wr, 1)
+                flag = "🔴 enable REGIME_HARD_BLOCK" if delta < -10 else "🟡 borderline"
+                lines.append(f"• Against-regime: {wr}% win ({against.get('total', 0)} total, {delta:+.0f}% vs avg) — {flag}")
+            if with_r:
+                wr = with_r.get("win_rate", 0)
+                delta = round(wr - overall_wr, 1)
+                lines.append(f"• With-regime: {wr}% win ({with_r.get('total', 0)} total, {delta:+.0f}% vs avg)")
+        elif overall_wr > 0:
+            lines.append("\n<i>Regime tracking active on new signals</i>")
+
         lines.append(f"\n{self._stamp()}")
         return "\n".join(lines)

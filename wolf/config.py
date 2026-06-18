@@ -181,6 +181,15 @@ class ReportsSettings:
 
 
 @dataclass(frozen=True)
+class RiskSettings:
+    """Risk-gate configuration."""
+
+    # Block LONG signals when BTC is in a bear regime (EMA20 < EMA50).
+    # Dramatically reduces against-regime losses. Enable via REGIME_HARD_BLOCK=true.
+    regime_hard_block: bool = False
+
+
+@dataclass(frozen=True)
 class AISettings:
     """AI debate-layer configuration."""
 
@@ -238,6 +247,7 @@ class Settings:
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
     ai: AISettings = field(default_factory=AISettings)
+    risk: RiskSettings = field(default_factory=RiskSettings)
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
 
@@ -288,6 +298,9 @@ class Settings:
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),
         )
+        risk = RiskSettings(
+            regime_hard_block=_env_bool("REGIME_HARD_BLOCK", False),
+        )
         exchanges = _env_csv("EXCHANGES") or ("binance", "okx", "bybit", "gate")
         return cls(
             state_dir=_env_str("STATE_DIR", "state_data"),
@@ -313,6 +326,7 @@ class Settings:
             telegram=telegram,
             tracker=tracker,
             ai=ai,
+            risk=risk,
             news=news,
             reports=reports,
         )
@@ -331,5 +345,6 @@ class Settings:
                 out[f.name] = value
         out["telegram_enabled"] = self.telegram.enabled
         out["ai_enabled"] = self.ai.enabled
+        out["regime_hard_block"] = self.risk.regime_hard_block
         out["news_enabled"] = self.news.enabled
         return out

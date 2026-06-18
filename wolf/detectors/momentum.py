@@ -88,6 +88,16 @@ class MomentumBreakoutDetector(Detector):
         if (direction == "LONG" and rsi < 75) or (direction == "SHORT" and rsi > 25):
             score += 10  # not yet over-extended
 
+        # Hard gate: LONG breakouts below EMA50 are counter-trend traps.
+        # SHORT breakouts above EMA50 get a bonus instead (reward alignment).
+        ema50 = ind.ema(closes, 50)
+        if ema50:
+            if direction == "LONG" and price < ema50[-1]:
+                return None
+            if (direction == "LONG" and price > ema50[-1]) or (direction == "SHORT" and price < ema50[-1]):
+                score += 10
+                reasons.append("EMA50 trend aligned")
+
         if score < self.score_threshold:
             return None
 

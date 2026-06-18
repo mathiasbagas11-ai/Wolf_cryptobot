@@ -99,6 +99,7 @@ def build_application(settings: Settings | None = None) -> Application:
         context_provider=context_provider,
         validator=validator,
         veto_min_confidence=settings.ai.veto_min_confidence,
+        regime_hard_block=settings.risk.regime_hard_block,
     )
 
     news = None

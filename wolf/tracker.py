@@ -154,6 +154,7 @@ class Tracker:
         strategy: str = "CONFIRMED",
         entry_mode: str = EntryMode.RETEST_WAIT.value,
         tps: Optional[list[dict]] = None,
+        btc_regime: str = "",
     ) -> Optional[Signal]:
         """Record a freshly-emitted signal as PENDING.
 
@@ -197,6 +198,7 @@ class Tracker:
             entry_mode=(entry_mode or EntryMode.RETEST_WAIT.value).upper(),
             tp_ladder=[r.to_dict() for r in ladder],
             timeout_hours=self._settings.timeout_for(signal_type),
+            btc_regime=btc_regime,
         )
 
         with self._lock:
@@ -406,6 +408,7 @@ class Tracker:
     def stats(self) -> dict:
         """Aggregate win-rate / PnL stats over resolved outcomes."""
         outcomes = self.outcomes()
+        active = self.active_signals()
         graded = [o for o in outcomes if Status(o.status).is_win or Status(o.status).is_loss]
         wins = [o for o in graded if Status(o.status).is_win]
         total = len(graded)
@@ -415,12 +418,50 @@ class Tracker:
 
         by_strategy: dict[str, dict] = {}
         for o in graded:
-            bucket = by_strategy.setdefault(o.strategy, {"wins": 0, "total": 0, "pnl": 0.0})
+            bucket = by_strategy.setdefault(o.strategy, {"wins": 0, "total": 0, "pnl": 0.0, "active": 0})
             bucket["total"] += 1
             bucket["pnl"] += o.pnl_pct or 0.0
             if Status(o.status).is_win:
                 bucket["wins"] += 1
+        for sig in active:
+            bucket = by_strategy.setdefault(sig.strategy, {"wins": 0, "total": 0, "pnl": 0.0, "active": 0})
+            bucket["active"] = bucket.get("active", 0) + 1
         for bucket in by_strategy.values():
+            bucket["win_rate"] = round(bucket["wins"] / bucket["total"] * 100, 1) if bucket["total"] else 0.0
+            bucket["avg_pnl"] = round(bucket["pnl"] / bucket["total"], 3) if bucket["total"] else 0.0
+
+        # AI verdict accuracy — parse from signal reasons (first reason = "AI[VERDICT X%]: ...")
+        by_verdict: dict[str, dict] = {}
+        for o in graded:
+            verdict = "ABSTAIN"
+            if o.reasons and o.reasons[0].startswith("AI["):
+                try:
+                    verdict = o.reasons[0].split("[")[1].split(" ")[0]
+                except (IndexError, ValueError):
+                    pass
+            bucket = by_verdict.setdefault(verdict, {"wins": 0, "total": 0, "pnl": 0.0})
+            bucket["total"] += 1
+            bucket["pnl"] += o.pnl_pct or 0.0
+            if Status(o.status).is_win:
+                bucket["wins"] += 1
+        for bucket in by_verdict.values():
+            bucket["win_rate"] = round(bucket["wins"] / bucket["total"] * 100, 1) if bucket["total"] else 0.0
+            bucket["avg_pnl"] = round(bucket["pnl"] / bucket["total"], 3) if bucket["total"] else 0.0
+
+        # Regime gate monitor — classify against-regime vs aligned trades
+        regime_graded = [o for o in graded if getattr(o, "btc_regime", "")]
+        by_regime: dict[str, dict] = {}
+        for o in regime_graded:
+            regime = o.btc_regime
+            direction = o.direction
+            is_against = (direction == "LONG" and regime == "BEAR") or (direction == "SHORT" and regime == "BULL")
+            key = "against_regime" if is_against else "with_regime"
+            bucket = by_regime.setdefault(key, {"wins": 0, "total": 0, "pnl": 0.0})
+            bucket["total"] += 1
+            bucket["pnl"] += o.pnl_pct or 0.0
+            if Status(o.status).is_win:
+                bucket["wins"] += 1
+        for bucket in by_regime.values():
             bucket["win_rate"] = round(bucket["wins"] / bucket["total"] * 100, 1) if bucket["total"] else 0.0
             bucket["avg_pnl"] = round(bucket["pnl"] / bucket["total"], 3) if bucket["total"] else 0.0
 
@@ -431,6 +472,8 @@ class Tracker:
             "losses": total - len(wins),
             "win_rate": round(win_rate, 1),
             "avg_pnl_pct": round(avg_pnl, 3),
-            "active": len(self.active_signals()),
+            "active": len(active),
             "by_strategy": by_strategy,
+            "by_verdict": by_verdict,
+            "by_regime": by_regime,
         }

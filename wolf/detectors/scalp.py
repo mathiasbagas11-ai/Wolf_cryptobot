@@ -24,7 +24,7 @@ class ScalpDetector(Detector):
     name = "SCALP"
     min_candles = 40
 
-    def __init__(self, score_threshold: int = 60, min_recovery: float = 50.0) -> None:
+    def __init__(self, score_threshold: int = 65, min_recovery: float = 55.0) -> None:
         self.score_threshold = score_threshold
         self.min_recovery = min_recovery
 
@@ -58,7 +58,7 @@ class ScalpDetector(Detector):
         if not math.isnan(vr) and vr >= 2.0:
             score += 25
             reasons.append(f"Volume spike {vr:.1f}x on sweep")
-        elif not math.isnan(vr) and vr >= 1.3:
+        elif not math.isnan(vr) and vr >= 1.5:
             score += 12
             reasons.append(f"Volume {vr:.1f}x average")
 

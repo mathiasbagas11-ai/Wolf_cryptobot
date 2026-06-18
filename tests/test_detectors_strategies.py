@@ -54,25 +54,43 @@ def test_scalp_no_signal_flat():
 
 # ── PREPUMP ──────────────────────────────────────────────────────────────
 def test_prepump_squeeze_then_coil():
+    # High-quality PREPUMP setup matching the new stricter threshold (80).
+    # Alternating +0.4 / -0.3 uptrend (50 candles): keeps RSI in the healthy
+    # 50-68 consolidation zone while price rises above EMA50.  Fast unidirectional
+    # runs push RSI to ~95 which disqualifies the momentum check.
     cs = []
     p = 90.0
-    for i in range(41):
-        p += 0.4
-        cs.append(_c(i, p - 0.1, p + 0.3, p - 0.2, p, 100.0))
+    for i in range(50):
+        p = p + 0.4 if i % 2 == 0 else p - 0.3
+        cs.append(_c(i, p - 0.25, p + 0.35, p - 0.3, p, 100.0))
     base = cs[-1].close
-    for k in range(18):  # tight consolidation -> Bollinger squeeze
-        cs.append(_c(41 + k, base, base + 0.25, base - 0.25, base + (0.05 if k % 2 else -0.05), 90.0))
-    cs.append(_c(59, base, base + 0.3, base - 0.2, base + 0.1, 250.0))  # volume coil release
+    for k in range(9):  # tight consolidation — Bollinger squeeze
+        cs.append(_c(50 + k, base, base + 0.15, base - 0.15, base + (0.02 if k % 2 else -0.02), 85.0))
+    cs.append(_c(59, base, base + 0.4, base - 0.1, base + 0.2, 290.0))  # volume coil release
     cand = PrePumpDetector().evaluate("X", cs)
     assert cand is not None
     assert cand.direction == "LONG"
     assert cand.signal_type == "PREPUMP"
-    assert cand.score >= 65
+    assert cand.score >= 80
     assert _valid_geometry(cand)
 
 
 def test_prepump_no_signal_flat():
     assert PrePumpDetector().evaluate("X", _flat(80)) is None
+
+
+def test_prepump_no_signal_downtrend():
+    # Hard filter: PREPUMP must not fire when price < EMA50 (downtrend trap).
+    cs = []
+    p = 110.0
+    for i in range(55):  # steady downtrend — price will fall below EMA50
+        p -= 0.4
+        cs.append(_c(i, p + 0.2, p + 0.4, p - 0.3, p, 100.0))
+    base = cs[-1].close
+    for k in range(4):
+        cs.append(_c(55 + k, base, base + 0.15, base - 0.15, base, 85.0))
+    cs.append(_c(59, base, base + 0.4, base - 0.1, base + 0.2, 300.0))
+    assert PrePumpDetector().evaluate("X", cs) is None
 
 
 # ── PREDUMP ──────────────────────────────────────────────────────────────

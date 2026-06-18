@@ -23,7 +23,7 @@ class SwingDetector(Detector):
     name = "SWING"
     min_candles = 80
 
-    def __init__(self, score_threshold: int = 65) -> None:
+    def __init__(self, score_threshold: int = 70) -> None:
         self.score_threshold = score_threshold
 
     def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
@@ -54,8 +54,8 @@ class SwingDetector(Detector):
         score += 30
         reasons.append(f"{'Up' if is_long else 'Down'}trend: EMA20 {'>' if is_long else '<'} EMA50")
 
-        # 2. Pullback toward the fast EMA (within ~1 ATR)
-        near_ema = abs(price - fast) <= atr
+        # 2. Pullback toward the fast EMA (within ~0.75 ATR — tighter zone = higher quality)
+        near_ema = abs(price - fast) <= atr * 0.75
         if near_ema:
             score += 25
             reasons.append("Pullback to EMA20 — retest zone")

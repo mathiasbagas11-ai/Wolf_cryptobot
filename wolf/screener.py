@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Optional, Sequence
 
+from wolf import indicators as ind
 from wolf.detectors.base import Detector, SignalCandidate
 from wolf.exchange import BinanceClient
 from wolf.notify import TelegramNotifier
@@ -40,6 +41,7 @@ class Screener:
         context_provider=None,
         validator=None,
         veto_min_confidence: int = 70,
+        regime_hard_block: bool = False,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -51,6 +53,7 @@ class Screener:
         self._context_provider = context_provider
         self._validator = validator
         self._veto_min_confidence = veto_min_confidence
+        self._regime_hard_block = regime_hard_block
 
     @property
     def detector_names(self) -> list[str]:
@@ -59,6 +62,30 @@ class Screener:
     @property
     def universe_size(self) -> int:
         return len(self._universe)
+
+    def _btc_regime(self) -> str:
+        """Classify BTC market regime as BULL, BEAR, or NEUTRAL using EMA alignment.
+
+        BEAR regime blocks LONG signals when regime_hard_block is enabled —
+        the single biggest source of preventable losses (11.9% WR vs 31% avg).
+        """
+        try:
+            candles = self._client.get_klines("BTCUSDT", self._interval, self._candle_limit)
+            if not candles or len(candles) < 60:
+                return "NEUTRAL"
+            closes = [c.close for c in candles]
+            ema20 = ind.ema(closes, 20)
+            ema50 = ind.ema(closes, 50)
+            if not ema20 or not ema50:
+                return "NEUTRAL"
+            price = closes[-1]
+            if ema20[-1] > ema50[-1] and price > ema50[-1]:
+                return "BULL"
+            if ema20[-1] < ema50[-1] and price < ema50[-1]:
+                return "BEAR"
+        except Exception:
+            log.exception("BTC regime check failed")
+        return "NEUTRAL"
 
     def _build_context(self, symbol: str):
         if self._context_provider is None:
@@ -103,6 +130,11 @@ class Screener:
 
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""
+        # Compute BTC regime once per cycle (one extra API call, not per symbol).
+        btc_regime = self._btc_regime() if self._regime_hard_block else "NEUTRAL"
+        if self._regime_hard_block and btc_regime != "NEUTRAL":
+            log.info("Regime: BTC %s — %s", btc_regime, "blocking LONGs" if btc_regime == "BEAR" else "all clear")
+
         recorded = []
         for symbol in self._universe:
             candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
@@ -111,6 +143,10 @@ class Screener:
             context = self._build_context(symbol)
             candidate = self._best_candidate(symbol, candles, context)
             if not candidate:
+                continue
+            # Regime hard block: skip LONG signals when BTC is in bear regime.
+            if self._regime_hard_block and candidate.direction == "LONG" and btc_regime == "BEAR":
+                log.info("Regime block: %s LONG rejected (BTC BEAR)", candidate.symbol)
                 continue
             if not self._apply_validator(candidate, context):
                 continue
@@ -127,6 +163,7 @@ class Screener:
                 strategy=candidate.strategy,
                 entry_mode=candidate.entry_mode,
                 tps=candidate.tps,
+                btc_regime=btc_regime,
             )
             if signal is None:
                 continue

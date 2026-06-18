@@ -44,15 +44,17 @@ def test_context_provider_builds_from_client():
 
 # ── Context raises the score (and is purely additive) ─────────────────────
 def _prepump_candles():
+    # Alternating +0.4/-0.3 uptrend keeps RSI in 50-68 range (same as the
+    # detector test).  Straight uptrends push RSI to ~95 which fails the gate.
     cs = []
     p = 90.0
-    for i in range(41):
-        p += 0.4
-        cs.append(_c(i, p - 0.1, p + 0.3, p - 0.2, p, 100.0))
+    for i in range(50):
+        p = p + 0.4 if i % 2 == 0 else p - 0.3
+        cs.append(_c(i, p - 0.25, p + 0.35, p - 0.3, p, 100.0))
     base = cs[-1].close
-    for k in range(18):
-        cs.append(_c(41 + k, base, base + 0.25, base - 0.25, base + (0.05 if k % 2 else -0.05), 90.0))
-    cs.append(_c(59, base, base + 0.3, base - 0.2, base + 0.1, 250.0))
+    for k in range(9):
+        cs.append(_c(50 + k, base, base + 0.15, base - 0.15, base + (0.02 if k % 2 else -0.02), 85.0))
+    cs.append(_c(59, base, base + 0.4, base - 0.1, base + 0.2, 290.0))
     return cs
 
 

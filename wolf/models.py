@@ -132,6 +132,9 @@ class Signal:
     activated_at: Optional[str] = None
     tps_hit: list[int] = field(default_factory=list)
 
+    # Market context at signal creation
+    btc_regime: str = ""  # "BULL" | "BEAR" | "NEUTRAL" | ""
+
     # Terminal-only fields
     exit_price: Optional[float] = None
     exit_time: Optional[str] = None
