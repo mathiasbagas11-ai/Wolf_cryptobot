@@ -115,11 +115,11 @@ class Screener:
             return None
         return self._best_candidate(symbol, candles, self._build_context(symbol))
 
-    def _apply_validator(self, candidate: SignalCandidate, context) -> bool:
+    def _apply_validator(self, candidate: SignalCandidate, context, candles=()) -> bool:
         """Run the AI debate gate. Returns False if the signal is vetoed."""
         if self._validator is None:
             return True
-        verdict = self._validator.validate(candidate, context)
+        verdict = self._validator.validate(candidate, context, candles=candles)
         if verdict.rationale:
             # Prepend so the verdict survives the Signal's top-3 reasons cap.
             candidate.reasons = [f"AI[{verdict.decision} {verdict.confidence}%]: {verdict.rationale}"] + candidate.reasons
@@ -148,7 +148,7 @@ class Screener:
             if self._regime_hard_block and candidate.direction == "LONG" and btc_regime == "BEAR":
                 log.info("Regime block: %s LONG rejected (BTC BEAR)", candidate.symbol)
                 continue
-            if not self._apply_validator(candidate, context):
+            if not self._apply_validator(candidate, context, candles):
                 continue
             signal = self._tracker.record_signal(
                 symbol=candidate.symbol,

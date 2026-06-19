@@ -194,11 +194,13 @@ class AISettings:
     """AI debate-layer configuration."""
 
     enabled: bool = False
-    provider: str = "anthropic"
-    model: str = "claude-opus-4-8"
+    provider: str = "deepseek"
+    model: str = "deepseek-chat"
     # If a REJECT verdict at/above this confidence should veto the signal.
     veto_enabled: bool = True
     veto_min_confidence: int = 70
+    # Pass the last N candles to the AI as raw price data (0 = text-only mode).
+    chart_candles: int = 20
 
 
 @dataclass(frozen=True)
@@ -293,10 +295,11 @@ class Settings:
         )
         ai = AISettings(
             enabled=_env_bool("AI_DEBATE_ENABLED", False),
-            provider=_env_str("AI_PROVIDER", "anthropic"),
-            model=_env_str("CLAUDE_MODEL", "claude-opus-4-8"),
+            provider=_env_str("AI_PROVIDER", "deepseek"),
+            model=_env_str("AI_MODEL", "deepseek-chat"),
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),
+            chart_candles=_env_int("AI_CHART_CANDLES", 20),
         )
         risk = RiskSettings(
             regime_hard_block=_env_bool("REGIME_HARD_BLOCK", False),

@@ -17,9 +17,10 @@ blocks a signal, so the bot keeps working with the AI layer off.
 from __future__ import annotations
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 from wolf.ai.base import LLMClient, NullLLMClient
 from wolf.detectors.base import SignalCandidate
@@ -84,14 +85,57 @@ _ARBITER_SYSTEM = (
 )
 
 
-def _describe(candidate: SignalCandidate, context=None) -> str:
+def _chart_summary(candles: Sequence, n: int = 20) -> str:
+    """Build a compact OHLCV + indicator table for the last ``n`` candles.
+
+    Gives the AI actual price data to reason about, not just the detector's
+    pre-computed text labels.  Keeps the table small enough not to dominate
+    the prompt (one line per candle, ~60 chars each).
+    """
+    from wolf import indicators as ind
+
+    if not candles or n <= 0:
+        return ""
+
+    window = list(candles[-n:])
+    closes = [c.close for c in window]
+    rsi_vals = ind.rsi_series(closes, 14)
+
+    lines = [f"=== LAST {len(window)} × 15m CANDLES (oldest → newest) ==="]
+    lines.append("  bar   close     chg%    vol_ratio  rsi")
+
+    avg_vol = sum(c.volume for c in window[:-1]) / max(len(window) - 1, 1)
+
+    for i, c in enumerate(window):
+        chg = (c.close - c.open) / c.open * 100 if c.open else 0
+        vr = c.volume / avg_vol if avg_vol > 0 else 1.0
+        rsi_val = rsi_vals[i]
+        rsi_str = f"{rsi_val:.0f}" if not math.isnan(rsi_val) else " --"
+        marker = " ← signal bar" if i == len(window) - 1 else ""
+        lines.append(
+            f"  [{i - len(window) + 1:3d}]  {c.close:>9.4g}  {chg:>+5.1f}%   {vr:>4.1f}x      {rsi_str:>3}{marker}"
+        )
+
+    # Summary stats
+    highs = [c.high for c in window]
+    lows = [c.low for c in window]
+    lines.append(f"  Range: low {min(lows):.4g} — high {max(highs):.4g}")
+    last_rsi = next((v for v in reversed(rsi_vals) if not math.isnan(v)), None)
+    if last_rsi is not None:
+        lines.append(f"  RSI(14) at signal bar: {last_rsi:.1f}")
+
+    return "\n".join(lines)
+
+
+def _describe(candidate: SignalCandidate, context=None, candles: Sequence = ()) -> str:
     lines = [
         f"Symbol: {candidate.symbol}",
         f"Strategy: {candidate.strategy} ({candidate.signal_type})",
         f"Direction: {candidate.direction}",
         f"Entry: {candidate.entry_price:.6g}  TP: {candidate.tp:.6g}  SL: {candidate.sl:.6g}",
-        f"Score: {candidate.score} ({candidate.confluence_level})",
-        "Reasons:",
+        f"R:R ratio: {abs(candidate.tp - candidate.entry_price) / max(abs(candidate.entry_price - candidate.sl), 1e-9):.2f}",
+        f"Score: {candidate.score}/100 ({candidate.confluence_level})",
+        "Detector reasons:",
         *[f"  - {r}" for r in candidate.reasons],
     ]
     if context is not None:
@@ -99,18 +143,30 @@ def _describe(candidate: SignalCandidate, context=None) -> str:
             lines.append(f"Funding rate: {context.funding_rate:.4f}%")
         if getattr(context, "oi_change_pct", None) is not None:
             lines.append(f"Open-interest change: {context.oi_change_pct:+.2f}%")
+        if getattr(context, "btc_regime", None):
+            lines.append(f"BTC market regime: {context.btc_regime}")
+
+    if candles:
+        chart = _chart_summary(candles)
+        if chart:
+            lines.append("")
+            lines.append(chart)
+
     return "\n".join(lines)
 
 
 class DebateValidator(SignalValidator):
-    def __init__(self, client: Optional[LLMClient] = None) -> None:
+    def __init__(self, client: Optional[LLMClient] = None, chart_candles: int = 0) -> None:
         self._client = client or NullLLMClient()
+        self._chart_candles = chart_candles
 
-    def validate(self, candidate: SignalCandidate, context=None) -> Verdict:
+    def validate(self, candidate: SignalCandidate, context=None, candles: Sequence = ()) -> Verdict:
         if not self._client.available:
             return Verdict(decision=Decision.ABSTAIN)
 
-        setup = _describe(candidate, context)
+        # Use candles if chart mode is enabled and data is provided.
+        chart_data = candles if (self._chart_candles > 0 and candles) else ()
+        setup = _describe(candidate, context, chart_data)
         try:
             bull = self._client.complete(_BULL_SYSTEM, setup, max_tokens=512)
             bear = self._client.complete(_BEAR_SYSTEM, setup, max_tokens=512)

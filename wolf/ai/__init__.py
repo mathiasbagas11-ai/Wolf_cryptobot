@@ -16,6 +16,7 @@ __all__ = [
 def build_llm_client(provider: str, api_key: str, model: str):
     """Construct an :class:`LLMClient` for ``provider``.
 
+    Supported providers: ``anthropic``, ``deepseek``.
     Returns a :class:`NullLLMClient` when the provider is unknown or no key is
     available, so callers can always rely on a usable client object.
     """
@@ -23,4 +24,8 @@ def build_llm_client(provider: str, api_key: str, model: str):
         from wolf.ai.anthropic_client import AnthropicLLMClient
 
         return AnthropicLLMClient(api_key=api_key, model=model)
+    if provider == "deepseek" and api_key:
+        from wolf.ai.deepseek_client import DeepSeekLLMClient
+
+        return DeepSeekLLMClient(api_key=api_key, model=model)
     return NullLLMClient()

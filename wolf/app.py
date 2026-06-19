@@ -89,10 +89,12 @@ def build_application(settings: Settings | None = None) -> Application:
 
     validator = None
     if settings.ai.enabled:
-        llm = build_llm_client(
-            settings.ai.provider, settings.anthropic_api_key, settings.ai.model
+        _api_key = (
+            settings.deepseek_api_key if settings.ai.provider == "deepseek"
+            else settings.anthropic_api_key
         )
-        validator = DebateValidator(llm)
+        llm = build_llm_client(settings.ai.provider, _api_key, settings.ai.model)
+        validator = DebateValidator(llm, chart_candles=settings.ai.chart_candles)
 
     screener = Screener(
         client, tracker, default_detectors(), notifier=notifier,
