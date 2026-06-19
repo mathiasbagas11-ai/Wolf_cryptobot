@@ -25,3 +25,6 @@ coverage.xml
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code internal data
+.claude/
