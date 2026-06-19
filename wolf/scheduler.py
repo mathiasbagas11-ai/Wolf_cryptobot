@@ -121,10 +121,33 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
 
 
 def _post_news(app: Application) -> None:
-    """One news cycle: fetch fresh, synthesise if possible, else post the card."""
+    """One news cycle: fetch fresh, synthesise if possible, else post the card.
+    When a news_scanner is configured, also generate and announce NEWS signals."""
     items = app.news.fetch_new()
     if not items:
         return
+
+    scanner = getattr(app, "news_scanner", None)
+    if scanner is not None:
+        candidates = scanner.scan(items)
+        for candidate in candidates:
+            signal = app.tracker.record_signal(
+                symbol=candidate.symbol,
+                signal_type=candidate.signal_type,
+                direction=candidate.direction,
+                entry_price=candidate.entry_price,
+                tp=candidate.tp,
+                sl=candidate.sl,
+                score=candidate.score,
+                confluence_level=candidate.confluence_level,
+                reasons=candidate.reasons,
+                strategy=candidate.strategy,
+                entry_mode=candidate.entry_mode,
+                tps=candidate.tps,
+            )
+            if signal is not None:
+                app.notifier.announce_signal(signal)
+
     synth = getattr(app, "news_synth", None)
     if synth is not None and synth.available:
         brief = synth.build(items)

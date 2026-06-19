@@ -218,6 +218,7 @@ class TrackerSettings:
     timeout_scalp_h: int = 2
     timeout_swing_h: int = 24
     timeout_trap_h: int = 4  # liquidity-trap reversals resolve fast
+    timeout_news_h: int = 4  # news-driven signals expire quickly
     # Per-strategy dedup windows (minutes).  Tighter for fast setups (SCALP
     # expires in 2 h so there is no point blocking a fresh sweep for 30 min),
     # wider for slow setups (SWING holds 24 h, so 60 min avoids noise re-entries).
@@ -240,6 +241,7 @@ class TrackerSettings:
             "SCALP": self.timeout_scalp_h,
             "SWING": self.timeout_swing_h,
             "TRAP": self.timeout_trap_h,
+            "NEWS": self.timeout_news_h,
         }.get(signal_type.upper(), self.timeout_screener_h)
 
     def dedup_for(self, signal_type: str) -> int:
@@ -267,6 +269,8 @@ class NewsSettings:
     synthesis_enabled: bool = False
     narrator_provider: str = "deepseek"
     narrator_model: str = ""
+    # Generate trading signals from news headlines.
+    signals_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -328,6 +332,8 @@ class AISettings:
     # If a REJECT verdict at/above this confidence should veto the signal.
     veto_enabled: bool = True
     veto_min_confidence: int = 70
+    # Pass the last N candles to the AI as raw price data (0 = text-only mode).
+    chart_candles: int = 20
 
 
 @dataclass(frozen=True)
@@ -378,6 +384,9 @@ class Settings:
     # Display timezone for message timestamps (IANA name). Default WIB.
     timezone: str = "Asia/Jakarta"
 
+    # Minimum reward:risk ratio to emit a signal (lower quality trades dropped).
+    min_signal_rr: float = 1.5
+
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
     risk: RiskSettings = field(default_factory=RiskSettings)
@@ -418,6 +427,7 @@ class Settings:
             synthesis_enabled=_env_bool("NEWS_SYNTHESIS_ENABLED", False),
             narrator_provider=_env_str("NEWS_NARRATOR_PROVIDER", "deepseek"),
             narrator_model=_env_str("NEWS_NARRATOR_MODEL", ""),
+            signals_enabled=_env_bool("NEWS_SIGNALS_ENABLED", False),
         )
         reports = ReportsSettings(
             majors_enabled=_env_bool("MAJORS_ENABLED", False),
@@ -482,6 +492,7 @@ class Settings:
             ),
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),
+            chart_candles=_env_int("AI_CHART_CANDLES", 20),
         )
         exchanges = _env_csv("EXCHANGES") or ("binance", "okx", "bybit", "gate")
         return cls(
@@ -508,6 +519,7 @@ class Settings:
             supabase_anon_key=_env_str("SUPABASE_ANON_KEY"),
             log_level=_env_str("LOG_LEVEL", "INFO"),
             timezone=_env_str("TIMEZONE", "Asia/Jakarta"),
+            min_signal_rr=_env_float("MIN_SIGNAL_RR", 1.5),
             telegram=telegram,
             tracker=tracker,
             risk=risk,

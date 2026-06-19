@@ -6,6 +6,7 @@ from wolf.news.cryptocompare import CryptoCompareNews
 from wolf.news.hackernews import HackerNewsNews
 from wolf.news.reddit import RedditNews
 from wolf.news.service import NewsService
+from wolf.news.signal import NewsSignalScanner
 from wolf.news.synthesize import NewsSynthesizer
 
 #: Registry of available news providers by name.
@@ -23,6 +24,7 @@ __all__ = [
     "HackerNewsNews",
     "AggregateNewsSource",
     "NewsService",
+    "NewsSignalScanner",
     "NewsSynthesizer",
     "NEWS_REGISTRY",
     "build_news_source",
