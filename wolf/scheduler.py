@@ -67,8 +67,30 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
 
     # Crypto news: post fresh headlines to the News topic.
     if app.news is not None and app.notifier.enabled:
+        def _run_news():
+            items = app.news.fetch_new()
+            if items:
+                app.notifier.notify_news(items)
+            if app.news_scanner is not None:
+                for cand in app.news_scanner.scan(items):
+                    sig = app.tracker.record_signal(
+                        symbol=cand.symbol,
+                        signal_type=cand.signal_type,
+                        direction=cand.direction,
+                        entry_price=cand.entry_price,
+                        tp=cand.tp,
+                        sl=cand.sl,
+                        score=cand.score,
+                        confluence_level=cand.confluence_level,
+                        reasons=cand.reasons,
+                        strategy=cand.strategy,
+                        entry_mode=cand.entry_mode,
+                        tps=cand.tps,
+                    )
+                    if sig is not None:
+                        app.notifier.announce_signal(sig)
         scheduler.add_job(
-            _guarded(lambda: app.notifier.notify_news(app.news.fetch_new()), "news"),
+            _guarded(_run_news, "news"),
             "interval",
             minutes=app.settings.news.interval_min,
             id="news",

@@ -135,6 +135,7 @@ class TrackerSettings:
     timeout_predump_h: int = 12
     timeout_scalp_h: int = 2
     timeout_swing_h: int = 24
+    timeout_news_h: int = 4
     # Dedup window: skip an identical symbol+direction within this many minutes.
     dedup_minutes: int = 30
     # Keep at most this many resolved outcomes on disk.
@@ -147,6 +148,7 @@ class TrackerSettings:
             "PREDUMP": self.timeout_predump_h,
             "SCALP": self.timeout_scalp_h,
             "SWING": self.timeout_swing_h,
+            "NEWS": self.timeout_news_h,
         }.get(signal_type.upper(), self.timeout_screener_h)
 
 
@@ -158,6 +160,7 @@ class NewsSettings:
     provider: str = "cryptocompare"  # free, key-less
     interval_min: int = 30
     max_items: int = 3
+    signals_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -246,6 +249,8 @@ class Settings:
     # Display timezone for message timestamps (IANA name). Default WIB.
     timezone: str = "Asia/Jakarta"
 
+    min_signal_rr: float = 1.5
+
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
     ai: AISettings = field(default_factory=AISettings)
@@ -276,6 +281,7 @@ class Settings:
             provider=_env_str("NEWS_PROVIDER", "cryptocompare"),
             interval_min=_env_int("NEWS_INTERVAL_MIN", 30),
             max_items=_env_int("NEWS_MAX_ITEMS", 3),
+            signals_enabled=_env_bool("NEWS_SIGNALS_ENABLED", False),
         )
         reports = ReportsSettings(
             majors_enabled=_env_bool("MAJORS_ENABLED", False),
@@ -292,6 +298,7 @@ class Settings:
         tracker = TrackerSettings(
             dedup_minutes=_env_int("TRACKER_DEDUP_MINUTES", 30),
             max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", 500),
+            timeout_news_h=_env_int("TRACKER_TIMEOUT_NEWS_H", 4),
         )
         ai = AISettings(
             enabled=_env_bool("AI_DEBATE_ENABLED", False),
@@ -326,6 +333,7 @@ class Settings:
             supabase_anon_key=_env_str("SUPABASE_ANON_KEY"),
             log_level=_env_str("LOG_LEVEL", "INFO"),
             timezone=_env_str("TIMEZONE", "Asia/Jakarta"),
+            min_signal_rr=_env_float("MIN_SIGNAL_RR", 1.5),
             telegram=telegram,
             tracker=tracker,
             ai=ai,

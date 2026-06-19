@@ -42,6 +42,7 @@ class Screener:
         validator=None,
         veto_min_confidence: int = 70,
         regime_hard_block: bool = False,
+        min_rr: float = 1.5,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -54,6 +55,7 @@ class Screener:
         self._validator = validator
         self._veto_min_confidence = veto_min_confidence
         self._regime_hard_block = regime_hard_block
+        self._min_rr = min_rr
 
     @property
     def detector_names(self) -> list[str]:
@@ -115,11 +117,23 @@ class Screener:
             return None
         return self._best_candidate(symbol, candles, self._build_context(symbol))
 
-    def _apply_validator(self, candidate: SignalCandidate, context, candles=()) -> bool:
+    def _fetch_tf_candles(self, symbol: str) -> dict:
+        """Fetch higher-TF candles for AI multi-timeframe context."""
+        tf_candles: dict = {}
+        for tf in ("1d", "4h", "1h", "30m"):
+            try:
+                c = self._client.get_klines(symbol, tf, 50)
+                if c:
+                    tf_candles[tf] = c
+            except Exception:
+                pass
+        return tf_candles
+
+    def _apply_validator(self, candidate: SignalCandidate, context, candles=(), tf_candles: dict = {}) -> bool:
         """Run the AI debate gate. Returns False if the signal is vetoed."""
         if self._validator is None:
             return True
-        verdict = self._validator.validate(candidate, context, candles=candles)
+        verdict = self._validator.validate(candidate, context, candles=candles, tf_candles=tf_candles)
         if verdict.rationale:
             # Prepend so the verdict survives the Signal's top-3 reasons cap.
             candidate.reasons = [f"AI[{verdict.decision} {verdict.confidence}%]: {verdict.rationale}"] + candidate.reasons
@@ -148,7 +162,13 @@ class Screener:
             if self._regime_hard_block and candidate.direction == "LONG" and btc_regime == "BEAR":
                 log.info("Regime block: %s LONG rejected (BTC BEAR)", candidate.symbol)
                 continue
-            if not self._apply_validator(candidate, context, candles):
+            # Minimum R:R gate.
+            rr = abs(candidate.tp - candidate.entry_price) / max(abs(candidate.entry_price - candidate.sl), 1e-9)
+            if rr < self._min_rr:
+                log.debug("Skip %s %s: R:R %.2f < %.1f", candidate.symbol, candidate.direction, rr, self._min_rr)
+                continue
+            tf_candles = self._fetch_tf_candles(symbol) if self._validator is not None else {}
+            if not self._apply_validator(candidate, context, candles, tf_candles):
                 continue
             signal = self._tracker.record_signal(
                 symbol=candidate.symbol,

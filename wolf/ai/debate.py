@@ -127,7 +127,45 @@ def _chart_summary(candles: Sequence, n: int = 20) -> str:
     return "\n".join(lines)
 
 
-def _describe(candidate: SignalCandidate, context=None, candles: Sequence = ()) -> str:
+_MTF_TIMEFRAMES = ("1d", "4h", "1h", "30m")
+
+
+def _multi_tf_summary(tf_candles: dict) -> str:
+    """Compact per-timeframe trend table for the AI (1D → 30M)."""
+    from wolf import indicators as ind
+
+    lines = ["=== MULTI-TIMEFRAME OVERVIEW ==="]
+    for tf in _MTF_TIMEFRAMES:
+        candles = tf_candles.get(tf) or []
+        if not candles or len(candles) < 10:
+            continue
+        closes = [c.close for c in candles]
+        n = len(closes)
+        price = closes[-1]
+        chg = (closes[-1] - closes[-2]) / closes[-2] * 100 if n >= 2 else 0.0
+        ema20 = ind.ema(closes, min(20, n - 1))
+        ema50 = ind.ema(closes, min(50, n - 1))
+        trend = "→ NEUTRAL"
+        if ema20 and ema50:
+            if ema20[-1] > ema50[-1] and price > ema20[-1]:
+                trend = "↑ BULL"
+            elif ema20[-1] < ema50[-1] and price < ema20[-1]:
+                trend = "↓ BEAR"
+            elif ema20[-1] > ema50[-1]:
+                trend = "↗ BULL/PULL"
+            else:
+                trend = "↘ BEAR/PULL"
+        rsi_str = ""
+        if n >= 15:
+            rsi_vals = ind.rsi_series(closes[-20:], 14)
+            last_rsi = next((v for v in reversed(rsi_vals) if not math.isnan(v)), None)
+            if last_rsi is not None:
+                rsi_str = f"  RSI {last_rsi:.0f}"
+        lines.append(f"  {tf.upper():>3s}  {price:.4g}  {chg:+.2f}%  {trend}{rsi_str}")
+    return "\n".join(lines)
+
+
+def _describe(candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> str:
     lines = [
         f"Symbol: {candidate.symbol}",
         f"Strategy: {candidate.strategy} ({candidate.signal_type})",
@@ -146,6 +184,12 @@ def _describe(candidate: SignalCandidate, context=None, candles: Sequence = ()) 
         if getattr(context, "btc_regime", None):
             lines.append(f"BTC market regime: {context.btc_regime}")
 
+    if tf_candles:
+        mtf = _multi_tf_summary(tf_candles)
+        if mtf:
+            lines.append("")
+            lines.append(mtf)
+
     if candles:
         chart = _chart_summary(candles)
         if chart:
@@ -160,13 +204,13 @@ class DebateValidator(SignalValidator):
         self._client = client or NullLLMClient()
         self._chart_candles = chart_candles
 
-    def validate(self, candidate: SignalCandidate, context=None, candles: Sequence = ()) -> Verdict:
+    def validate(self, candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> Verdict:
         if not self._client.available:
             return Verdict(decision=Decision.ABSTAIN)
 
         # Use candles if chart mode is enabled and data is provided.
         chart_data = candles if (self._chart_candles > 0 and candles) else ()
-        setup = _describe(candidate, context, chart_data)
+        setup = _describe(candidate, context, chart_data, tf_candles=tf_candles)
         try:
             bull = self._client.complete(_BULL_SYSTEM, setup, max_tokens=512)
             bear = self._client.complete(_BEAR_SYSTEM, setup, max_tokens=512)

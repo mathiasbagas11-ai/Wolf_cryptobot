@@ -3,6 +3,7 @@
 from wolf.news.base import NewsItem, NewsSource
 from wolf.news.cryptocompare import CryptoCompareNews
 from wolf.news.service import NewsService
+from wolf.news.signal import NewsSignalScanner
 
 #: Registry of available news providers by name.
 NEWS_REGISTRY = {
@@ -15,6 +16,7 @@ __all__ = [
     "CryptoCompareNews",
     "NewsService",
     "NEWS_REGISTRY",
+    "NewsSignalScanner",
 ]
 
 

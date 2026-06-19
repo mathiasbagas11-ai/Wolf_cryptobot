@@ -142,6 +142,12 @@ class TelegramNotifier:
     def _dir_emoji(direction: str) -> str:
         return "🟢" if direction.upper() == "LONG" else "🔴"
 
+    @staticmethod
+    def _signal_type_emoji(signal_type: str, direction: str) -> str:
+        if signal_type.upper() == "NEWS":
+            return "📰"
+        return "🟢" if direction.upper() == "LONG" else "🔴"
+
     def _signal_card(self, s: Signal) -> str:
         is_long = s.is_long
         ladder = s.tp_ladder or [{"level": 1, "price": s.tp}]
@@ -156,7 +162,7 @@ class TelegramNotifier:
         rr = reward / risk if risk else 0.0
         reasons = "\n".join(f"• {esc(r)}" for r in s.reasons) or "• —"
         return (
-            f"{self._dir_emoji(s.direction)} <b>NEW SIGNAL · {esc(s.signal_type)}</b>\n"
+            f"{self._signal_type_emoji(s.signal_type, s.direction)} <b>NEW SIGNAL · {esc(s.signal_type)}</b>\n"
             f"<b>{esc(s.symbol)}</b> · {esc(s.direction)}\n{DIVIDER}\n"
             f"💵 Entry  <code>{fmt_price(s.entry_price)}</code>\n"
             + "\n".join(tp_lines) + "\n"

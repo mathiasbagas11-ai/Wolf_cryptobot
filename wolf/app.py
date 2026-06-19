@@ -22,6 +22,7 @@ from wolf.exchange import (
 )
 from wolf.market import ContextProvider
 from wolf.news import NewsService, build_news_source
+from wolf.news.signal import NewsSignalScanner
 from wolf.notify import TelegramNotifier
 from wolf.reports import MajorsReporter, MarketPulse, MarketRadar, WhaleTracker
 from wolf.screener import Screener
@@ -38,6 +39,7 @@ class Application:
     tracker: Tracker
     screener: Screener
     news: Optional[NewsService] = None
+    news_scanner: Optional[NewsSignalScanner] = None
     majors: Optional[MajorsReporter] = None
     radar: Optional[MarketRadar] = None
     pulse: Optional[MarketPulse] = None
@@ -102,6 +104,7 @@ def build_application(settings: Settings | None = None) -> Application:
         validator=validator,
         veto_min_confidence=settings.ai.veto_min_confidence,
         regime_hard_block=settings.risk.regime_hard_block,
+        min_rr=settings.min_signal_rr,
     )
 
     news = None
@@ -109,6 +112,10 @@ def build_application(settings: Settings | None = None) -> Application:
         source = build_news_source(settings.news.provider, timeout=settings.http_timeout)
         if source is not None:
             news = NewsService(source, store, max_items=settings.news.max_items)
+
+    news_scanner = None
+    if settings.news.signals_enabled and news is not None:
+        news_scanner = NewsSignalScanner(client, universe=set(screener._universe))
 
     r = settings.reports
     tz = settings.timezone
@@ -125,6 +132,7 @@ def build_application(settings: Settings | None = None) -> Application:
         tracker=tracker,
         screener=screener,
         news=news,
+        news_scanner=news_scanner,
         majors=majors,
         radar=radar,
         pulse=pulse,

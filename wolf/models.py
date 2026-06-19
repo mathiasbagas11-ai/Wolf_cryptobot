@@ -30,6 +30,7 @@ class SignalType(str, Enum):
     SCALP = "SCALP"
     SWING = "SWING"
     CONFIRMED = "CONFIRMED"
+    NEWS = "NEWS"
 
 
 class EntryMode(str, Enum):
