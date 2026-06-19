@@ -73,9 +73,9 @@ class _FixedDetector(Detector):
             return None
         entry = candles[-1].close
         if self._direction == "LONG":
-            tp, sl = entry * 1.05, entry * 0.95
+            tp, sl = entry * 1.10, entry * 0.95  # R:R ~2:1, clears min_rr=1.5
         else:
-            tp, sl = entry * 0.95, entry * 1.05
+            tp, sl = entry * 0.90, entry * 1.05
         return SignalCandidate(
             symbol=symbol,
             signal_type=self._det_name,

@@ -67,6 +67,7 @@ class Screener:
         account=None,
         risk: Optional[RiskSettings] = None,
         universe_provider=None,
+        min_rr: float = 1.5,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -82,6 +83,7 @@ class Screener:
         self._account = account
         self._risk = risk or RiskSettings()
         self._universe_provider = universe_provider
+        self._min_rr = min_rr
 
     @property
     def detector_names(self) -> list[str]:
@@ -170,7 +172,19 @@ class Screener:
         features = self._build_features(candles)
         return self._best_candidate(symbol, candles, self._build_context(symbol), features)
 
-    def _apply_validator(self, candidate: SignalCandidate, context) -> None:
+    def _fetch_tf_candles(self, symbol: str) -> dict:
+        """Fetch higher-TF candles for AI multi-timeframe context."""
+        tf_candles: dict = {}
+        for tf in ("1d", "4h", "1h", "30m"):
+            try:
+                c = self._client.get_klines(symbol, tf, 50)
+                if c:
+                    tf_candles[tf] = c
+            except Exception:
+                pass
+        return tf_candles
+
+    def _apply_validator(self, candidate: SignalCandidate, context, candles=(), tf_candles: dict = {}) -> None:
         """Run the AI debate and annotate the candidate. Monitor mode: never blocks.
 
         The verdict is stored on the candidate (and later the Signal) so we can
@@ -178,7 +192,7 @@ class Screener:
         """
         if self._validator is None:
             return
-        verdict = self._validator.validate(candidate, context)
+        verdict = self._validator.validate(candidate, context, candles=candles, tf_candles=tf_candles)
         candidate.ai_verdict = verdict.decision
         candidate.ai_confidence = verdict.confidence
         candidate.ai_rationale = verdict.rationale
@@ -286,7 +300,12 @@ class Screener:
                 continue
             if self._gate_candidate(candidate, regime, weak):
                 continue
-            self._apply_validator(candidate, context)
+            rr = abs(candidate.tp - candidate.entry_price) / max(abs(candidate.entry_price - candidate.sl), 1e-9)
+            if rr < self._min_rr:
+                log.debug("Skip %s %s: R:R %.2f < %.1f", candidate.symbol, candidate.direction, rr, self._min_rr)
+                continue
+            tf_candles = self._fetch_tf_candles(symbol) if self._validator is not None else {}
+            self._apply_validator(candidate, context, candles, tf_candles)
             signal = self._tracker.record_signal(
                 symbol=candidate.symbol,
                 signal_type=candidate.signal_type,

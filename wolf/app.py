@@ -25,6 +25,7 @@ from wolf.market import ContextProvider
 from wolf.regime import RegimeProvider
 from wolf.universe import UniverseProvider
 from wolf.news import NewsService, NewsSynthesizer, build_news_source
+from wolf.news.signal import NewsSignalScanner
 from wolf.notify import TelegramNotifier
 from wolf.reports import (
     FlowReporter,
@@ -48,6 +49,7 @@ class Application:
     screener: Screener
     news: Optional[NewsService] = None
     news_synth: Optional[NewsSynthesizer] = None
+    news_scanner: Optional[NewsSignalScanner] = None
     majors: Optional[MajorsReporter] = None
     radar: Optional[MarketRadar] = None
     pulse: Optional[MarketPulse] = None
@@ -115,6 +117,7 @@ def build_application(settings: Settings | None = None) -> Application:
             bull=_role_client(settings.ai.bull),
             bear=_role_client(settings.ai.bear),
             arbiter=_role_client(settings.ai.arbiter),
+            chart_candles=settings.ai.chart_candles,
         )
         # Reuse the (cheap) arbiter model to narrate market/session reports.
         analysis_llm = _role_client(settings.ai.arbiter)
@@ -141,6 +144,7 @@ def build_application(settings: Settings | None = None) -> Application:
         account=account,
         risk=settings.risk,
         universe_provider=universe_provider,
+        min_rr=settings.min_signal_rr,
     )
 
     news = None
@@ -155,6 +159,10 @@ def build_application(settings: Settings | None = None) -> Application:
                 n.narrator_provider, settings.api_key_for(n.narrator_provider), n.narrator_model
             )
             news_synth = NewsSynthesizer(narrator)
+
+    news_scanner = None
+    if settings.news.signals_enabled and news is not None:
+        news_scanner = NewsSignalScanner(client, universe=set(screener.current_universe()))
 
     r = settings.reports
     tz = settings.timezone
@@ -174,6 +182,7 @@ def build_application(settings: Settings | None = None) -> Application:
         screener=screener,
         news=news,
         news_synth=news_synth,
+        news_scanner=news_scanner,
         majors=majors,
         radar=radar,
         pulse=pulse,
