@@ -25,7 +25,7 @@ class SwingDetector(Detector):
     name = "SWING"
     min_candles = 80
 
-    def __init__(self, score_threshold: int = 70) -> None:
+    def __init__(self, score_threshold: int = 82) -> None:
         self.score_threshold = score_threshold
 
     def evaluate(
@@ -61,6 +61,18 @@ class SwingDetector(Detector):
         is_long = uptrend
         direction = "LONG" if is_long else "SHORT"
         last = candles[-1]
+
+        # Hard gate: pullback must actually reach EMA20 (within 0.5 ATR, was 1 ATR)
+        # A 1 ATR window is too wide — it catches random mid-trend noise.
+        if abs(price - fast) > atr * 0.5:
+            return None
+
+        # Hard gate: RSI must show a genuine pullback compression, not overbought entry
+        if is_long and not (35 <= rsi <= 65):
+            return None
+        if not is_long and not (35 <= rsi <= 65):
+            return None
+
         score = 0
         reasons: list[str] = []
 
@@ -68,11 +80,9 @@ class SwingDetector(Detector):
         score += 30
         reasons.append(f"{'Up' if is_long else 'Down'}trend: EMA20 {'>' if is_long else '<'} EMA50")
 
-        # 2. Pullback toward the fast EMA (within 1 ATR)
-        near_ema = abs(price - fast) <= atr
-        if near_ema:
-            score += 20
-            reasons.append("Pullback to EMA20 — retest zone")
+        # 2. Pullback to EMA20 (now a hard gate above; still rewards precision)
+        score += 20
+        reasons.append("Pullback to EMA20 — retest zone")
 
         # 3. Fair Value Gap at the pullback — highest-quality structural entry
         fvgs = ind.find_fvgs(candles, lookback=60)
@@ -94,28 +104,28 @@ class SwingDetector(Detector):
             score += 15
             reasons.append(f"Price near VWAP {vwap_val:.6g} — fair-value anchor")
 
-        # 5. Rejection candle in trend direction
+        # 5. Rejection candle in trend direction (wick ratio tightened to 45%)
         rng = last.high - last.low
         if rng > 0:
             lower_wick = min(last.open, last.close) - last.low
             upper_wick = last.high - max(last.open, last.close)
-            if is_long and last.close > last.open and lower_wick / rng >= 0.4:
+            if is_long and last.close > last.open and lower_wick / rng >= 0.45:
                 score += 20
                 reasons.append("Bullish rejection candle — lower-wick demand")
-            elif not is_long and last.close < last.open and upper_wick / rng >= 0.4:
+            elif not is_long and last.close < last.open and upper_wick / rng >= 0.45:
                 score += 20
                 reasons.append("Bearish rejection candle — upper-wick supply")
 
         # 6. Volume on the rejection candle (confirms institutional participation)
         vr = ind.volume_ratio(candles, 20)
-        if not math.isnan(vr) and vr >= 1.2:
-            score += 10
+        if not math.isnan(vr) and vr >= 1.3:
+            score += 15
             reasons.append(f"Rejection volume {vr:.1f}x average")
 
-        # 7. Not over-extended
-        if (is_long and rsi < 70) or (not is_long and rsi > 30):
-            score += 5
-            reasons.append(f"RSI {rsi:.0f} — room to run")
+        # 7. RSI compression — already gated 35-65 above; reward the ideal band
+        if (is_long and 40 <= rsi <= 55) or (not is_long and 45 <= rsi <= 60):
+            score += 10
+            reasons.append(f"RSI {rsi:.0f} — pullback compression ideal zone")
 
         if score < self.score_threshold:
             return None

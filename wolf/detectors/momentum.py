@@ -29,13 +29,13 @@ class MomentumBreakoutDetector(Detector):
 
     def __init__(
         self,
-        rsi_long: float = 58.0,
-        rsi_short: float = 42.0,
-        min_volume_ratio: float = 1.8,
-        atr_sl_mult: float = 0.75,
-        atr_tp_mults: tuple[float, ...] = (1.5, 3.0),
-        score_threshold: int = 70,
-        breakout_lookback: int = 30,
+        rsi_long: float = 60.0,
+        rsi_short: float = 40.0,
+        min_volume_ratio: float = 2.0,
+        atr_sl_mult: float = 1.5,
+        atr_tp_mults: tuple[float, ...] = (2.5, 4.0),
+        score_threshold: int = 80,
+        breakout_lookback: int = 50,
     ) -> None:
         self.rsi_long = rsi_long
         self.rsi_short = rsi_short
@@ -57,7 +57,9 @@ class MomentumBreakoutDetector(Detector):
             hist = features.macd_hist
             vol_ratio = features.vol_ratio
             atr = features.atr
-            if math.isnan(hist):
+            fast = features.ema20_last
+            slow = features.ema50_last
+            if any(math.isnan(x) for x in (hist, fast, slow)):
                 return None
         else:
             closes = ind.closes(candles)
@@ -66,10 +68,19 @@ class MomentumBreakoutDetector(Detector):
             _, _, hist = ind.macd(closes)
             vol_ratio = ind.volume_ratio(candles, 20)
             atr = ind.atr(candles, 14)
+            ema20 = ind.ema(closes, 20)
+            ema50 = ind.ema(closes, 50)
             if any(math.isnan(x) for x in (rsi, hist, vol_ratio, atr)) or atr <= 0:
                 return None
+            if not ema20 or not ema50:
+                return None
+            fast, slow = ema20[-1], ema50[-1]
 
-        # Structural breakout reference: 30-candle high/low (stronger level)
+        # Hard gate: breakout must align with the EMA trend
+        if not (fast > slow or fast < slow):  # degenerate case
+            return None
+
+        # Structural breakout reference: 50-candle high/low (stronger level)
         window = candles[-self.breakout_lookback - 1 : -1]
         recent_high = max(c.high for c in window)
         recent_low = min(c.low for c in window)
@@ -78,14 +89,14 @@ class MomentumBreakoutDetector(Detector):
         short_break = price < recent_low
 
         direction: Optional[str] = None
-        if long_break and rsi >= self.rsi_long:
+        if long_break and rsi >= self.rsi_long and fast > slow:
             direction = "LONG"
-        elif short_break and rsi <= self.rsi_short:
+        elif short_break and rsi <= self.rsi_short and fast < slow:
             direction = "SHORT"
         else:
             return None
 
-        # Hard gates — all three must pass before any scoring
+        # Hard gates — all must pass before any scoring
         if (direction == "LONG" and hist <= 0) or (direction == "SHORT" and hist >= 0):
             return None  # MACD must confirm the breakout
         if vol_ratio < self.min_volume_ratio:
@@ -110,7 +121,10 @@ class MomentumBreakoutDetector(Detector):
             score += 10
             reasons.append(f"Volume {vol_ratio:.1f}x average")
 
-        # VWAP context: breakout should be with the fair-value bias (+20/-10)
+        # VWAP context: breakout should be with the fair-value bias (+20)
+        # Breakouts against VWAP are not penalised here — the EMA trend gate
+        # already ensures direction alignment; counter-VWAP breakouts in a
+        # strong trend can still be valid, so we only reward, never punish.
         vwap_val = ind.vwap(candles, lookback=40)
         if not math.isnan(vwap_val):
             if direction == "LONG" and price > vwap_val:
@@ -119,8 +133,6 @@ class MomentumBreakoutDetector(Detector):
             elif direction == "SHORT" and price < vwap_val:
                 score += 20
                 reasons.append(f"Breaking below VWAP {vwap_val:.6g} — momentum with fair value")
-            else:
-                score -= 10  # breaking against fair value — reduce confidence
 
         # FvG launch zone: breakout starting from inside an imbalance (+15)
         fvgs = ind.find_fvgs(candles, lookback=40)
@@ -150,15 +162,14 @@ class MomentumBreakoutDetector(Detector):
         if score < self.score_threshold:
             return None
 
-        # RETEST_WAIT: enter at the broken structural level (now support/resistance),
-        # not at the breakout candle close — avoids chasing and tightens the SL.
+        # MOMENTUM_NOW: enter at the breakout candle close — the confirmation bar.
+        # Waiting for a retest to the broken level often means the breakout failed.
+        entry = price
         if direction == "LONG":
-            entry = recent_high
-            sl = recent_high - atr * self.atr_sl_mult
+            sl = entry - atr * self.atr_sl_mult
             tps = [{"level": i + 1, "price": entry + atr * m} for i, m in enumerate(self.atr_tp_mults)]
         else:
-            entry = recent_low
-            sl = recent_low + atr * self.atr_sl_mult
+            sl = entry + atr * self.atr_sl_mult
             tps = [{"level": i + 1, "price": entry - atr * m} for i, m in enumerate(self.atr_tp_mults)]
 
         return SignalCandidate(
@@ -172,6 +183,6 @@ class MomentumBreakoutDetector(Detector):
             strategy=self.name,
             reasons=reasons,
             confluence_level="HIGH" if score >= 85 else "MEDIUM",
-            entry_mode="RETEST_WAIT",
+            entry_mode="MOMENTUM_NOW",
             tps=tps,
         )
