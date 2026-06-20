@@ -62,9 +62,9 @@ class SwingDetector(Detector):
         direction = "LONG" if is_long else "SHORT"
         last = candles[-1]
 
-        # Hard gate: pullback must actually reach EMA20 (within 0.5 ATR, was 1 ATR)
-        # A 1 ATR window is too wide — it catches random mid-trend noise.
-        if abs(price - fast) > atr * 0.5:
+        # Hard gate: pullback must actually reach EMA20 (within 0.7 ATR)
+        # Tighter than the old 1 ATR but still allows normal pullback noise.
+        if abs(price - fast) > atr * 0.7:
             return None
 
         # Hard gate: RSI must show a genuine pullback compression, not overbought entry
