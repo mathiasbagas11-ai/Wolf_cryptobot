@@ -25,7 +25,7 @@ class SwingDetector(Detector):
     name = "SWING"
     min_candles = 80
 
-    def __init__(self, score_threshold: int = 82) -> None:
+    def __init__(self, score_threshold: int = 80) -> None:
         self.score_threshold = score_threshold
 
     def evaluate(
@@ -62,27 +62,61 @@ class SwingDetector(Detector):
         direction = "LONG" if is_long else "SHORT"
         last = candles[-1]
 
+        # Hard gate: EMA50 must be genuinely sloping in the trade direction.
+        # EMA20 > EMA50 can happen in a dead-cat bounce where EMA50 is still
+        # falling — the slope check filters those out.
+        closes_seq = ind.closes(candles)
+        ema50_series = ind.ema(closes_seq, 50)
+        if not ema50_series or len(ema50_series) < 15:
+            return None
+        ema50_rising = ema50_series[-1] > ema50_series[-10]
+        if is_long and not ema50_rising:
+            return None
+        if not is_long and ema50_rising:
+            return None
+
         # Hard gate: pullback must actually reach EMA20 (within 0.7 ATR)
-        # Tighter than the old 1 ATR but still allows normal pullback noise.
         if abs(price - fast) > atr * 0.7:
             return None
 
-        # Hard gate: RSI must show a genuine pullback compression, not overbought entry
+        # Hard gate: RSI must show genuine pullback compression
         if is_long and not (35 <= rsi <= 65):
             return None
         if not is_long and not (35 <= rsi <= 65):
             return None
 
+        # Hard gate: require a directional rejection candle at the EMA20 level.
+        # Without actual price rejection here, this is just a falling knife entry.
+        rng = last.high - last.low
+        if rng <= 0:
+            return None
+        lower_wick = min(last.open, last.close) - last.low
+        upper_wick = last.high - max(last.open, last.close)
+        has_rejection = (
+            (is_long and last.close > last.open and lower_wick / rng >= 0.45) or
+            (not is_long and last.close < last.open and upper_wick / rng >= 0.45)
+        )
+        if not has_rejection:
+            return None
+
         score = 0
         reasons: list[str] = []
 
-        # 1. Trend alignment
+        # 1. Trend alignment (EMA slope already confirmed above)
         score += 30
-        reasons.append(f"{'Up' if is_long else 'Down'}trend: EMA20 {'>' if is_long else '<'} EMA50")
+        reasons.append(f"{'Up' if is_long else 'Down'}trend: EMA20 {'>' if is_long else '<'} EMA50 (slope confirmed)")
 
-        # 2. Pullback to EMA20 (now a hard gate above; still rewards precision)
+        # 2. Pullback to EMA20 (hard gate above; rewards precision)
         score += 20
         reasons.append("Pullback to EMA20 — retest zone")
+
+        # 3. Rejection candle confirmed (mandatory above); reward strong wicks
+        if (is_long and lower_wick / rng >= 0.60) or (not is_long and upper_wick / rng >= 0.60):
+            score += 15
+            reasons.append("Strong rejection candle — deep wick demand/supply")
+        else:
+            score += 5
+            reasons.append("Rejection candle — wick demand/supply")
 
         # 3. Fair Value Gap at the pullback — highest-quality structural entry
         fvgs = ind.find_fvgs(candles, lookback=60)
@@ -103,18 +137,6 @@ class SwingDetector(Detector):
         if not math.isnan(vwap_val) and abs(price - vwap_val) <= atr:
             score += 15
             reasons.append(f"Price near VWAP {vwap_val:.6g} — fair-value anchor")
-
-        # 5. Rejection candle in trend direction (wick ratio tightened to 45%)
-        rng = last.high - last.low
-        if rng > 0:
-            lower_wick = min(last.open, last.close) - last.low
-            upper_wick = last.high - max(last.open, last.close)
-            if is_long and last.close > last.open and lower_wick / rng >= 0.45:
-                score += 20
-                reasons.append("Bullish rejection candle — lower-wick demand")
-            elif not is_long and last.close < last.open and upper_wick / rng >= 0.45:
-                score += 20
-                reasons.append("Bearish rejection candle — upper-wick supply")
 
         # 6. Volume on the rejection candle (confirms institutional participation)
         vr = ind.volume_ratio(candles, 20)
