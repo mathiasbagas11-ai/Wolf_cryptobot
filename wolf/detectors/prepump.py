@@ -30,7 +30,7 @@ class PrePumpDetector(Detector):
     name = "PREPUMP"
     min_candles = 60
 
-    def __init__(self, score_threshold: int = 70, squeeze_ratio: float = 1.15) -> None:
+    def __init__(self, score_threshold: int = 78, squeeze_ratio: float = 1.15) -> None:
         self.score_threshold = score_threshold
         # Current BB width must be within this multiple of the recent minimum.
         self.squeeze_ratio = squeeze_ratio
@@ -66,6 +66,23 @@ class PrePumpDetector(Detector):
             bb_widths_seq = ind.bb_width_series(closes, 20)
             _, _, _, bb_width_now = ind.bollinger_bands(closes, 20)
 
+        # Hard gate: EMA20 > EMA50 AND EMA50 rising — filters dead-cat bounces.
+        # Pre-pump accumulation requires an established uptrend, not just a temporary cross.
+        if math.isnan(ema50_last):
+            return None
+        closes_seq = ind.closes(candles)
+        ema20_series = ind.ema(closes_seq, 20)
+        ema50_series = ind.ema(closes_seq, 50)
+        if not ema20_series or not ema50_series or len(ema50_series) < 15:
+            return None
+        ema20_last_val = ema20_series[-1]
+        if ema20_last_val <= ema50_last:
+            return None  # not in uptrend
+        if price <= ema50_last:
+            return None  # price below EMA50 — not in the right zone
+        if ema50_series[-1] <= ema50_series[-10]:
+            return None  # EMA50 declining — dead-cat bounce, not accumulation
+
         score = 0
         reasons: list[str] = []
 
@@ -85,13 +102,14 @@ class PrePumpDetector(Detector):
             score += 12
             reasons.append(f"Volume building: {vr:.1f}x average")
 
-        # 3. Momentum (RSI rising from neutral + MACD up)
-        if 50 <= rsi < 68 and hist > 0:
+        # 3. Momentum — MACD positive already enforced as hard gate above;
+        #    reward when RSI is also in the ideal building zone (50-68).
+        if 50 <= rsi < 68:
             score += 20
-            reasons.append(f"Momentum building: RSI {rsi:.0f}, MACD positive")
-        elif hist > 0:
+            reasons.append(f"Momentum building: RSI {rsi:.0f} in accumulation zone, MACD positive")
+        else:
             score += 8
-            reasons.append("MACD histogram positive")
+            reasons.append(f"MACD positive, RSI {rsi:.0f}")
 
         # 4. Money flow — bullish divergence
         div = struct.rsi_divergence(candles, lookback=25)
