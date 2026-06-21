@@ -320,15 +320,17 @@ class FlowSettings:
 class AISettings:
     """AI debate-layer configuration.
 
-    Each debate role runs on its own (cheap) provider so the layer costs a
-    fraction of Claude: DeepSeek argues the bull case, Groq the bear case, and
-    Hermes arbitrates. Any role can be repointed via env without code changes.
+    All three roles default to DeepSeek so a single DEEPSEEK_API_KEY is enough
+    to run the full debate. Override individual roles via env vars if you want
+    the multi-provider setup (e.g. Groq for bear, Hermes for arbiter).
+
+    Enable with: AI_DEBATE_ENABLED=true  (not AI_ENABLED)
     """
 
     enabled: bool = False
     bull: DebateRole = DebateRole("deepseek", "deepseek-chat")
-    bear: DebateRole = DebateRole("groq", "llama-3.3-70b-versatile")
-    arbiter: DebateRole = DebateRole("hermes", "nousresearch/hermes-3-llama-3.1-405b")
+    bear: DebateRole = DebateRole("deepseek", "deepseek-chat")
+    arbiter: DebateRole = DebateRole("deepseek", "deepseek-chat")
     # If a REJECT verdict at/above this confidence should veto the signal.
     veto_enabled: bool = True
     veto_min_confidence: int = 70
