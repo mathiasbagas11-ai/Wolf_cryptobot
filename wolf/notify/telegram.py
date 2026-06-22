@@ -111,7 +111,7 @@ class TelegramNotifier:
         elif event == "TP_HIT":
             self.send(self._tp_text(signal, info), self._settings.route_entry())
         elif event == "RESOLVED":
-            self.send(self._resolved_text(signal), self._settings.route_trade_report())
+            self.send(self._resolved_text(signal, info), self._settings.route_trade_report())
 
     def notify_stats(self, stats: dict) -> None:
         self.send(self._stats_card(stats), self._settings.route_stats())
@@ -155,6 +155,13 @@ class TelegramNotifier:
         reward = abs(ladder[-1]["price"] - s.entry_price)
         rr = reward / risk if risk else 0.0
         reasons = "\n".join(f"• {esc(r)}" for r in s.reasons) or "• —"
+        ai_line = ""
+        if s.ai_decision:
+            verdict_emoji = {"CONFIRM": "✅", "REJECT": "⛔", "NEUTRAL": "➖"}.get(s.ai_decision, "🧠")
+            ai_line = f"🧠 AI: {verdict_emoji} {esc(s.ai_decision)} {s.ai_confidence}%"
+            if s.ai_rationale:
+                ai_line += f" — {esc(s.ai_rationale)}"
+            ai_line += "\n"
         return (
             f"{self._dir_emoji(s.direction)} <b>NEW SIGNAL · {esc(s.signal_type)}</b>\n"
             f"<b>{esc(s.symbol)}</b> · {esc(s.direction)}\n{DIVIDER}\n"
@@ -162,7 +169,8 @@ class TelegramNotifier:
             + "\n".join(tp_lines) + "\n"
             f"🛑 SL     <code>{fmt_price(s.sl)}</code>  ({sl_pct:+.2f}%)\n"
             f"📊 Score {s.score}/100 · {esc(s.confluence_level or '—')} · R:R {rr:.1f}\n"
-            f"⚡ {esc(s.strategy)} · {esc(s.entry_mode)}\n{DIVIDER}\n"
+            f"⚡ {esc(s.strategy)} · {esc(s.entry_mode)}\n"
+            f"{ai_line}{DIVIDER}\n"
             f"{reasons}\n{self._stamp()}"
         )
 
@@ -186,7 +194,8 @@ class TelegramNotifier:
             f"{self._stamp()}"
         )
 
-    def _resolved_text(self, s: Signal) -> str:
+    def _resolved_text(self, s: Signal, info: Optional[dict] = None) -> str:
+        info = info or {}
         pnl = s.pnl_pct if s.pnl_pct is not None else 0.0
         # Grade by net (scale-out) PnL, not the terminal status: a TP1-then-
         # breakeven exit is a small win even though its status is SL_HIT.
@@ -199,10 +208,26 @@ class TelegramNotifier:
         else:
             head = "⚪ <b>CLOSED"
         hold = s.hold_hours if s.hold_hours is not None else 0.0
+
+        # Paper-trade line (R-multiple / USD / running balance), when available.
+        paper = ""
+        if "r" in info:
+            paper = (
+                f"📈 {info['r']:+.2f}R · {info.get('pnl_usd', 0.0):+.2f} USD"
+                f" · 🏦 {info.get('balance', 0.0):,.2f} USD\n"
+            )
+        # Learning footnote: this strategy's running edge.
+        edge = ""
+        e = info.get("edge")
+        if isinstance(e, dict) and e.get("trades"):
+            edge = (
+                f"🧠 {esc(s.strategy)}: {e['win_rate']:.0f}% win over {e['trades']} "
+                f"({e['avg_pnl']:+.2f}% avg, {e['avg_r']:+.2f}R)\n"
+            )
         return (
             f"{head} · {esc(s.status)}</b> · {esc(s.symbol)} {esc(s.direction)}\n"
             f"PnL <b>{pnl:+.2f}%</b> · held {hold:.1f}h · {esc(s.strategy)}\n"
-            f"{self._stamp()}"
+            f"{paper}{edge}{self._stamp()}"
         )
 
     def _news_card(self, items) -> str:

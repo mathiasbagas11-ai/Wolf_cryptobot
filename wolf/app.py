@@ -11,7 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import logging
+
 from wolf.ai import DebateValidator, build_llm_client
+from wolf.backtest import BacktestEngine
 from wolf.config import Settings
 from wolf.detectors import default_detectors
 from wolf.exchange import (
@@ -20,13 +23,17 @@ from wolf.exchange import (
     BinanceClient,
     MarketDataClient,
 )
+from wolf.learning import LearningEngine
 from wolf.market import ContextProvider
 from wolf.news import NewsService, build_news_source
 from wolf.notify import TelegramNotifier
 from wolf.reports import MajorsReporter, MarketPulse, MarketRadar, WhaleTracker
+from wolf.risk import PaperTrader
 from wolf.screener import Screener
 from wolf.state import StateStore
 from wolf.tracker import Tracker
+
+log = logging.getLogger("wolf.app")
 
 
 @dataclass
@@ -37,11 +44,32 @@ class Application:
     notifier: TelegramNotifier
     tracker: Tracker
     screener: Screener
+    learning: Optional[LearningEngine] = None
+    paper: Optional[PaperTrader] = None
+    backtest: Optional[BacktestEngine] = None
     news: Optional[NewsService] = None
     majors: Optional[MajorsReporter] = None
     radar: Optional[MarketRadar] = None
     pulse: Optional[MarketPulse] = None
     whale: Optional[WhaleTracker] = None
+
+    def warm_start_learning(self) -> None:
+        """Seed learning memory from a backtest — only when memory is still empty.
+
+        Best-effort and network-bound, so it is called from the worker entrypoint
+        (not on every API construction) and never raised to the caller.
+        """
+        if not (self.backtest and self.learning and self.settings.backtest.warm_start):
+            return
+        if self.learning.snapshot().get("strategies"):
+            return  # already have live/seeded history; don't double-count
+        try:
+            result = self.backtest.run(self.screener._universe)
+            trades = [(t.strategy, t.symbol, t.pnl_pct, t.r_multiple) for t in result["trades"]]
+            self.learning.seed(trades)
+            log.info("Warm-started learning from %d backtested trades", len(trades))
+        except Exception:
+            log.exception("Backtest warm-start failed (non-fatal)")
 
 
 def _build_market_client(settings: Settings) -> MarketDataClient:
@@ -84,7 +112,26 @@ def build_application(settings: Settings | None = None) -> Application:
     notifier = TelegramNotifier(
         settings.telegram, timeout=settings.http_timeout, tz=settings.timezone
     )
-    tracker = Tracker(store, client, settings.tracker, notify=notifier.on_event)
+
+    learning = LearningEngine(store, settings.learning) if settings.learning.enabled else None
+    paper = PaperTrader(store, settings.risk) if settings.risk.paper_enabled else None
+
+    def on_event(sig, event, info):
+        # On resolution, book the paper trade and update learning *before* the
+        # notification so the resolution card can show R / USD / running edge.
+        if event == "RESOLVED":
+            info = dict(info)
+            fill = paper.record(sig) if paper else None
+            if fill:
+                info.update(r=fill.r_multiple, pnl_usd=fill.pnl_usd, balance=fill.balance)
+            if learning:
+                learning.observe(sig, fill.r_multiple if fill else None)
+                edge = learning.snapshot()["strategies"].get(sig.strategy)
+                if edge:
+                    info["edge"] = edge
+        notifier.on_event(sig, event, info)
+
+    tracker = Tracker(store, client, settings.tracker, notify=on_event)
     context_provider = ContextProvider(client)
 
     validator = None
@@ -98,11 +145,19 @@ def build_application(settings: Settings | None = None) -> Application:
         llm = build_llm_client(settings.ai.provider, api_key, settings.ai.model)
         validator = DebateValidator(llm)
 
+    detectors = default_detectors()
     screener = Screener(
-        client, tracker, default_detectors(), notifier=notifier,
+        client, tracker, detectors, notifier=notifier,
         context_provider=context_provider,
         validator=validator,
         veto_min_confidence=settings.ai.veto_min_confidence,
+        learning=learning,
+        regime=settings.regime,
+    )
+    backtest = BacktestEngine(
+        client, detectors,
+        lookback=settings.backtest.lookback,
+        candle_limit=settings.backtest.candle_limit,
     )
 
     news = None
@@ -125,6 +180,9 @@ def build_application(settings: Settings | None = None) -> Application:
         notifier=notifier,
         tracker=tracker,
         screener=screener,
+        learning=learning,
+        paper=paper,
+        backtest=backtest,
         news=news,
         majors=majors,
         radar=radar,

@@ -181,6 +181,51 @@ class ReportsSettings:
 
 
 @dataclass(frozen=True)
+class LearningSettings:
+    """Adaptive learning knobs — how strongly memory tunes live screening."""
+
+    enabled: bool = True
+    # Minimum trades on a strategy/symbol before its win-rate adjusts the score.
+    min_samples: int = 5
+    # Maximum absolute score adjustment (points) the learning layer may apply.
+    max_adjust: float = 15.0
+    # Symbol blacklist: this many trades with a win-rate below the threshold.
+    blacklist_min_trades: int = 8
+    blacklist_max_winrate: float = 25.0
+
+
+@dataclass(frozen=True)
+class RiskSettings:
+    """Paper-trading account settings (feeds the learning layer)."""
+
+    paper_enabled: bool = True
+    starting_balance: float = 1000.0
+    risk_pct: float = 2.0  # fraction of equity risked to stop, per trade
+
+
+@dataclass(frozen=True)
+class RegimeSettings:
+    """Market-regime filter settings."""
+
+    enabled: bool = True
+    adx_period: int = 14
+    adx_trend_min: float = 20.0
+    # Counter-trend signals are allowed only at/above this score (else filtered).
+    counter_trend_min_score: int = 85
+
+
+@dataclass(frozen=True)
+class BacktestSettings:
+    """Backtest / warm-start settings."""
+
+    # Replay the last N candles per symbol when warm-starting learning at boot.
+    lookback: int = 50
+    candle_limit: int = 250
+    # Seed the learning memory from a backtest at startup.
+    warm_start: bool = True
+
+
+@dataclass(frozen=True)
 class AISettings:
     """AI debate-layer configuration."""
 
@@ -240,6 +285,10 @@ class Settings:
     ai: AISettings = field(default_factory=AISettings)
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
+    learning: LearningSettings = field(default_factory=LearningSettings)
+    risk: RiskSettings = field(default_factory=RiskSettings)
+    regime: RegimeSettings = field(default_factory=RegimeSettings)
+    backtest: BacktestSettings = field(default_factory=BacktestSettings)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -288,6 +337,29 @@ class Settings:
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),
         )
+        learning = LearningSettings(
+            enabled=_env_bool("LEARNING_ENABLED", True),
+            min_samples=_env_int("LEARNING_MIN_SAMPLES", 5),
+            max_adjust=_env_float("LEARNING_MAX_ADJUST", 15.0),
+            blacklist_min_trades=_env_int("LEARNING_BLACKLIST_MIN_TRADES", 8),
+            blacklist_max_winrate=_env_float("LEARNING_BLACKLIST_MAX_WINRATE", 25.0),
+        )
+        risk = RiskSettings(
+            paper_enabled=_env_bool("PAPER_ENABLED", True),
+            starting_balance=_env_float("PAPER_STARTING_BALANCE", 1000.0),
+            risk_pct=_env_float("PAPER_RISK_PCT", 2.0),
+        )
+        regime = RegimeSettings(
+            enabled=_env_bool("REGIME_FILTER_ENABLED", True),
+            adx_period=_env_int("REGIME_ADX_PERIOD", 14),
+            adx_trend_min=_env_float("REGIME_ADX_TREND_MIN", 20.0),
+            counter_trend_min_score=_env_int("REGIME_COUNTER_TREND_MIN_SCORE", 85),
+        )
+        backtest = BacktestSettings(
+            lookback=_env_int("BACKTEST_LOOKBACK", 50),
+            candle_limit=_env_int("BACKTEST_CANDLE_LIMIT", 250),
+            warm_start=_env_bool("BACKTEST_WARM_START", True),
+        )
         exchanges = _env_csv("EXCHANGES") or ("binance", "okx", "bybit", "gate")
         return cls(
             state_dir=_env_str("STATE_DIR", "state_data"),
@@ -315,14 +387,20 @@ class Settings:
             ai=ai,
             news=news,
             reports=reports,
+            learning=learning,
+            risk=risk,
+            regime=regime,
+            backtest=backtest,
         )
 
     def describe(self) -> dict:
         """Return a redacted, JSON-serialisable view for diagnostics/health."""
         secret_names = {f.name for f in fields(self) if f.name.endswith(("_key", "_token"))}
         out: dict = {}
+        nested = ("telegram", "tracker", "ai", "news", "reports",
+                  "learning", "risk", "regime", "backtest")
         for f in fields(self):
-            if f.name in ("telegram", "tracker", "ai", "news", "reports"):
+            if f.name in nested:
                 continue
             value = getattr(self, f.name)
             if f.name in secret_names or f.name.endswith("_anon_key"):
@@ -332,4 +410,7 @@ class Settings:
         out["telegram_enabled"] = self.telegram.enabled
         out["ai_enabled"] = self.ai.enabled
         out["news_enabled"] = self.news.enabled
+        out["learning_enabled"] = self.learning.enabled
+        out["paper_enabled"] = self.risk.paper_enabled
+        out["regime_filter_enabled"] = self.regime.enabled
         return out

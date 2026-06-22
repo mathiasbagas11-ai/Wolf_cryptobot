@@ -178,3 +178,58 @@ def volume_ratio(candles: Sequence[Candle], lookback: int = 20) -> float:
     if baseline == 0:
         return float("nan")
     return recent / baseline
+
+
+def adx(candles: Sequence[Candle], period: int = 14) -> tuple[float, float, float]:
+    """Wilder's ADX with directional indicators.
+
+    Returns ``(adx, plus_di, minus_di)`` for the latest bar — the trend-strength
+    and direction inputs the regime filter uses. All NaN when there is not enough
+    data (need at least ``2*period`` candles for ADX to stabilise).
+    """
+    n = len(candles)
+    nan = float("nan")
+    if n < 2 * period + 1:
+        return (nan, nan, nan)
+
+    trs: list[float] = []
+    plus_dm: list[float] = []
+    minus_dm: list[float] = []
+    for i in range(1, n):
+        cur, prev = candles[i], candles[i - 1]
+        up = cur.high - prev.high
+        down = prev.low - cur.low
+        plus_dm.append(up if (up > down and up > 0) else 0.0)
+        minus_dm.append(down if (down > up and down > 0) else 0.0)
+        trs.append(max(
+            cur.high - cur.low,
+            abs(cur.high - prev.close),
+            abs(cur.low - prev.close),
+        ))
+
+    # Wilder-smoothed TR / +DM / -DM seeded with the first ``period`` sums.
+    atr_s = sum(trs[:period])
+    plus_s = sum(plus_dm[:period])
+    minus_s = sum(minus_dm[:period])
+    dxs: list[float] = []
+    for i in range(period, len(trs)):
+        atr_s = atr_s - atr_s / period + trs[i]
+        plus_s = plus_s - plus_s / period + plus_dm[i]
+        minus_s = minus_s - minus_s / period + minus_dm[i]
+        if atr_s == 0:
+            dxs.append(0.0)
+            continue
+        pdi = 100 * plus_s / atr_s
+        mdi = 100 * minus_s / atr_s
+        denom = pdi + mdi
+        dxs.append(100 * abs(pdi - mdi) / denom if denom else 0.0)
+
+    if len(dxs) < period:
+        return (nan, nan, nan)
+    adx_val = sum(dxs[:period]) / period
+    for dx in dxs[period:]:
+        adx_val = (adx_val * (period - 1) + dx) / period
+    # +DI / -DI for the latest bar (atr_s/plus_s/minus_s hold the final smoothings).
+    plus_di = 100 * plus_s / atr_s if atr_s else nan
+    minus_di = 100 * minus_s / atr_s if atr_s else nan
+    return (adx_val, plus_di, minus_di)

@@ -124,6 +124,11 @@ class Signal:
     tp_ladder: list[dict] = field(default_factory=list)
     timeout_hours: int = 24
 
+    # AI debate verdict (optional — set when the AI layer is enabled)
+    ai_decision: str = ""
+    ai_confidence: int = 0
+    ai_rationale: str = ""
+
     # Lifecycle state
     id: str = ""
     created_at: str = field(default_factory=_now_iso)

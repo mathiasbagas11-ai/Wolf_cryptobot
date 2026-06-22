@@ -28,6 +28,9 @@ def main() -> None:
     application = build_application(settings)
     api = create_app(application)
 
+    # Seed learning from a quick backtest so the bot doesn't start blind.
+    application.warm_start_learning()
+
     scheduler = build_scheduler(application)
     scheduler.start()
     log.info(
