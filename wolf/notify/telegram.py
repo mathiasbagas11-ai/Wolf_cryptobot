@@ -111,6 +111,29 @@ class TelegramNotifier:
             message_id = None
         return True, "", message_id
 
+    def send_raw(self, chat_id: str, text: str, thread_id: str = "") -> bool:
+        """Send to an explicit chat/thread (used to reply to incoming commands)."""
+        if not self._settings.bot_token or not chat_id:
+            return False
+        url = f"https://api.telegram.org/bot{self._settings.bot_token}/sendMessage"
+        payload: dict = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if thread_id:
+            payload["message_thread_id"] = thread_id
+        try:
+            resp = self._session.post(url, json=payload, timeout=self._timeout)
+        except requests.RequestException as exc:
+            log.warning("Telegram reply error: %s", exc)
+            return False
+        if resp.status_code != 200:
+            log.warning("Telegram reply failed (%s)", resp.status_code)
+            return False
+        return True
+
     def _delete(self, message_id: int) -> None:
         """Best-effort delete of a probe message; failures are non-fatal."""
         url = f"https://api.telegram.org/bot{self._settings.bot_token}/deleteMessage"

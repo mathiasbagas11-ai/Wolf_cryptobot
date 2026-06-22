@@ -339,6 +339,26 @@ class AISettings:
 
 
 @dataclass(frozen=True)
+class LearningSettings:
+    """Adaptive learning knobs — how strongly memory tunes live screening."""
+
+    enabled: bool = True
+    min_samples: int = 5              # trades before a win-rate adjusts the score
+    max_adjust: float = 15.0         # max +/- score points learning may apply
+    blacklist_min_trades: int = 8    # bench a symbol after this many trades...
+    blacklist_max_winrate: float = 25.0  # ...if its win-rate is below this %
+
+
+@dataclass(frozen=True)
+class BacktestSettings:
+    """Backtest / warm-start settings."""
+
+    lookback: int = 50               # candles replayed per symbol at warm-start
+    candle_limit: int = 250
+    warm_start: bool = True          # seed learning from a backtest at boot
+
+
+@dataclass(frozen=True)
 class Settings:
     """Top-level immutable application settings."""
 
@@ -397,6 +417,8 @@ class Settings:
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
     flow: FlowSettings = field(default_factory=FlowSettings)
+    learning: LearningSettings = field(default_factory=LearningSettings)
+    backtest: BacktestSettings = field(default_factory=BacktestSettings)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -452,6 +474,18 @@ class Settings:
             max_watch=_env_int("FLOW_MAX_WATCH", 2),
             narrator_provider=_env_str("FLOW_NARRATOR_PROVIDER", "deepseek"),
             narrator_model=_env_str("FLOW_NARRATOR_MODEL", ""),
+        )
+        learning = LearningSettings(
+            enabled=_env_bool("LEARNING_ENABLED", True),
+            min_samples=_env_int("LEARNING_MIN_SAMPLES", 5),
+            max_adjust=_env_float("LEARNING_MAX_ADJUST", 15.0),
+            blacklist_min_trades=_env_int("LEARNING_BLACKLIST_MIN_TRADES", 8),
+            blacklist_max_winrate=_env_float("LEARNING_BLACKLIST_MAX_WINRATE", 25.0),
+        )
+        backtest = BacktestSettings(
+            lookback=_env_int("BACKTEST_LOOKBACK", 50),
+            candle_limit=_env_int("BACKTEST_CANDLE_LIMIT", 250),
+            warm_start=_env_bool("BACKTEST_WARM_START", True),
         )
         dedup_default = _env_int("TRACKER_DEDUP_MINUTES", 30)
         tracker = TrackerSettings(
@@ -530,6 +564,8 @@ class Settings:
             news=news,
             reports=reports,
             flow=flow,
+            learning=learning,
+            backtest=backtest,
         )
 
     def api_key_for(self, provider: str) -> str:
@@ -548,7 +584,8 @@ class Settings:
         secret_names = {f.name for f in fields(self) if f.name.endswith(("_key", "_token"))}
         out: dict = {}
         for f in fields(self):
-            if f.name in ("telegram", "tracker", "ai", "news", "reports", "flow"):
+            if f.name in ("telegram", "tracker", "ai", "news", "reports", "flow",
+                          "learning", "backtest"):
                 continue
             value = getattr(self, f.name)
             if f.name in secret_names or f.name.endswith("_anon_key"):
@@ -559,4 +596,5 @@ class Settings:
         out["ai_enabled"] = self.ai.enabled
         out["news_enabled"] = self.news.enabled
         out["flow_enabled"] = self.flow.enabled
+        out["learning_enabled"] = self.learning.enabled
         return out

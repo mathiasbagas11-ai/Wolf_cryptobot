@@ -11,10 +11,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import logging
+
 from wolf.account import PaperAccount
 from wolf.ai import DebateValidator, build_llm_client
+from wolf.analyze import AnalyzeService
+from wolf.backtest import BacktestEngine
 from wolf.config import Settings
 from wolf.detectors import default_detectors
+from wolf.learning import LearningEngine
 from wolf.exchange import (
     FUNDING_REGISTRY,
     SOURCE_REGISTRY,
@@ -38,6 +43,8 @@ from wolf.screener import Screener
 from wolf.state import StateStore
 from wolf.tracker import Tracker
 
+log = logging.getLogger("wolf.app")
+
 
 @dataclass
 class Application:
@@ -47,6 +54,10 @@ class Application:
     notifier: TelegramNotifier
     tracker: Tracker
     screener: Screener
+    account: Optional[PaperAccount] = None
+    learning: Optional[LearningEngine] = None
+    backtest: Optional[BacktestEngine] = None
+    analyze: Optional[AnalyzeService] = None
     news: Optional[NewsService] = None
     news_synth: Optional[NewsSynthesizer] = None
     news_scanner: Optional[NewsSignalScanner] = None
@@ -55,6 +66,24 @@ class Application:
     pulse: Optional[MarketPulse] = None
     whale: Optional[WhaleTracker] = None
     flow: Optional[FlowReporter] = None
+
+    def warm_start_learning(self) -> None:
+        """Seed learning memory from a backtest — only when memory is empty.
+
+        Best-effort and network-bound, so it is called from the worker entrypoint
+        (not on every API construction) and never raised to the caller.
+        """
+        if not (self.backtest and self.learning and self.settings.backtest.warm_start):
+            return
+        if self.learning.snapshot().get("strategies"):
+            return  # already have live/seeded history; don't double-count
+        try:
+            result = self.backtest.run(self.screener.current_universe())
+            trades = [(t.strategy, t.symbol, t.win, t.pnl_pct, t.r_multiple) for t in result["trades"]]
+            self.learning.seed(trades)
+            log.info("Warm-started learning from %d backtested trades", len(trades))
+        except Exception:
+            log.exception("Backtest warm-start failed (non-fatal)")
 
 
 def _build_market_client(settings: Settings) -> MarketDataClient:
@@ -102,7 +131,11 @@ def build_application(settings: Settings | None = None) -> Application:
         start_balance=settings.paper_start_balance,
         risk_pct=settings.paper_risk_pct,
     )
-    tracker = Tracker(store, client, settings.tracker, notify=notifier.on_event, account=account)
+    learning = LearningEngine(store, settings.learning) if settings.learning.enabled else None
+    tracker = Tracker(
+        store, client, settings.tracker, notify=notifier.on_event,
+        account=account, learning=learning,
+    )
     context_provider = ContextProvider(client)
 
     def _role_client(role):
@@ -135,8 +168,9 @@ def build_application(settings: Settings | None = None) -> Application:
         if settings.universe.dynamic
         else None
     )
+    detectors = default_detectors()
     screener = Screener(
-        client, tracker, default_detectors(), notifier=notifier,
+        client, tracker, detectors, notifier=notifier,
         context_provider=context_provider,
         validator=validator,
         veto_min_confidence=settings.ai.veto_min_confidence,
@@ -145,6 +179,19 @@ def build_application(settings: Settings | None = None) -> Application:
         risk=settings.risk,
         universe_provider=universe_provider,
         min_rr=settings.min_signal_rr,
+        learning=learning,
+    )
+    backtest = BacktestEngine(
+        client, detectors,
+        lookback=settings.backtest.lookback,
+        candle_limit=settings.backtest.candle_limit,
+    )
+    analyze = AnalyzeService(
+        client, detectors,
+        context_provider=context_provider,
+        learning=learning,
+        validator=validator,
+        tz=settings.timezone,
     )
 
     news = None
@@ -180,6 +227,10 @@ def build_application(settings: Settings | None = None) -> Application:
         notifier=notifier,
         tracker=tracker,
         screener=screener,
+        account=account,
+        learning=learning,
+        backtest=backtest,
+        analyze=analyze,
         news=news,
         news_synth=news_synth,
         news_scanner=news_scanner,
