@@ -177,9 +177,12 @@ class TelegramNotifier:
         lvl = info.get("level", "?")
         price = info.get("price")
         pct = _pct(price, s.entry_price, s.is_long) if isinstance(price, (int, float)) else 0.0
+        # The stop is moved to breakeven once, on the first TP rung; later rungs
+        # leave it there, so only announce the move on TP1.
+        be_note = " — stop moved to breakeven" if lvl == 1 else ""
         return (
             f"✅ <b>TP{lvl} HIT</b> · {esc(s.symbol)} {esc(s.direction)}\n"
-            f"Price <code>{fmt_price(price)}</code> ({pct:+.2f}%) — stop moved to breakeven\n"
+            f"Price <code>{fmt_price(price)}</code> ({pct:+.2f}%){be_note}\n"
             f"{self._stamp()}"
         )
 

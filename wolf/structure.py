@@ -76,8 +76,8 @@ def liquidity_sweep(candles: Sequence[Candle], lookback: int = 20) -> Sweep:
 
 @dataclass
 class Divergence:
-    bull_score: int = 0  # hidden accumulation: price lower-low, RSI higher-low
-    bear_score: int = 0  # hidden distribution: price higher-high, RSI lower-high
+    bull_score: int = 0  # regular bullish divergence: price lower-low, RSI higher-low
+    bear_score: int = 0  # regular bearish divergence: price higher-high, RSI lower-high
 
 
 def rsi_divergence(candles: Sequence[Candle], lookback: int = 25, period: int = 14) -> Divergence:
