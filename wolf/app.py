@@ -89,9 +89,13 @@ def build_application(settings: Settings | None = None) -> Application:
 
     validator = None
     if settings.ai.enabled:
-        llm = build_llm_client(
-            settings.ai.provider, settings.anthropic_api_key, settings.ai.model
-        )
+        # Pick the API key that matches the configured provider.
+        provider_keys = {
+            "anthropic": settings.anthropic_api_key,
+            "deepseek": settings.deepseek_api_key,
+        }
+        api_key = provider_keys.get(settings.ai.provider, "")
+        llm = build_llm_client(settings.ai.provider, api_key, settings.ai.model)
         validator = DebateValidator(llm)
 
     screener = Screener(

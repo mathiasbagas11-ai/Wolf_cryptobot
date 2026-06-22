@@ -50,6 +50,50 @@ def test_build_llm_client_unknown_provider_is_null():
     assert build_llm_client("acme", "key", "m").available is False
 
 
+def test_build_deepseek_client_with_key():
+    client = build_llm_client("deepseek", api_key="sk-test", model="claude-opus-4-8")
+    # A Claude model id must not leak through to DeepSeek.
+    assert client.available is True
+    assert client.__class__.__name__ == "DeepSeekLLMClient"
+    assert client._model == "deepseek-chat"
+
+
+def test_build_deepseek_client_without_key_is_null():
+    assert build_llm_client("deepseek", api_key="", model="deepseek-chat").available is False
+
+
+def test_deepseek_client_parses_chat_and_json():
+    from wolf.ai.deepseek_client import DeepSeekLLMClient
+
+    class FakeResp:
+        status_code = 200
+
+        def __init__(self, content):
+            self._content = content
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": self._content}}]}
+
+    class FakeSession:
+        def __init__(self, content):
+            self._content = content
+            self.last_payload = None
+
+        def post(self, url, json=None, headers=None, timeout=None):
+            self.last_payload = json
+            return FakeResp(self._content)
+
+    sess = FakeSession('{"decision": "REJECT", "confidence": 80, "rationale": "thin"}')
+    client = DeepSeekLLMClient(api_key="sk-test", session=sess)
+    assert client.complete("sys", "user") == sess._content
+    data = client.complete_json("sys", "user", {})
+    assert data["decision"] == "REJECT" and data["confidence"] == 80
+    assert sess.last_payload["response_format"] == {"type": "json_object"}
+
+
 # ── debate ────────────────────────────────────────────────────────────────
 def test_validator_abstains_when_unavailable():
     verdict = DebateValidator(NullLLMClient()).validate(_candidate())
