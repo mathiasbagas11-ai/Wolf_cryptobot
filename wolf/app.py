@@ -14,6 +14,7 @@ from typing import Optional
 import logging
 
 from wolf.ai import DebateValidator, build_llm_client
+from wolf.analyze import AnalyzeService
 from wolf.backtest import BacktestEngine
 from wolf.config import Settings
 from wolf.detectors import default_detectors
@@ -47,6 +48,7 @@ class Application:
     learning: Optional[LearningEngine] = None
     paper: Optional[PaperTrader] = None
     backtest: Optional[BacktestEngine] = None
+    analyze: Optional["AnalyzeService"] = None
     news: Optional[NewsService] = None
     majors: Optional[MajorsReporter] = None
     radar: Optional[MarketRadar] = None
@@ -159,6 +161,14 @@ def build_application(settings: Settings | None = None) -> Application:
         lookback=settings.backtest.lookback,
         candle_limit=settings.backtest.candle_limit,
     )
+    analyze = AnalyzeService(
+        client, detectors,
+        context_provider=context_provider,
+        learning=learning,
+        regime_settings=settings.regime,
+        validator=validator,
+        tz=settings.timezone,
+    )
 
     news = None
     if settings.news.enabled:
@@ -183,6 +193,7 @@ def build_application(settings: Settings | None = None) -> Application:
         learning=learning,
         paper=paper,
         backtest=backtest,
+        analyze=analyze,
         news=news,
         majors=majors,
         radar=radar,

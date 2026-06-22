@@ -56,7 +56,11 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
     stats_hours = app.settings.stats_report_hours
     if stats_hours > 0 and app.notifier.enabled:
         scheduler.add_job(
-            _guarded(lambda: app.notifier.notify_stats(app.tracker.stats()), "stats"),
+            _guarded(lambda: app.notifier.notify_stats(
+                app.tracker.stats(),
+                paper=app.paper.stats() if app.paper else None,
+                learning=app.learning.snapshot() if app.learning else None,
+            ), "stats"),
             "interval",
             hours=stats_hours,
             id="stats",

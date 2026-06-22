@@ -86,6 +86,29 @@ class TelegramNotifier:
             return False
         return True
 
+    def send_raw(self, chat_id: str, text: str, thread_id: str = "") -> bool:
+        """Send to an explicit chat/thread (used to reply to incoming commands)."""
+        if not self._settings.bot_token or not chat_id:
+            return False
+        url = f"https://api.telegram.org/bot{self._settings.bot_token}/sendMessage"
+        payload: dict = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if thread_id:
+            payload["message_thread_id"] = thread_id
+        try:
+            resp = self._session.post(url, json=payload, timeout=self._timeout)
+        except requests.RequestException as exc:
+            log.warning("Telegram reply error: %s", exc)
+            return False
+        if resp.status_code != 200:
+            log.warning("Telegram reply failed (%s)", resp.status_code)
+            return False
+        return True
+
     # ── lifecycle notifications ─────────────────────────────────────────
     def notify_startup(self, info: dict) -> None:
         sources = " → ".join(info.get("sources", [])) or "—"
@@ -113,8 +136,8 @@ class TelegramNotifier:
         elif event == "RESOLVED":
             self.send(self._resolved_text(signal, info), self._settings.route_trade_report())
 
-    def notify_stats(self, stats: dict) -> None:
-        self.send(self._stats_card(stats), self._settings.route_stats())
+    def notify_stats(self, stats: dict, paper: Optional[dict] = None, learning: Optional[dict] = None) -> None:
+        self.send(self._stats_card(stats, paper, learning), self._settings.route_stats())
 
     def notify_news(self, items) -> None:
         if items:
@@ -242,13 +265,19 @@ class TelegramNotifier:
         lines.append(self._stamp())
         return "\n".join(lines)
 
-    def _stats_card(self, stats: dict) -> str:
+    def _stats_card(self, stats: dict, paper: Optional[dict] = None, learning: Optional[dict] = None) -> str:
         lines = [
             f"📊 <b>PERFORMANCE SUMMARY</b>\n{DIVIDER}",
             f"✅ Wins {stats.get('wins', 0)} · 🛑 Losses {stats.get('losses', 0)} "
             f"· 📈 Win rate {stats.get('win_rate', 0)}%",
             f"💰 Avg PnL {stats.get('avg_pnl_pct', 0):+.2f}% · 🔵 Active {stats.get('active', 0)}",
         ]
+        if paper and paper.get("trades"):
+            lines.append(
+                f"\n🏦 <b>Paper</b> {paper['balance']:,.2f} USD "
+                f"({paper['return_pct']:+.2f}%) · {paper['total_r']:+.2f}R "
+                f"· DD {paper['max_drawdown_pct']:.1f}%"
+            )
         by_strategy = stats.get("by_strategy", {})
         if by_strategy:
             lines.append("\n<b>By strategy</b>")
@@ -257,5 +286,7 @@ class TelegramNotifier:
                     f"• {esc(name)}  {b.get('win_rate', 0)}% "
                     f"({b.get('total', 0)} trades, {b.get('avg_pnl', 0):+.2f}%)"
                 )
+        if learning and learning.get("blacklist"):
+            lines.append(f"\n⛔ <b>Blacklist</b>: {esc(', '.join(learning['blacklist']))}")
         lines.append(f"\n{self._stamp()}")
         return "\n".join(lines)
