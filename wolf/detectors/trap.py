@@ -54,7 +54,7 @@ class LiquidityTrapDetector(Detector):
         # from entry: a very deep sweep is too wide to be a clean reversal.
         self.max_risk_pct = max_risk_pct
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
+    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None, features=None) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
         closes = ind.closes(candles)
