@@ -279,14 +279,12 @@ class Tracker:
                     res.exit_price = entry
                     res.exit_time = now
                 else:
+                    # Mark as EXPIRED with the best available exit price; _resolve
+                    # grades it WIN/LOSS from the net (scale-out) PnL so the status
+                    # stays consistent with any TP tranches already banked.
                     curr = self._client.get_price(sig.symbol)
-                    if curr:
-                        pnl = (curr - entry) if is_long else (entry - curr)
-                        res.terminal = Status.EXPIRED_WIN if pnl > 0 else Status.EXPIRED_LOSS
-                        res.exit_price = curr
-                    else:
-                        res.terminal = Status.EXPIRED
-                        res.exit_price = entry
+                    res.terminal = Status.EXPIRED
+                    res.exit_price = curr if curr else entry
                     res.exit_time = now
         return res
 
@@ -371,7 +369,15 @@ class Tracker:
         hold_hours = (exit_time - created_at).total_seconds() / 3600
         ladder = normalize_ladder(sig.tp_ladder, sig.tp, sig.sl, sig.entry_price, sig.is_long)
         pnl = self._net_pnl(sig, res, ladder)
-        sig.status = res.terminal.value
+        terminal = res.terminal
+        # A timed-out trade is graded WIN/LOSS by its net PnL (which includes any
+        # banked TP tranches), keeping the status in step with the partial result.
+        if terminal == Status.EXPIRED:
+            if pnl > 0:
+                terminal = Status.EXPIRED_WIN
+            elif pnl < 0:
+                terminal = Status.EXPIRED_LOSS
+        sig.status = terminal.value
         sig.exit_price = exit_price
         sig.exit_time = exit_time.isoformat()
         sig.pnl_pct = round(pnl, 3)
