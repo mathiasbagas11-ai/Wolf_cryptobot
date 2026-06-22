@@ -73,7 +73,29 @@ def test_long_signal_hits_tp(store, fake_client, tracker_settings):
     resolved = tracker.check_pending()
     assert len(resolved) == 1
     assert resolved[0].status == Status.TP_HIT.value
-    assert resolved[0].pnl_pct == 10.0
+    # Equal scale-out: 50% banked at TP1 (+5%) and 50% at TP2 (+10%) -> +7.5%.
+    assert resolved[0].pnl_pct == 7.5
+
+
+def test_tp1_then_breakeven_counts_as_partial_win(store, fake_client, tracker_settings):
+    """A trade that bags TP1 then gets stopped at breakeven keeps the TP1 profit."""
+    tracker = Tracker(store, fake_client, tracker_settings)
+    sig = tracker.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=[{"level": 1, "price": 105}, {"level": 2, "price": 110}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [
+        (100, 106, 100, 105),   # TP1 -> stop moves to breakeven (100)
+        (105, 105, 99, 100),    # drops back to 100 -> breakeven stop
+    ])
+    resolved = tracker.check_pending()
+    assert resolved[0].status == Status.SL_HIT.value
+    # 50% banked at TP1 (+5%), remaining 50% closed at breakeven (0%) -> +2.5%.
+    assert resolved[0].pnl_pct == 2.5
+    # Net PnL is positive, so it grades as a win despite the SL_HIT status.
+    stats = tracker.stats()
+    assert stats["wins"] == 1 and stats["losses"] == 0
 
 
 def test_long_signal_hits_sl(store, fake_client, tracker_settings):

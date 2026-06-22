@@ -42,13 +42,16 @@ class WhaleTracker:
                     found.append(t)
         if not found:
             return None
-        # Suppress the whole found batch so nothing is re-alerted next cycle.
-        seen_list = (seen_list + [t["id"] for t in found])[-SEEN_CAP:]
+        # Alert the biggest trades first; only mark the ones we actually report
+        # as seen, so any overflow beyond max_alerts surfaces on a later cycle
+        # (while it is still in the recent-trades window) instead of being lost.
+        found.sort(key=lambda t: t["usd"], reverse=True)
+        to_alert = found[: self._max_alerts]
+        seen_list = (seen_list + [t["id"] for t in to_alert])[-SEEN_CAP:]
         self._store.write(SEEN_KEY, seen_list)
 
-        found.sort(key=lambda t: t["usd"], reverse=True)
         lines = [f"👁 <b>WHALE REPORT</b>\n{DIVIDER}"]
-        for t in found[: self._max_alerts]:
+        for t in to_alert:
             base = t["symbol"][:-4] if t["symbol"].endswith("USDT") else t["symbol"]
             emoji = "🟢" if t["side"] == "BUY" else "🔴"
             lines.append(

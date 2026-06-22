@@ -187,9 +187,17 @@ class TelegramNotifier:
         )
 
     def _resolved_text(self, s: Signal) -> str:
-        status = Status(s.status)
-        head = "🎯 <b>WIN" if status.is_win else ("🛑 <b>LOSS" if status.is_loss else "⚪ <b>CLOSED")
         pnl = s.pnl_pct if s.pnl_pct is not None else 0.0
+        # Grade by net (scale-out) PnL, not the terminal status: a TP1-then-
+        # breakeven exit is a small win even though its status is SL_HIT.
+        if s.status == Status.INVALIDATED.value:
+            head = "⚪ <b>CLOSED"
+        elif pnl > 0:
+            head = "🎯 <b>WIN"
+        elif pnl < 0:
+            head = "🛑 <b>LOSS"
+        else:
+            head = "⚪ <b>CLOSED"
         hold = s.hold_hours if s.hold_hours is not None else 0.0
         return (
             f"{head} · {esc(s.status)}</b> · {esc(s.symbol)} {esc(s.direction)}\n"

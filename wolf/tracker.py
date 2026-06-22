@@ -369,14 +369,8 @@ class Tracker:
         exit_price = res.exit_price
         exit_time = res.exit_time or now
         hold_hours = (exit_time - created_at).total_seconds() / 3600
-        if exit_price and sig.entry_price > 0 and res.terminal != Status.INVALIDATED:
-            pnl = (
-                (exit_price - sig.entry_price) / sig.entry_price * 100
-                if sig.is_long
-                else (sig.entry_price - exit_price) / sig.entry_price * 100
-            )
-        else:
-            pnl = 0.0
+        ladder = normalize_ladder(sig.tp_ladder, sig.tp, sig.sl, sig.entry_price, sig.is_long)
+        pnl = self._net_pnl(sig, res, ladder)
         sig.status = res.terminal.value
         sig.exit_price = exit_price
         sig.exit_time = exit_time.isoformat()
@@ -385,6 +379,43 @@ class Tracker:
         sig.tps_hit = res.tps_hit
         sig.resolved_at = now.isoformat()
         log.info("Resolved %s %s -> %s | PnL %+.2f%%", sig.symbol, sig.direction, sig.status, pnl)
+
+    @staticmethod
+    def _gain(entry: float, price: float, is_long: bool) -> float:
+        """Percent gain of ``price`` relative to ``entry`` in the trade direction."""
+        if not entry:
+            return 0.0
+        return (price - entry) / entry * 100 if is_long else (entry - price) / entry * 100
+
+    def _net_pnl(self, sig: Signal, res: EvalResult, ladder: list[TpRung]) -> float:
+        """Position-weighted PnL with equal scale-out per TP rung.
+
+        The position is split into ``len(ladder)`` equal tranches; each TP rung
+        banks one tranche at its price, and whatever is left is closed at the
+        terminal exit (stop / breakeven / timeout). So a trade that bags TP1 and
+        is later stopped at breakeven still books the TP1 tranche as profit —
+        rather than being recorded as a full loss.
+        """
+        entry = sig.entry_price
+        if entry <= 0 or res.terminal == Status.INVALIDATED:
+            return 0.0
+        is_long = sig.is_long
+        n = len(ladder)
+        if n == 0:  # no ladder: whole position exits at exit_price
+            return self._gain(entry, res.exit_price, is_long) if res.exit_price else 0.0
+
+        frac = 1.0 / n
+        hit = set(res.tps_hit)
+        pnl = 0.0
+        closed = 0
+        for rung in ladder:
+            if rung.level in hit:
+                pnl += frac * self._gain(entry, rung.price, is_long)
+                closed += 1
+        remaining = n - closed
+        if remaining > 0 and res.exit_price is not None:
+            pnl += frac * remaining * self._gain(entry, res.exit_price, is_long)
+        return pnl
 
     def _safe_notify(self, sig: Signal, event: str, info: dict) -> None:
         try:
@@ -403,11 +434,22 @@ class Tracker:
         raw = self._store.read(OUTCOMES_KEY, default=[])
         return [Signal.from_dict(d) for d in raw if isinstance(d, dict)]
 
+    @staticmethod
+    def _is_graded(o: Signal) -> bool:
+        """An outcome counts toward win-rate if the trade was actually taken.
+
+        A signal that never activated (INVALIDATED) or expired without a usable
+        exit price books no PnL and is excluded. Everything else is graded by the
+        sign of its net (scale-out-weighted) PnL, so a TP1-then-breakeven trade is
+        a win even though its terminal status is SL_HIT.
+        """
+        return bool(o.activated) and o.pnl_pct is not None and o.pnl_pct != 0.0
+
     def stats(self) -> dict:
         """Aggregate win-rate / PnL stats over resolved outcomes."""
         outcomes = self.outcomes()
-        graded = [o for o in outcomes if Status(o.status).is_win or Status(o.status).is_loss]
-        wins = [o for o in graded if Status(o.status).is_win]
+        graded = [o for o in outcomes if self._is_graded(o)]
+        wins = [o for o in graded if (o.pnl_pct or 0.0) > 0]
         total = len(graded)
         win_rate = (len(wins) / total * 100) if total else 0.0
         pnls = [o.pnl_pct for o in graded if o.pnl_pct is not None]
@@ -418,7 +460,7 @@ class Tracker:
             bucket = by_strategy.setdefault(o.strategy, {"wins": 0, "total": 0, "pnl": 0.0})
             bucket["total"] += 1
             bucket["pnl"] += o.pnl_pct or 0.0
-            if Status(o.status).is_win:
+            if (o.pnl_pct or 0.0) > 0:
                 bucket["wins"] += 1
         for bucket in by_strategy.values():
             bucket["win_rate"] = round(bucket["wins"] / bucket["total"] * 100, 1) if bucket["total"] else 0.0
