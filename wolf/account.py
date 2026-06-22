@@ -59,6 +59,20 @@ class PaperAccount:
             return 0.0
         return max(0.0, (peak - bal) / peak * 100)
 
+    def summary(self) -> dict:
+        """Compact account snapshot for the /paper command and reports."""
+        st = self._state()
+        bal = float(st["balance"])
+        return {
+            "balance": round(bal, 2),
+            "starting_balance": round(self._start, 2),
+            "return_pct": round((bal - self._start) / self._start * 100, 2) if self._start else 0.0,
+            "peak": round(float(st.get("peak", bal)), 2),
+            "max_drawdown_pct": round(self.drawdown_pct(), 2),
+            "trades": int(st.get("trades", 0)),
+            "realized": round(float(st.get("realized", 0.0)), 2),
+        }
+
     @staticmethod
     def risk_pct_of(signal: Signal) -> float:
         """Stop distance as a percent of entry — the trade's risk leg."""

@@ -15,6 +15,7 @@ from wolf.api import create_app
 from wolf.app import build_application
 from wolf.config import Settings
 from wolf.logging_setup import setup_logging
+from wolf.notify.poller import TelegramPoller
 from wolf.scheduler import build_scheduler
 
 log = logging.getLogger("wolf.main")
@@ -40,8 +41,15 @@ def main() -> None:
     application = build_application(settings)
     api = create_app(application)
 
+    # Seed learning from a quick backtest so the bot doesn't start blind.
+    application.warm_start_learning()
+
     scheduler = build_scheduler(application)
     scheduler.start()
+
+    # Interactive Telegram commands (/analyze, /stats, /paper, /learning, ...).
+    poller = TelegramPoller(application)
+    poller.start()
     log.info(
         "Scheduler started (track=%dm, scan=%dm)",
         settings.tracker_interval_min,
@@ -78,6 +86,7 @@ def main() -> None:
     try:
         uvicorn.run(api, host=settings.api_host, port=settings.api_port, log_level=settings.log_level.lower())
     finally:
+        poller.stop()
         scheduler.shutdown(wait=False)
         log.info("Shutdown complete")
 

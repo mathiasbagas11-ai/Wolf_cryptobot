@@ -68,6 +68,7 @@ class Screener:
         risk: Optional[RiskSettings] = None,
         universe_provider=None,
         min_rr: float = 1.5,
+        learning=None,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -84,6 +85,7 @@ class Screener:
         self._risk = risk or RiskSettings()
         self._universe_provider = universe_provider
         self._min_rr = min_rr
+        self._learning = learning
 
     @property
     def detector_names(self) -> list[str]:
@@ -209,6 +211,19 @@ class Screener:
                 verdict.confidence, verdict.rationale,
             )
 
+    def _apply_learning(self, candidate: SignalCandidate) -> bool:
+        """Adjust score from memory; return False if the symbol is blacklisted."""
+        if self._learning is None:
+            return True
+        adj = self._learning.adjustment(candidate.symbol, candidate.strategy)
+        if adj.blacklisted:
+            log.info("Learning skip %s: %s", candidate.symbol, adj.reason)
+            return False
+        if adj.delta:
+            candidate.score = int(max(0, min(100, candidate.score + adj.delta)))
+            candidate.reasons.insert(0, adj.reason)
+        return True
+
     # ── risk gates ──────────────────────────────────────────────────────────
     # Drawdown is always a hard pause; regime + auto-pause default to MONITOR
     # (flag + down-score, still emit) and become hard blocks via RiskSettings.
@@ -297,6 +312,8 @@ class Screener:
             context = self._build_context(symbol)
             candidate = self._best_candidate(symbol, candles, context, features)
             if not candidate:
+                continue
+            if not self._apply_learning(candidate):
                 continue
             if self._gate_candidate(candidate, regime, weak):
                 continue

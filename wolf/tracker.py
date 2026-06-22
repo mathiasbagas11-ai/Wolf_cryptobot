@@ -111,12 +111,14 @@ class Tracker:
         settings: TrackerSettings,
         notify: Optional[NotifyFn] = None,
         account=None,
+        learning=None,
     ) -> None:
         self._store = store
         self._client = client
         self._settings = settings
         self._notify = notify or (lambda *_: None)
         self._account = account  # optional PaperAccount for the Trade Report
+        self._learning = learning  # optional LearningEngine fed on resolution
         # Guards the compound read-modify-write of pending_signals. StateStore
         # makes each read/write atomic, but record_signal and check_pending each
         # do load -> mutate -> save, which would otherwise interleave when the
@@ -382,6 +384,11 @@ class Tracker:
 
     def _resolution_info(self, sig: Signal) -> dict:
         """Trade-Report payload: paper-account move + a learned-edge note."""
+        if self._learning is not None:
+            try:
+                self._learning.observe(sig)
+            except Exception:  # learning must never break tracking/notify
+                log.exception("Learning observe failed for %s", sig.symbol)
         info: dict = {"lesson": self._lesson(sig)}
         if self._account is not None:
             try:

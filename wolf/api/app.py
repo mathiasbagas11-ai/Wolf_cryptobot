@@ -66,6 +66,26 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
     def stats() -> dict:
         return app_obj.tracker.stats()
 
+    @api.get("/paper")
+    def paper() -> dict:
+        if app_obj.account is None:
+            return {"enabled": False}
+        return {"enabled": True, **app_obj.account.summary()}
+
+    @api.get("/learning")
+    def learning() -> dict:
+        if app_obj.learning is None:
+            return {"enabled": False}
+        return {"enabled": True, **app_obj.learning.snapshot()}
+
+    @api.post("/backtest", dependencies=[Depends(require_api_key)])
+    def backtest(payload: dict = Body(default={})) -> dict:
+        if app_obj.backtest is None:
+            raise HTTPException(status_code=404, detail="Backtest not available")
+        symbols = payload.get("symbols") or app_obj.screener.current_universe()
+        result = app_obj.backtest.run(symbols)
+        return {"total_trades": result["total_trades"], "by_strategy": result["by_strategy"]}
+
     @api.post("/scan", dependencies=[Depends(require_api_key)])
     def scan() -> dict:
         recorded = app_obj.screener.run_cycle()
