@@ -63,7 +63,9 @@ def test_prepump_squeeze_then_coil():
     base = cs[-1].close
     for k in range(18):  # tight consolidation -> Bollinger squeeze
         cs.append(_c(41 + k, base, base + 0.25, base - 0.25, base + (0.05 if k % 2 else -0.05), 90.0))
-    cs.append(_c(59, base, base + 0.3, base - 0.2, base + 0.1, 250.0))  # volume coil release
+    # Breakout candle: closes above the consolidation high on strong volume —
+    # confirms the squeeze is resolving up (required since the 0/8 fix).
+    cs.append(_c(59, base, base + 1.6, base - 0.1, base + 1.3, 260.0))
     cand = PrePumpDetector().evaluate("X", cs)
     assert cand is not None
     assert cand.direction == "LONG"
@@ -74,6 +76,20 @@ def test_prepump_squeeze_then_coil():
 
 def test_prepump_no_signal_flat():
     assert PrePumpDetector().evaluate("X", _flat(80)) is None
+
+
+def test_prepump_requires_breakout_confirmation():
+    # Same squeeze, but the last candle stays INSIDE the range (no breakout) —
+    # must not fire (the 0/8 mid-squeeze failure mode).
+    cs = []
+    p = 90.0
+    for i in range(41):
+        p += 0.4
+        cs.append(_c(i, p - 0.1, p + 0.3, p - 0.2, p, 100.0))
+    base = cs[-1].close
+    for k in range(19):  # consolidation, no breakout candle at the end
+        cs.append(_c(41 + k, base, base + 0.25, base - 0.25, base + (0.05 if k % 2 else -0.05), 90.0))
+    assert PrePumpDetector().evaluate("X", cs) is None
 
 
 # ── PREDUMP ──────────────────────────────────────────────────────────────
@@ -119,6 +135,25 @@ def test_swing_pullback_in_uptrend():
 
 def test_swing_no_signal_flat():
     assert SwingDetector().evaluate("X", _flat(90)) is None
+
+
+def test_swing_stop_is_structural_below_wick():
+    cs = []
+    p = 80.0
+    for i in range(80):
+        p += 0.35
+        cs.append(_c(i, p - 0.1, p + 0.3, p - 0.2, p, 100.0))
+    cur = cs[-1].close
+    for k in range(4):
+        cur -= 0.7
+        cs.append(_c(80 + k, cur + 0.4, cur + 0.5, cur - 0.3, cur, 100.0))
+    rej_low = cur - 2.0
+    cs.append(_c(84, cur, cur + 0.6, rej_low, cur + 0.3, 130.0))  # deep bullish rejection wick
+    cand = SwingDetector().evaluate("X", cs)
+    assert cand is not None and cand.direction == "LONG"
+    # Stop sits at or below the rejection wick low (structural), not a flat EMA stop.
+    assert cand.sl <= rej_low
+    assert _valid_geometry(cand)
 
 
 # ── TRAP (liquidity-trap reversal, high conviction) ────────────────────────

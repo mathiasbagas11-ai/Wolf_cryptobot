@@ -154,6 +154,14 @@ class SwingDetector(Detector):
 
         entry = fast
         sl, tp, ladder = build_targets(entry, atr, is_long=is_long, sl_mult=1.5, tp_mults=(2.5, 4.0))
+        # Structural stop just beyond the rejection wick (the level that's meant
+        # to hold), with at least 0.8 ATR of room so noise doesn't stop us out.
+        # A flat EMA-based stop ignored where price actually invalidates — a key
+        # reason swing pullbacks were getting chopped (26% WR).
+        if is_long:
+            sl = min(last.low - atr * 0.3, entry - atr * 0.8)
+        else:
+            sl = max(last.high + atr * 0.3, entry + atr * 0.8)
         if (is_long and not (tp > entry > sl)) or (not is_long and not (tp < entry < sl)):
             return None
         return SignalCandidate(

@@ -83,16 +83,30 @@ class PrePumpDetector(Detector):
         if ema50_series[-1] <= ema50_series[-10]:
             return None  # EMA50 declining — dead-cat bounce, not accumulation
 
+        # Hard gate: breakout confirmation. The 0/8 failure mode was buying
+        # *mid-squeeze* with no proof the move had started — price would chop or
+        # break the other way. Require the latest candle to close above the prior
+        # consolidation high on a bullish bar, i.e. the squeeze is resolving UP.
+        last = candles[-1]
+        window = candles[-11:-1]
+        cons_high = max(c.high for c in window)
+        cons_low = min(c.low for c in window)
+        if not (last.close > cons_high and last.close > last.open):
+            return None
+
         score = 0
         reasons: list[str] = []
 
-        # 1. Bollinger squeeze
-        widths = [w for w in bb_widths_seq[-30:] if not math.isnan(w)]
-        if widths and not math.isnan(bb_width_now):
-            recent_min = min(widths)
-            if recent_min > 0 and bb_width_now <= recent_min * self.squeeze_ratio:
+        # 1. Bollinger squeeze — measured on the bars LEADING UP TO the breakout
+        #    (excluding the current candle, which naturally widens the bands), so
+        #    "was squeezed, now breaking out" scores instead of being cancelled.
+        prior_widths = [w for w in bb_widths_seq[-21:-1] if not math.isnan(w)]
+        if len(prior_widths) >= 2:
+            recent_min = min(prior_widths)
+            pre_breakout_width = prior_widths[-1]
+            if recent_min > 0 and pre_breakout_width <= recent_min * self.squeeze_ratio:
                 score += 30
-                reasons.append("Bollinger squeeze — consolidation near range low")
+                reasons.append("Bollinger squeeze resolving — breakout from consolidation")
 
         # 2. Volume coil
         if not math.isnan(vr) and vr >= 1.8:
@@ -152,6 +166,11 @@ class PrePumpDetector(Detector):
             return None
 
         sl, tp, ladder = build_targets(price, atr, is_long=True, sl_mult=1.5, tp_mults=(2.0, 4.0))
+        # Structural stop below the squeeze base — a flat ATR stop is too tight in
+        # the low-volatility squeeze and gets wicked out before the expansion.
+        sl = min(sl, cons_low - atr * 0.2)
+        if not (tp > price > sl):
+            return None
         return SignalCandidate(
             symbol=symbol,
             signal_type="PREPUMP",

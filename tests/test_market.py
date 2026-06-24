@@ -52,7 +52,8 @@ def _prepump_candles():
     base = cs[-1].close
     for k in range(18):
         cs.append(_c(41 + k, base, base + 0.25, base - 0.25, base + (0.05 if k % 2 else -0.05), 90.0))
-    cs.append(_c(59, base, base + 0.3, base - 0.2, base + 0.1, 250.0))
+    # Breakout candle above the consolidation high (required by the 0/8 fix).
+    cs.append(_c(59, base, base + 1.6, base - 0.1, base + 1.3, 260.0))
     return cs
 
 
