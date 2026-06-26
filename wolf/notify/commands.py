@@ -18,13 +18,16 @@ from __future__ import annotations
 
 import logging
 
-from wolf.textfmt import DIVIDER, esc
+from wolf.analyze import normalize_symbol
+from wolf.risk_plan import build_plan, render_plan
+from wolf.textfmt import DIVIDER, esc, fmt_price
 
 log = logging.getLogger("wolf.commands")
 
 _HELP = (
     "🐺 <b>Wolf — Commands</b>\n" + DIVIDER + "\n"
     "<code>/analyze BTC</code> — analyse a coin\n"
+    "<code>/calc BTC 500</code> — position size &amp; leverage for your balance\n"
     "<code>/stats</code> — win-rate &amp; PnL\n"
     "<code>/paper</code> — paper balance &amp; return\n"
     "<code>/learning</code> — strategy edge &amp; blacklist\n"
@@ -51,6 +54,8 @@ class CommandRouter:
             if getattr(self._app, "analyze", None) is None:
                 return "⚠️ Analysis unavailable."
             return self._app.analyze.analyze(arg)
+        if cmd == "calc":
+            return self._calc(arg)
         if cmd == "stats":
             return self._stats()
         if cmd == "paper":
@@ -62,6 +67,44 @@ class CommandRouter:
         if getattr(self._app, "analyze", None) is not None and not arg and cmd.isalnum():
             return self._app.analyze.analyze(cmd)  # bare ticker shortcut
         return "❓ Unknown command. Try <code>/help</code>."
+
+    def _calc(self, arg: str) -> str:
+        parts = arg.split()
+        if not parts:
+            return "⚠️ Usage: <code>/calc BTC 500</code> (coin + your balance in USD)"
+        analyze = getattr(self._app, "analyze", None)
+        if analyze is None:
+            return "⚠️ Sizing unavailable."
+        symbol = normalize_symbol(parts[0])
+        acct = getattr(self._app, "account", None)
+        default_bal = acct.balance if acct is not None else 1000.0
+        try:
+            balance = float(parts[1]) if len(parts) > 1 else default_bal
+        except ValueError:
+            return "⚠️ Balance must be a number, e.g. <code>/calc BTC 500</code>"
+        if balance <= 0:
+            return "⚠️ Balance must be positive."
+
+        cand = analyze.latest_setup(symbol)
+        if cand is None:
+            return f"➖ No active setup on <b>{esc(symbol)}</b> to size right now."
+        risk = self._app.settings.risk
+        plan = build_plan(
+            cand.entry_price, cand.sl, cand.direction == "LONG", balance,
+            self._app.settings.paper_risk_pct,
+            max_leverage=risk.max_leverage,
+            mmr=risk.maintenance_margin_rate,
+            buffer=risk.liq_safety_buffer,
+        )
+        if plan is None:
+            return f"⚠️ Could not size <b>{esc(symbol)}</b> (bad geometry)."
+        emoji = "🟢" if cand.direction == "LONG" else "🔴"
+        head = (
+            f"{emoji} <b>{esc(symbol)} {esc(cand.direction)}</b> · {esc(cand.strategy)}\n"
+            f"Entry <code>{fmt_price(cand.entry_price)}</code> · "
+            f"SL <code>{fmt_price(cand.sl)}</code> · TP <code>{fmt_price(cand.tp)}</code>\n{DIVIDER}\n"
+        )
+        return head + render_plan(plan, balance, fmt_price)
 
     # ── builders ─────────────────────────────────────────────────────────
     def _stats(self) -> str:

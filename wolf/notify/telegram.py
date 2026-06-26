@@ -23,6 +23,7 @@ import requests
 
 from wolf.config import TelegramSettings
 from wolf.models import Signal, Status
+from wolf.risk_plan import build_plan, render_plan
 from wolf.textfmt import DIVIDER, esc, fmt_price, now
 
 log = logging.getLogger("wolf.telegram")
@@ -44,11 +45,19 @@ class TelegramNotifier:
         timeout: float = 10.0,
         tz: str = "UTC",
         session: Optional[requests.Session] = None,
+        risk=None,
+        account=None,
+        risk_pct: float = 2.0,
+        start_balance: float = 1000.0,
     ) -> None:
         self._settings = settings
         self._timeout = timeout
         self._tz = tz
         self._session = session or requests.Session()
+        self._risk = risk
+        self._account = account
+        self._risk_pct = risk_pct
+        self._start_balance = start_balance
 
     @property
     def enabled(self) -> bool:
@@ -318,10 +327,26 @@ class TelegramNotifier:
             f"🛑 SL     <code>{fmt_price(s.sl)}</code>  ({sl_pct:+.2f}%)\n"
             f"📊 Score {s.score}/100 · {esc(s.confluence_level or '—')} · R:R {rr:.1f}\n"
             f"⚡ {esc(s.strategy)} · {esc(s.entry_mode)}\n{DIVIDER}\n"
+            f"{self._plan_block(s)}"
             f"{self._risk_block(s)}"
             f"{self._ai_block(s)}"
             f"{reasons}\n{self._stamp()}"
         )
+
+    def _plan_block(self, s: Signal) -> str:
+        """Executable position-sizing + liquidation plan, or '' if disabled."""
+        if not (self._risk and getattr(self._risk, "plan_enabled", False)):
+            return ""
+        balance = self._account.balance if self._account is not None else self._start_balance
+        plan = build_plan(
+            s.entry_price, s.sl, s.is_long, balance, self._risk_pct,
+            max_leverage=self._risk.max_leverage,
+            mmr=self._risk.maintenance_margin_rate,
+            buffer=self._risk.liq_safety_buffer,
+        )
+        if plan is None:
+            return ""
+        return render_plan(plan, balance, fmt_price) + f"{DIVIDER}\n"
 
     def _activated_text(self, s: Signal) -> str:
         return (

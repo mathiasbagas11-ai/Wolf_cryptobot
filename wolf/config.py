@@ -190,6 +190,19 @@ class RiskSettings:
     regime_hard_block: bool = False
     autopause_hard_block: bool = False
 
+    # ── Trade-plan / position-sizing engine (surfaced to the user per signal) ──
+    # Turns each signal into an executable plan: suggested leverage, margin and
+    # the liquidation price, sized so a stop-out costs exactly ``paper_risk_pct``
+    # of balance and liquidation can never trigger before the stop.
+    plan_enabled: bool = True
+    # Largest leverage the bot will ever recommend (beginner-safe per the guide).
+    max_leverage: int = 10
+    # Exchange maintenance-margin rate (≈0.5% for majors USDⓈ-M) for liq math.
+    maintenance_margin_rate: float = 0.005
+    # Liquidation must sit at least this many times the stop distance away, so
+    # the stop is always hit first with comfortable room to spare.
+    liq_safety_buffer: float = 2.0
+
 
 @dataclass(frozen=True)
 class UniverseSettings:
@@ -506,6 +519,10 @@ class Settings:
             autopause_min_win_rate=_env_float("AUTOPAUSE_MIN_WIN_RATE", 38.0),
             regime_hard_block=_env_bool("REGIME_HARD_BLOCK", False),
             autopause_hard_block=_env_bool("AUTOPAUSE_HARD_BLOCK", False),
+            plan_enabled=_env_bool("TRADE_PLAN_ENABLED", True),
+            max_leverage=_env_int("MAX_LEVERAGE", 10),
+            maintenance_margin_rate=_env_float("MAINTENANCE_MARGIN_RATE", 0.005),
+            liq_safety_buffer=_env_float("LIQ_SAFETY_BUFFER", 2.0),
         )
         universe = UniverseSettings(
             dynamic=_env_bool("UNIVERSE_DYNAMIC", True),

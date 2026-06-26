@@ -123,13 +123,15 @@ def build_application(settings: Settings | None = None) -> Application:
 
     store = StateStore(settings.state_dir)
     client = _build_market_client(settings)
-    notifier = TelegramNotifier(
-        settings.telegram, timeout=settings.http_timeout, tz=settings.timezone
-    )
     account = PaperAccount(
         store,
         start_balance=settings.paper_start_balance,
         risk_pct=settings.paper_risk_pct,
+    )
+    notifier = TelegramNotifier(
+        settings.telegram, timeout=settings.http_timeout, tz=settings.timezone,
+        risk=settings.risk, account=account,
+        risk_pct=settings.paper_risk_pct, start_balance=settings.paper_start_balance,
     )
     learning = LearningEngine(store, settings.learning) if settings.learning.enabled else None
     tracker = Tracker(
