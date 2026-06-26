@@ -57,6 +57,26 @@ class AnalyzeService:
                 best = cand
         return best
 
+    def latest_setup(self, symbol: str):
+        """Return the best detector candidate for ``symbol`` now, or None.
+
+        Used by ``/calc`` to size a trade plan against the current setup.
+        """
+        candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
+        if len(candles) < 60:
+            return None
+        try:
+            f = CandleFeatures.build(candles)
+        except Exception:
+            return None
+        context = None
+        if self._context_provider is not None:
+            try:
+                context = self._context_provider.build(symbol)
+            except (ValueError, KeyError, TypeError):
+                context = None
+        return self._best_candidate(symbol, candles, context, f)
+
     def analyze(self, raw_symbol: str) -> str:
         symbol = normalize_symbol(raw_symbol)
         if not symbol:
