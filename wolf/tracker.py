@@ -80,6 +80,33 @@ def normalize_ladder(
     return rungs
 
 
+def _partial_pnl(
+    entry: float,
+    is_long: bool,
+    ladder: list[TpRung],
+    tps_hit: list[int],
+    stop_price: float,
+) -> float:
+    """Blended PnL% of a scaled exit.
+
+    Models an equal position slice per ladder rung: each *hit* rung's slice is
+    booked at its target price, and every remaining slice is closed at
+    ``stop_price`` (breakeven once TP1 has moved the stop). Used to score a
+    TP1-banked stop-out as the partial win it actually is.
+    """
+    n = len(ladder)
+    if n == 0 or entry <= 0:
+        return 0.0
+
+    def pct(px: float) -> float:
+        move = (px - entry) if is_long else (entry - px)
+        return move / entry * 100
+
+    hit = set(tps_hit)
+    total = sum(pct(r.price if r.level in hit else stop_price) for r in ladder)
+    return total / n
+
+
 class EvalResult:
     """Outcome of replaying candles for one signal."""
 
@@ -91,6 +118,7 @@ class EvalResult:
         "terminal",
         "exit_price",
         "exit_time",
+        "realized_pnl_pct",
     )
 
     def __init__(self) -> None:
@@ -101,6 +129,9 @@ class EvalResult:
         self.terminal: Optional[Status] = None
         self.exit_price: Optional[float] = None
         self.exit_time: Optional[datetime] = None
+        # Blended PnL% of a scaled exit; set only for a partial (TP1-banked) win
+        # so _resolve books the realized number instead of the single-exit geom.
+        self.realized_pnl_pct: Optional[float] = None
 
 
 class Tracker:
@@ -267,6 +298,24 @@ class Tracker:
             # Stop-loss is checked first (conservative).
             sl_hit = (is_long and c.low <= eff_sl) or (not is_long and c.high >= eff_sl)
             if sl_hit:
+                banked = first_lvl is not None and first_lvl in res.tps_hit
+                if banked and self._settings.tp1_banks_win:
+                    # TP1 is already locked in and the stop now sits at breakeven,
+                    # so a scaled exit (a slice booked at each hit rung, the rest
+                    # at the stop) nets a partial profit — grade it a win.
+                    realized = round(
+                        _partial_pnl(entry, is_long, ladder, res.tps_hit, eff_sl), 3
+                    )
+                    res.terminal = Status.TP_HIT
+                    res.realized_pnl_pct = realized
+                    # Effective single exit price consistent with the blended PnL,
+                    # so the report's Entry→Exit never contradicts the PnL%.
+                    res.exit_price = (
+                        entry * (1 + realized / 100) if is_long
+                        else entry * (1 - realized / 100)
+                    )
+                    res.exit_time = c_time
+                    break
                 res.terminal = Status.SL_HIT
                 res.exit_price = eff_sl
                 res.exit_time = c_time
@@ -420,7 +469,11 @@ class Tracker:
         exit_price = res.exit_price
         exit_time = res.exit_time or now
         hold_hours = (exit_time - created_at).total_seconds() / 3600
-        if exit_price and sig.entry_price > 0 and res.terminal != Status.INVALIDATED:
+        if res.realized_pnl_pct is not None:
+            # Scaled-exit (TP1-banked) partial win: book the blended realized PnL
+            # rather than the single-exit geometry off the breakeven stop.
+            pnl = res.realized_pnl_pct
+        elif exit_price and sig.entry_price > 0 and res.terminal != Status.INVALIDATED:
             pnl = (
                 (exit_price - sig.entry_price) / sig.entry_price * 100
                 if sig.is_long
