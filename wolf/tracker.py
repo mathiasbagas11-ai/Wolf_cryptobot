@@ -303,12 +303,18 @@ class Tracker:
                     # TP1 is already locked in and the stop now sits at breakeven,
                     # so a scaled exit (a slice booked at each hit rung, the rest
                     # at the stop) nets a partial profit — grade it a win.
-                    res.terminal = Status.TP_HIT
-                    res.exit_price = eff_sl
-                    res.exit_time = c_time
-                    res.realized_pnl_pct = round(
+                    realized = round(
                         _partial_pnl(entry, is_long, ladder, res.tps_hit, eff_sl), 3
                     )
+                    res.terminal = Status.TP_HIT
+                    res.realized_pnl_pct = realized
+                    # Effective single exit price consistent with the blended PnL,
+                    # so the report's Entry→Exit never contradicts the PnL%.
+                    res.exit_price = (
+                        entry * (1 + realized / 100) if is_long
+                        else entry * (1 - realized / 100)
+                    )
+                    res.exit_time = c_time
                     break
                 res.terminal = Status.SL_HIT
                 res.exit_price = eff_sl

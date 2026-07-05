@@ -107,9 +107,31 @@ def test_tp1_then_breakeven_stop_banks_partial_win(store, fake_client):
     _tp1_then_breakeven(store, fake_client)
     tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
     resolved = tracker.check_pending()
-    assert resolved[0].status == Status.TP_HIT.value
-    assert Status(resolved[0].status).is_win
-    assert resolved[0].pnl_pct == 2.5
+    r = resolved[0]
+    assert r.status == Status.TP_HIT.value
+    assert Status(r.status).is_win
+    assert r.pnl_pct == 2.5
+    # Exit price must be consistent with the booked PnL (no contradictory report).
+    assert r.exit_price == 100 * (1 + 2.5 / 100)  # 102.5
+
+
+def test_tp1_then_breakeven_stop_partial_win_short(store, fake_client):
+    # Short mirror: TP1 at 95 (+5%), stop trails to BE (100) -> +2.5% win.
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "SOLUSDT", "SCREENER", "SHORT", 100, tp=90, sl=105,
+        entry_mode="MOMENTUM_NOW", tps=[{"level": 1, "price": 95}, {"level": 2, "price": 90}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["SOLUSDT"] = _candles_after(now_ms, [
+        (100, 101, 94, 95),     # TP1 at 95 -> stop trails to breakeven (100)
+        (100, 101, 99, 100),    # high pierces the breakeven stop
+    ])
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    r = tracker.check_pending()[0]
+    assert r.status == Status.TP_HIT.value
+    assert r.pnl_pct == 2.5
+    assert r.exit_price == 100 * (1 - 2.5 / 100)  # 97.5
 
 
 def test_stop_before_tp1_still_loss_when_enabled(store, fake_client):
