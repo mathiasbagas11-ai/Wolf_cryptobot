@@ -177,8 +177,12 @@ class RiskSettings:
     drawdown_pause_pct: float = 15.0
 
     # Auto-pause underperformers: once a strategy has at least this many graded
-    # trades and its win-rate is below the floor, flag it.
+    # trades, judge it on realized edge (expectancy = avg PnL % per trade) and
+    # flag it when that edge falls below the floor. Win-rate is only a fallback
+    # for older stats that don't carry avg_pnl — a low-WR / high-R:R setup can
+    # still be net profitable, so win-rate alone is the wrong gate.
     autopause_min_trades: int = 12
+    autopause_min_expectancy: float = 0.0
     autopause_min_win_rate: float = 38.0
 
     # Enforcement mode for the regime + auto-pause gates.
@@ -516,6 +520,7 @@ class Settings:
             regime_interval=_env_str("REGIME_INTERVAL", "1h"),
             drawdown_pause_pct=_env_float("DRAWDOWN_PAUSE_PCT", 15.0),
             autopause_min_trades=_env_int("AUTOPAUSE_MIN_TRADES", 12),
+            autopause_min_expectancy=_env_float("AUTOPAUSE_MIN_EXPECTANCY", 0.0),
             autopause_min_win_rate=_env_float("AUTOPAUSE_MIN_WIN_RATE", 38.0),
             regime_hard_block=_env_bool("REGIME_HARD_BLOCK", False),
             autopause_hard_block=_env_bool("AUTOPAUSE_HARD_BLOCK", False),

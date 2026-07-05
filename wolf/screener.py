@@ -243,18 +243,30 @@ class Screener:
             return False
 
     def _weak_strategies(self) -> set[str]:
-        """Strategies with enough graded trades and a win-rate below the floor."""
+        """Strategies with enough graded trades whose realized edge is negative.
+
+        Gate on expectancy (avg PnL % per trade), not win-rate: a low-win-rate
+        setup with a high reward:risk can still be net profitable, while a
+        high-win-rate setup with tiny wins and large losses quietly bleeds. We
+        pause a strategy only when its realized edge is below the floor.
+        Win-rate is a fallback for older stats that don't carry ``avg_pnl``.
+        """
         try:
             by_strategy = self._tracker.stats().get("by_strategy", {})
         except Exception:
             log.exception("Stats read failed for auto-pause")
             return set()
-        return {
-            name
-            for name, b in by_strategy.items()
-            if b.get("total", 0) >= self._risk.autopause_min_trades
-            and b.get("win_rate", 100.0) < self._risk.autopause_min_win_rate
-        }
+        weak: set[str] = set()
+        for name, b in by_strategy.items():
+            if b.get("total", 0) < self._risk.autopause_min_trades:
+                continue
+            expectancy = b.get("avg_pnl")
+            if expectancy is not None:
+                if expectancy < self._risk.autopause_min_expectancy:
+                    weak.add(name)
+            elif b.get("win_rate", 100.0) < self._risk.autopause_min_win_rate:
+                weak.add(name)
+        return weak
 
     def _fights_regime(self, candidate: SignalCandidate, regime: str) -> bool:
         """True when a trend-following entry trades against the broad market."""
