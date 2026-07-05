@@ -250,6 +250,14 @@ class TrackerSettings:
     # Keep at most this many resolved outcomes on disk.
     max_outcomes: int = 500
 
+    # Grading: once TP1 (the first ladder rung) is banked, a later stop-out at
+    # breakeven is booked as a partial win (models a scaled exit — part off at
+    # TP1, the rest rides to BE) instead of a loss. This stops trend setups that
+    # reliably reach TP1 from being scored as serial losers by the all-or-nothing
+    # rule. Off (default) keeps the legacy rule: a win only when the final rung
+    # is reached; a post-TP1 breakeven stop counts as a loss.
+    tp1_banks_win: bool = False
+
     def timeout_for(self, signal_type: str) -> int:
         return {
             "SCREENER": self.timeout_screener_h,
@@ -513,6 +521,7 @@ class Settings:
             dedup_screener_min=_env_int("TRACKER_DEDUP_SCREENER_MIN", dedup_default),
             dedup_swing_min=_env_int("TRACKER_DEDUP_SWING_MIN", 60),
             max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", 500),
+            tp1_banks_win=_env_bool("TRACKER_TP1_BANKS_WIN", False),
         )
         risk = RiskSettings(
             regime_filter_enabled=_env_bool("REGIME_FILTER_ENABLED", True),

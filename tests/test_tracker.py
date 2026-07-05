@@ -6,6 +6,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+from wolf.config import TrackerSettings
 from wolf.models import Candle, Status
 from wolf.tracker import Tracker, normalize_ladder
 
@@ -72,6 +73,72 @@ def test_long_signal_hits_tp(store, fake_client, tracker_settings):
     ])
     resolved = tracker.check_pending()
     assert len(resolved) == 1
+    assert resolved[0].status == Status.TP_HIT.value
+    assert resolved[0].pnl_pct == 10.0
+
+
+# ── TP1-banks-win grading (partial-win after breakeven stop) ─────────────────
+def _tp1_then_breakeven(store, fake_client):
+    """Record a LONG that hits TP1 (105) then pulls back to the breakeven stop."""
+    tracker_stub = Tracker(store, fake_client, TrackerSettings())
+    sig = tracker_stub.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=[{"level": 1, "price": 105}, {"level": 2, "price": 110}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [
+        (100, 102, 99, 101),
+        (101, 106, 100, 105),   # TP1 at 105 -> stop trails to breakeven (100)
+        (100, 101, 99, 100),    # low pierces the breakeven stop
+    ])
+
+
+def test_tp1_then_breakeven_stop_is_loss_by_default(store, fake_client):
+    # Legacy all-or-nothing rule: TP1 banked then stopped at BE == a loss.
+    _tp1_then_breakeven(store, fake_client)
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=False))
+    resolved = tracker.check_pending()
+    assert resolved[0].status == Status.SL_HIT.value
+    assert resolved[0].pnl_pct == 0.0
+
+
+def test_tp1_then_breakeven_stop_banks_partial_win(store, fake_client):
+    # With the fix: half booked at TP1 (+5%), half at BE (0%) -> +2.5% win.
+    _tp1_then_breakeven(store, fake_client)
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    resolved = tracker.check_pending()
+    assert resolved[0].status == Status.TP_HIT.value
+    assert Status(resolved[0].status).is_win
+    assert resolved[0].pnl_pct == 2.5
+
+
+def test_stop_before_tp1_still_loss_when_enabled(store, fake_client):
+    # No rung banked -> a real loss even with the flag on.
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    sig = tracker.record_signal(
+        "ETHUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=[{"level": 1, "price": 105}, {"level": 2, "price": 110}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["ETHUSDT"] = _candles_after(now_ms, [(100, 101, 94, 96)])
+    resolved = tracker.check_pending()
+    assert resolved[0].status == Status.SL_HIT.value
+    assert resolved[0].pnl_pct == -5.0
+
+
+def test_full_ladder_win_unaffected_when_enabled(store, fake_client):
+    # Reaching the final rung stays a full win at the final-rung PnL.
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    sig = tracker.record_signal(
+        "SOLUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=[{"level": 1, "price": 105}, {"level": 2, "price": 110}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["SOLUSDT"] = _candles_after(now_ms, [
+        (100, 106, 100, 105),   # TP1
+        (105, 111, 104, 110),   # TP2 -> terminal
+    ])
+    resolved = tracker.check_pending()
     assert resolved[0].status == Status.TP_HIT.value
     assert resolved[0].pnl_pct == 10.0
 
