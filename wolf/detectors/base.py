@@ -43,6 +43,11 @@ class SignalCandidate:
     # regime or comes from an underperforming strategy. Kept for win-rate study.
     against_regime: bool = False
     weak_strategy: bool = False
+    # Composite-regime bounce guard: flagged when a SHORT faces bounce/squeeze
+    # risk. ``risk_scale`` shrinks the position size (1.0 = full). In monitor
+    # mode the flag is set but risk_scale stays 1.0 (observation only).
+    bounce_flagged: bool = False
+    risk_scale: float = 1.0
 
 
 class Detector(ABC):

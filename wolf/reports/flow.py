@@ -227,11 +227,13 @@ class FlowReporter:
 
         if b.stablecoin is not None:
             s = b.stablecoin
-            sign = "numpuk 🔥" if s.change_7d_pct >= 0 else "berkurang 📉"
+            sign = "numpuk 🔥" if s.change_7d_pct >= 0 else "nyusut 📉"
             lines.append("\n<b>2/ STABLECOIN — dry powder</b>")
             lines.append(f"💵 Total supply {fmt_usd(s.total_usd)} ({s.change_7d_pct:+.1f}% / 7h) — {sign}")
-            lines.append("Cash = amunisi buat beli dip." if s.change_7d_pct >= 0
-                         else "Dry powder lagi dilepas ke market.")
+            # Macro read: supply growing = sidelined cash building (fuel for dips);
+            # supply shrinking = redemptions = cash leaving crypto (risk-off).
+            lines.append("Cash numpuk di sideline = amunisi buat beli dip." if s.change_7d_pct >= 0
+                         else "Supply ditebus keluar — cash kabur dari crypto (risk-off).")
 
         if b.chains:
             lines.append("\n<b>3/ CHAIN ROTATION — kemana modal mengalir</b>")

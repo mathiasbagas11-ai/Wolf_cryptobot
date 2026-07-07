@@ -7,6 +7,11 @@ from wolf.detectors import MomentumBreakoutDetector
 from wolf.detectors.base import Detector, SignalCandidate
 from wolf.models import Candle
 from wolf.regime import BEARISH, BULLISH, NEUTRAL, UNKNOWN
+from wolf.regime_composite import (
+    EXTREME_FEAR,
+    MarketContext,
+    UD_RISK_ON,
+)
 from wolf.screener import Screener
 from wolf.tracker import Tracker
 
@@ -293,6 +298,107 @@ def test_winrate_fallback_when_avg_pnl_missing(fake_client):
         risk=RiskSettings(autopause_min_trades=12, autopause_min_win_rate=38.0),
     )
     assert "MOMENTUM" in screener._weak_strategies()
+
+
+# ── composite-regime bounce guard ────────────────────────────────────────────
+class _FakeMacro:
+    def __init__(self, ctx: MarketContext) -> None:
+        self._ctx = ctx
+
+    def snapshot(self) -> MarketContext:
+        return self._ctx
+
+
+def _short_detector(score=90):
+    return _FixedDetector("PREDUMP", "SHORT", score)  # counter-trend short
+
+
+def test_bounce_guard_monitor_flags_short_without_scaling(fake_client):
+    # Monitor: extreme fear → SHORT flagged, but nothing actually changes.
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[])
+    cand = _cand(direction="SHORT", signal_type="PREDUMP")
+    ctx = MarketContext(trend=NEUTRAL, sentiment=EXTREME_FEAR)
+    assert screener._apply_bounce_guard(cand, ctx) is False   # never drops in monitor
+    assert cand.bounce_flagged is True
+    assert cand.risk_scale == 1.0                              # observation only
+
+
+def test_bounce_guard_ignores_longs(fake_client):
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[])
+    cand = _cand(direction="LONG", signal_type="SCREENER")
+    ctx = MarketContext(trend=NEUTRAL, sentiment=EXTREME_FEAR)
+    assert screener._apply_bounce_guard(cand, ctx) is False
+    assert cand.bounce_flagged is False
+
+
+def test_bounce_guard_noop_without_reversal_risk(fake_client):
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[])
+    cand = _cand(direction="SHORT", signal_type="PREDUMP")
+    ctx = MarketContext(trend=BEARISH, sentiment="SENT_NEUTRAL")  # no bounce risk
+    assert screener._apply_bounce_guard(cand, ctx) is False
+    assert cand.bounce_flagged is False
+
+
+def test_bounce_guard_live_scales_high_score_short(fake_client):
+    screener = Screener(
+        fake_client, _FakeTracker({}), [], universe=[],
+        risk=RiskSettings(bounce_guard_mode="live", bounce_size_factor=0.5, bounce_min_score=88),
+    )
+    cand = _cand(direction="SHORT", signal_type="PREDUMP")  # score 80... below floor
+    cand.score = 90
+    ctx = MarketContext(trend=NEUTRAL, usdt_d=UD_RISK_ON)
+    assert screener._apply_bounce_guard(cand, ctx) is False  # passes floor, kept
+    assert cand.risk_scale == 0.5
+
+
+def test_bounce_guard_live_drops_low_score_short(fake_client):
+    screener = Screener(
+        fake_client, _FakeTracker({}), [], universe=[],
+        risk=RiskSettings(bounce_guard_mode="live", bounce_min_score=88),
+    )
+    cand = _cand(direction="SHORT", signal_type="PREDUMP")  # score 80 < 88
+    ctx = MarketContext(trend=NEUTRAL, sentiment=EXTREME_FEAR)
+    assert screener._apply_bounce_guard(cand, ctx) is True   # dropped
+    assert cand.bounce_flagged is True
+
+
+def test_bounce_guard_disabled_is_inert(fake_client):
+    screener = Screener(
+        fake_client, _FakeTracker({}), [], universe=[],
+        risk=RiskSettings(composite_regime_enabled=False, bounce_guard_mode="live"),
+    )
+    cand = _cand(direction="SHORT", signal_type="PREDUMP")
+    ctx = MarketContext(trend=NEUTRAL, sentiment=EXTREME_FEAR)
+    assert screener._apply_bounce_guard(cand, ctx) is False
+    assert cand.bounce_flagged is False
+
+
+def test_bounce_guard_monitor_counter_trend_short_recorded(store, fake_client, tracker_settings):
+    # Blind-spot closure: a counter-trend PREDUMP short (regime-exempt) is still
+    # bounce-flagged and emitted at full size in monitor mode, via run_cycle.
+    fake_client.klines["BTCUSDT"] = _SMALL_CANDLES
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client, tracker, [_short_detector(90)], universe=["BTCUSDT"],
+        macro_provider=_FakeMacro(MarketContext(trend=NEUTRAL, sentiment=EXTREME_FEAR)),
+    )
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1
+    assert recorded[0].bounce_flagged is True
+    assert recorded[0].risk_scale == 1.0    # monitor: full size
+
+
+def test_bounce_guard_live_records_scaled_short(store, fake_client, tracker_settings):
+    fake_client.klines["BTCUSDT"] = _SMALL_CANDLES
+    tracker = Tracker(store, fake_client, tracker_settings)
+    screener = Screener(
+        fake_client, tracker, [_short_detector(90)], universe=["BTCUSDT"],
+        risk=RiskSettings(bounce_guard_mode="live", bounce_size_factor=0.5, bounce_min_score=88),
+        macro_provider=_FakeMacro(MarketContext(trend=NEUTRAL, usdt_d=UD_RISK_ON)),
+    )
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1
+    assert recorded[0].risk_scale == 0.5
 
 
 # ── dynamic universe ────────────────────────────────────────────────────────

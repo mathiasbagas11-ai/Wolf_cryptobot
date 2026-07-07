@@ -28,6 +28,7 @@ from wolf.exchange import BinanceClient
 from wolf.indicator_cache import CandleFeatures
 from wolf.notify import TelegramNotifier
 from wolf.regime import BEARISH, BULLISH, NEUTRAL, UNKNOWN
+from wolf.regime_composite import MarketContext
 from wolf.tracker import Tracker
 
 log = logging.getLogger("wolf.screener")
@@ -69,6 +70,7 @@ class Screener:
         universe_provider=None,
         min_rr: float = 1.5,
         learning=None,
+        macro_provider=None,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -81,6 +83,7 @@ class Screener:
         self._validator = validator
         self._veto_min_confidence = veto_min_confidence
         self._regime_provider = regime_provider
+        self._macro_provider = macro_provider
         self._account = account
         self._risk = risk or RiskSettings()
         self._universe_provider = universe_provider
@@ -232,6 +235,20 @@ class Screener:
             return UNKNOWN
         return self._regime_provider.bias()
 
+    def _current_context(self) -> MarketContext:
+        """Resolve the macro backdrop once per cycle.
+
+        Prefers the composite provider (trend + flow dims); falls back to a
+        trend-only context when only the legacy regime provider is wired, so
+        existing behaviour and tests are unchanged when no macro provider is set.
+        """
+        if self._macro_provider is not None:
+            try:
+                return self._macro_provider.snapshot()
+            except Exception:  # a macro hiccup must never break the scan
+                log.warning("Composite regime snapshot failed", exc_info=True)
+        return MarketContext(trend=self._current_regime())
+
     def _drawdown_paused(self) -> bool:
         """True when paper equity has fallen far enough below its peak to pause."""
         if self._account is None:
@@ -304,6 +321,53 @@ class Screener:
 
         return False
 
+    def _apply_bounce_guard(self, candidate: SignalCandidate, ctx: MarketContext) -> bool:
+        """Risk-scale a SHORT facing bounce/squeeze risk. Returns True to drop.
+
+        Applies to *every* SHORT, including counter-trend setups the regime
+        filter exempts — the bounce risk is a distinct axis (squeeze), not a
+        trend-alignment question. In ``monitor`` mode nothing changes: the
+        candidate is flagged and the what-if is logged so we collect a clean
+        W/L sample. In ``live`` mode the size factor is applied and a short
+        below the elevated score floor is dropped.
+        """
+        if not self._risk.composite_regime_enabled:
+            return False
+        if candidate.direction != "SHORT" or not ctx.short_reversal_risk:
+            return False
+
+        would_pass = candidate.score >= self._risk.bounce_min_score
+        candidate.bounce_flagged = True
+        reason = self._bounce_reason(ctx)
+
+        if self._risk.bounce_guard_mode == "live":
+            candidate.risk_scale = self._risk.bounce_size_factor
+            if not would_pass:
+                log.info("BOUNCE-GUARD (live): dropped SHORT %s %s score=%d < %d | %s",
+                         candidate.symbol, candidate.signal_type, candidate.score,
+                         self._risk.bounce_min_score, reason)
+                return True
+            log.info("BOUNCE-GUARD (live): scaled SHORT %s %s ×%.2f | %s",
+                     candidate.symbol, candidate.signal_type, candidate.risk_scale, reason)
+            return False
+
+        # monitor: observe only
+        log.info("BOUNCE-GUARD (monitor): SHORT %s %s score=%d | %s — would ×%.2f, "
+                 "need score≥%d (%s)",
+                 candidate.symbol, candidate.signal_type, candidate.score, reason,
+                 self._risk.bounce_size_factor, self._risk.bounce_min_score,
+                 "PASS" if would_pass else "FILTER")
+        return False
+
+    @staticmethod
+    def _bounce_reason(ctx: MarketContext) -> str:
+        bits = [f"sentiment={ctx.sentiment}", f"usdt_d={ctx.usdt_d}"]
+        if ctx.fng_value is not None:
+            bits.append(f"fng={ctx.fng_value}")
+        if ctx.usdtd_change_24h is not None:
+            bits.append(f"usdtd_24h={ctx.usdtd_change_24h:+.2f}%")
+        return " ".join(bits)
+
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""
         recorded = []
@@ -314,7 +378,8 @@ class Screener:
                 self._account.drawdown_pct(), self._risk.drawdown_pause_pct,
             )
             return recorded
-        regime = self._current_regime()
+        ctx = self._current_context()
+        regime = ctx.trend
         weak = self._weak_strategies()
         for symbol in self.current_universe():
             candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
@@ -328,6 +393,8 @@ class Screener:
             if not self._apply_learning(candidate):
                 continue
             if self._gate_candidate(candidate, regime, weak):
+                continue
+            if self._apply_bounce_guard(candidate, ctx):
                 continue
             rr = abs(candidate.tp - candidate.entry_price) / max(abs(candidate.entry_price - candidate.sl), 1e-9)
             if rr < self._min_rr:
@@ -354,6 +421,8 @@ class Screener:
                 ai_vetoed=candidate.ai_vetoed,
                 against_regime=candidate.against_regime,
                 weak_strategy=candidate.weak_strategy,
+                bounce_flagged=candidate.bounce_flagged,
+                risk_scale=candidate.risk_scale,
             )
             if signal is None:
                 continue

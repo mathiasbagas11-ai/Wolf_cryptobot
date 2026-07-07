@@ -93,7 +93,10 @@ class PaperAccount:
 
         st = self._state()
         balance = float(st["balance"])
-        risk_amount = balance * (self._risk_pct / 100)
+        # Bounce guard can shrink the risked fraction for flagged shorts so the
+        # paper P&L reflects the smaller size actually taken (1.0 = full size).
+        scale = getattr(signal, "risk_scale", 1.0) or 1.0
+        risk_amount = balance * (self._risk_pct / 100) * scale
         risk_leg = self.risk_pct_of(signal)
         pnl_pct = signal.pnl_pct or 0.0
         r_multiple = (pnl_pct / risk_leg) if risk_leg else 0.0
