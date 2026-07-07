@@ -52,7 +52,9 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/structure.py` | Price-action helpers (swing points, liquidity sweep, RSI divergence) |
 | `wolf/detectors/` | One detector per module (`momentum`, `prepump`, `predump`, `scalp`, `swing`) |
 | `wolf/market.py` | Futures market context (funding rate, open interest) + provider |
-| `wolf/ai/` | AI debate layer — Bull/Bear + arbiter verdict (Anthropic SDK) |
+| `wolf/ai/` | AI debate layer + LLM clients (Anthropic / DeepSeek / Groq) |
+| `wolf/flow/` | Flow-intelligence data (CoinGecko + DefiLlama) + framework-filter brief |
+| `wolf/reports/flow.py` | Nansen-style flow-intelligence thread → News topic |
 | `wolf/tracker.py` | Signal lifecycle engine + stats — the core |
 | `wolf/notify/telegram.py` | Telegram notifier + message builders |
 | `wolf/screener.py` | Thin orchestration (replaces the old 11k-line hub) |
@@ -77,6 +79,7 @@ and unit-tested.
 | `PREDUMP` | SHORT | Bearish RSI divergence + over-extension + rejection (distribution) | ≥65 |
 | `SCALP` | both | Liquidity sweep (stop-hunt) + volume spike + RSI extreme | ≥60 |
 | `SWING` | both | Trend (EMA align) + pullback to EMA20 + rejection candle | ≥65 |
+| `TRAP` | both | Failed-breakout reversal: sweep + reclaim + volume climax + VWAP grab + exhaustion (anti exit-liquidity) | ≥80 (HIGH only) |
 
 Add a detector by writing one module and appending it to `default_detectors()`
 in `wolf/detectors/__init__.py` — nothing else changes.
@@ -86,6 +89,36 @@ in `wolf/detectors/__init__.py` — nothing else changes.
 Binance futures: negative/extreme funding boosts a PREPUMP short-squeeze case,
 overheated positive funding boosts a PREDUMP. The bonus is purely additive, so
 detectors still work candle-only when futures data is unavailable.
+
+## Risk gates
+
+Detectors only decide *what* looks like a setup; **risk gates** (`wolf/regime.py`
++ the screener) decide whether it's actually emitted. They close the loop between
+the bot's own results and its next trade. The default is **"Campur"** (hybrid):
+drawdown is always a hard pause (it protects equity), while the two judgement
+gates run in **monitor mode** — the signal is still emitted but flagged and
+down-scored, so their win-rates can be measured before promoting either to a
+hard block (`REGIME_HARD_BLOCK` / `AUTOPAUSE_HARD_BLOCK`). Configured under
+`RiskSettings`:
+
+| Gate | Default | What it does | Env |
+|------|---------|--------------|-----|
+| **Regime filter** | monitor | Reads a bellwether's trend (BTC, price vs EMA20/EMA50) and flags trend-following LONGs in a BEARISH market and SHORTs in a BULLISH one. Counter-trend setups (`SCALP`/`PREDUMP`/`TRAP`) are exempt — they're *meant* to fade the tape. | `REGIME_FILTER_ENABLED`, `REGIME_HARD_BLOCK`, `REGIME_SYMBOL`, `REGIME_INTERVAL` |
+| **Drawdown throttle** | **hard** | Tracks the paper equity's high-water mark and pauses **all** new entries once the balance falls a set % below its peak — stops a correction from giving back realized gains. | `DRAWDOWN_PAUSE_PCT` |
+| **Auto-pause** | monitor | Watches the "lesson": once a strategy has enough graded trades and its win-rate is below a floor, it flags (or, when hard, stops emitting) it. | `AUTOPAUSE_MIN_TRADES`, `AUTOPAUSE_MIN_WIN_RATE`, `AUTOPAUSE_HARD_BLOCK` |
+
+Flagged signals carry `against_regime` / `weak_strategy` on the outcome record,
+and the periodic stats card shows a **Risk-gate monitor** comparing their
+win-rate to the overall — your evidence for whether to flip a gate to hard.
+
+## Universe
+
+The screener can scan a **dynamic universe** (`wolf/universe.py`): it ranks the
+whole market by 24h quote volume in one API call and scans the most liquid pairs,
+with the core majors always included. Liquidity is the gate, so meme coins and
+other ecosystems rotate in as they heat up instead of only the same hardcoded
+majors. Set `UNIVERSE_DYNAMIC=false` to scan the fixed majors list only.
+Tuned via `UNIVERSE_TOP_N` and `UNIVERSE_MIN_QUOTE_VOLUME`.
 
 ## Data sources (multi-exchange fallback)
 
@@ -136,6 +169,7 @@ configured:
 | Telegram topic | Env var | Content | Enable |
 |----------------|---------|---------|--------|
 | ‼️ New Signal | `NEW_SIGNAL_THREAD_ID` | new signal alerts | always |
+| 🎯 High-Conviction | `HIGH_CONVICTION_THREAD_ID` | full lifecycle of TRAP (premium) signals; blank → normal topics | always |
 | ⭐ Signal Entry | `SIGNAL_THREAD_ID` | entry touched + TP hits | always |
 | 📝 Trade Reports | `TRADE_REPORT_THREAD_ID` | win/loss resolutions | always |
 | 📚 Market Update | `MARKET_UPDATE_THREAD_ID` | BTC/ETH bias pulse | `MARKET_PULSE_ENABLED` |
@@ -160,11 +194,48 @@ Periodic reports each post to their own topic and are **opt-in**:
 * **Market pulse** (`MARKET_PULSE_ENABLED`) — BTC/ETH trend + RSI bias.
 * **Whale** (`WHALE_ENABLED`) — large public trades above `WHALE_MIN_USD`,
   de-duplicated via the state store (REST only, no key, no WebSocket).
-* **News** (`NEWS_ENABLED`) — CryptoCompare headlines (free, key-less),
-  de-duplicated so the same story isn't reposted.
+* **News** (`NEWS_ENABLED`) — an automatic, multi-source headline pipeline.
+  Every `NEWS_INTERVAL_MIN` it fans out to all `NEWS_SOURCES` (free & key-less:
+  `cryptocompare`, `reddit` via Atom RSS, `hackernews` via Algolia), isolates
+  each source's failure, **dedups across sources** by normalised title, **ranks
+  by engagement** (HN points/comments), and posts only genuinely-new items
+  (seen-set in the state store, so nothing is reposted). With
+  `NEWS_SYNTHESIS_ENABLED=true` an LLM (`NEWS_NARRATOR_PROVIDER`) condenses the
+  fresh batch into a single grouped brief instead of a flat card — it only
+  phrases the fetched headlines, never invents stories. Sources adapted from the
+  `last30days` skill.
+* **Flow Intelligence** (`FLOW_ENABLED`) — a Nansen-style "flow" thread posted to
+  the News topic: BTC/market posture → stablecoin dry powder → chain rotation →
+  ranked token picks → watchlist → skips → conclusion + strategy. Built from
+  **free** data plus signals the bot already has:
+  * CoinGecko — market cap, FDV/MC (unlock pressure), turnover, % from ATH.
+  * DefiLlama — per-chain DEX volume, aggregate stablecoin supply (dry powder).
+  * Exchange perps (existing `MarketDataClient`) — **funding rate** per pick
+    (negative = shorts crowded → squeeze fuel = bullish).
+  * **Fear & Greed Index** (alternative.me) + **Coinbase Premium** (Coinbase
+    BTC/USD vs Binance BTC/USDT = US institutional demand). Extreme fear + a
+    positive premium + dry powder → a *contrarian* RISK-ON read ("be greedy when
+    others are fearful"). Both free & key-less, ported from the previous bot.
+  * **Hyperliquid** perps — funding rate + open interest per pick from a single
+    cached snapshot (`metaAndAssetCtxs`), wider alt coverage than Binance perps.
 
-Each is a small module behind the exchange `MarketDataClient`; they never touch
-the signal pipeline and degrade to nothing if their data is unavailable.
+  A **single-token deep-dive** (`POST /flow/{symbol}`) renders an honest bull-vs-
+  bear breakdown + playbook for one token (ENA-thread style): every bear point is
+  a real red flag computed from the data, never softened. Works on demand even
+  when the scheduled report is disabled.
+
+  A deterministic *framework filter* (`wolf/flow/brief.py`) selects picks (low
+  FDV/MC unlock pressure, healthy turnover, not already pumped, no wash-trading),
+  ranks them by a **Quant score** (unlock pressure + cross-sectional **liquidity
+  percentile** + funding tailwind), surfaces near-misses as a watchlist, and
+  explains every skip. An LLM **narrator** (`FLOW_NARRATOR_PROVIDER` = `deepseek`
+  | `groq` | `gemini` | `anthropic`) phrases the brief in the thread style;
+  **without an API key it falls back to a built-in template**, so it always
+  works. The narrator only ever phrases the computed numbers — it never invents
+  wallet-level metrics (real netflow / whale wallets need a paid Nansen key).
+
+Each is a small module that never touches the signal pipeline and degrades to
+nothing if its data is unavailable.
 
 ## Signal lifecycle
 
@@ -216,6 +287,14 @@ The API is then available at `http://localhost:8000` (interactive docs at
 | `POST` | `/scan` | Run one screening cycle now |
 | `POST` | `/track` | Advance pending signals now |
 | `POST` | `/signals` | Record a signal manually (external strategies) |
+| `POST` | `/flow` | Build the flow-intelligence brief now → News topic |
+| `POST` | `/flow/{symbol}` | Single-token contrarian deep-dive (bull vs bear) → News topic |
+
+Example — on-demand single-token deep-dive (works even when scheduled flow is off):
+
+```bash
+curl -X POST localhost:8000/flow/ENA      # → posts an ENA deep-dive to Telegram
+```
 
 Example — record a signal from an external strategy:
 

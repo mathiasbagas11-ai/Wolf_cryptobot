@@ -75,6 +75,77 @@ def test_route_stats_falls_back_to_system():
     assert _settings(stats_thread_id="7", system_thread_id="5").route_stats() == "7"
 
 
+# ── high-conviction (TRAP) topic routing ───────────────────────────────────
+def test_trap_announce_routes_to_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", high_conviction_thread_id="99"), session=sess)
+    n.announce_signal(_signal(signal_type="TRAP", strategy="TRAP"))
+    assert sess.calls[0]["message_thread_id"] == "99"
+
+
+def test_trap_lifecycle_routes_to_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(
+        _settings(signal_thread_id="2", trade_report_thread_id="4", high_conviction_thread_id="99"),
+        session=sess,
+    )
+    sig = _signal(signal_type="TRAP", strategy="TRAP")
+    n.on_event(sig, "ACTIVATED", {})
+    n.on_event(sig, "RESOLVED", {})
+    assert sess.calls[0]["message_thread_id"] == "99"  # entry, not "2"
+    assert sess.calls[1]["message_thread_id"] == "99"  # resolution, not "4"
+
+
+def test_trap_falls_back_to_normal_topics_when_unconfigured():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", trade_report_thread_id="4"), session=sess)
+    sig = _signal(signal_type="TRAP", strategy="TRAP")
+    n.announce_signal(sig)
+    n.on_event(sig, "RESOLVED", {})
+    assert sess.calls[0]["message_thread_id"] == "1"  # New Signal
+    assert sess.calls[1]["message_thread_id"] == "4"  # Trade Reports
+
+
+def test_non_trap_ignores_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", high_conviction_thread_id="99"), session=sess)
+    n.announce_signal(_signal(signal_type="PREPUMP", strategy="PREPUMP"))
+    assert sess.calls[0]["message_thread_id"] == "1"
+
+
+# ── risk-flag rendering ─────────────────────────────────────────────────────
+def test_signal_card_shows_risk_flags():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(), session=sess)
+    n.announce_signal(_signal(against_regime=True, weak_strategy=True))
+    text = sess.calls[0]["text"]
+    assert "against-regime" in text
+    assert "weak-strategy" in text
+    assert "monitor" in text
+
+
+def test_signal_card_no_risk_line_when_unflagged():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(), session=sess)
+    n.announce_signal(_signal())
+    assert "Risk:" not in sess.calls[0]["text"]
+
+
+def test_stats_card_risk_gate_monitor():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(), session=sess)
+    n.notify_stats({
+        "wins": 10, "losses": 10, "win_rate": 50.0, "avg_pnl_pct": 0.5, "active": 1,
+        "by_strategy": {}, "by_ai_verdict": {}, "vetoed_count": 0, "vetoed_win_rate": None,
+        "against_regime_count": 12, "against_regime_win_rate": 25.0,  # -25pp vs avg
+        "weak_flag_count": 8, "weak_flag_win_rate": 60.0,             # +10pp vs avg
+    })
+    text = sess.calls[0]["text"]
+    assert "Risk-gate monitor" in text
+    assert "Against-regime" in text and "enable REGIME_HARD_BLOCK" in text
+    assert "Weak-strategy" in text and "not hurting" in text
+
+
 # ── disabled notifier is a no-op ───────────────────────────────────────────
 def test_disabled_notifier_sends_nothing():
     sess = FakeSession()
@@ -158,12 +229,37 @@ def test_stats_card():
     n.notify_stats({
         "wins": 12, "losses": 8, "win_rate": 60.0, "avg_pnl_pct": 1.8, "active": 3,
         "by_strategy": {"MOMENTUM": {"win_rate": 65.0, "total": 20, "avg_pnl": 1.2}},
+        "by_ai_verdict": {},
+        "vetoed_count": 0, "vetoed_win_rate": None,
     })
     text = sess.calls[0]["text"]
     assert sess.calls[0]["message_thread_id"] == "9"
     assert "PERFORMANCE SUMMARY" in text
     assert "Win rate 60.0%" in text
     assert "MOMENTUM" in text
+    # No AI section when no AI data
+    assert "AI verdict accuracy" not in text
+
+
+def test_stats_card_ai_section():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(), session=sess)
+    n.notify_stats({
+        "wins": 10, "losses": 10, "win_rate": 50.0, "avg_pnl_pct": 0.5, "active": 2,
+        "by_strategy": {},
+        "by_ai_verdict": {
+            "CONFIRM": {"win_rate": 70.0, "total": 10, "avg_pnl": 3.2},
+            "REJECT": {"win_rate": 30.0, "total": 10, "avg_pnl": -2.1},
+        },
+        "vetoed_count": 8,
+        "vetoed_win_rate": 25.0,
+    })
+    text = sess.calls[0]["text"]
+    assert "AI verdict accuracy" in text
+    assert "CONFIRM" in text and "70.0%" in text
+    assert "REJECT" in text and "30.0%" in text
+    # -25pp vs 50% overall → "consider veto mode"
+    assert "consider veto mode" in text
 
 
 # ── error handling: Telegram API failure is logged, returns False ──────────
@@ -182,3 +278,70 @@ def test_reasons_are_html_escaped():
     n = TelegramNotifier(_settings(), session=sess)
     n.announce_signal(_signal(reasons=["RSI < 30 & rising"]))
     assert "RSI &lt; 30 &amp; rising" in sess.calls[0]["text"]
+
+
+# ── topic validation at startup ─────────────────────────────────────────────
+class ThreadAwareSession:
+    """Fails sendMessage for a given set of thread ids; tracks deletes."""
+
+    def __init__(self, bad_threads=()):
+        self.calls: list[dict] = []
+        self.deletes: list[dict] = []
+        self._bad = set(bad_threads)
+
+    def post(self, url, json=None, timeout=None):
+        if url.endswith("/deleteMessage"):
+            self.deletes.append(json)
+            return FakeResponse(200, {"ok": True})
+        self.calls.append(json)
+        tid = json.get("message_thread_id")
+        if tid in self._bad:
+            return FakeResponse(400, {"ok": False, "description": "message thread not found"})
+        return FakeResponse(200, {"ok": True, "result": {"message_id": 555}})
+
+
+def test_validate_threads_flags_bad_and_deletes_probes():
+    s = _settings(system_thread_id="1", news_thread_id="5", whale_thread_id="6")
+    sess = ThreadAwareSession(bad_threads={"1"})
+    n = TelegramNotifier(s, session=sess)
+    result = n.validate_threads()
+
+    bad_ids = {tid for _, tid, _ in result["bad"]}
+    ok_ids = {tid for _, tid in result["ok"]}
+    assert bad_ids == {"1"}
+    assert ok_ids == {"5", "6"}
+    # Valid probes are cleaned up; the failed one left nothing to delete.
+    assert {d["message_id"] for d in sess.deletes} == {555}
+    assert len(sess.deletes) == 2
+
+
+def test_report_thread_validation_posts_summary_to_main_when_general_bad():
+    s = _settings(system_thread_id="1", news_thread_id="5")
+    sess = ThreadAwareSession(bad_threads={"1"})
+    n = TelegramNotifier(s, session=sess)
+    n.report_thread_validation(n.validate_threads())
+    summary = sess.calls[-1]
+    # General (id 1) is itself invalid -> summary must fall back to main channel.
+    assert "message_thread_id" not in summary
+    assert "TOPIC CHECK" in summary["text"]
+    assert "System/General" in summary["text"]
+
+
+def test_report_thread_validation_silent_when_all_ok(caplog):
+    s = _settings(news_thread_id="5", whale_thread_id="6")
+    sess = ThreadAwareSession(bad_threads=set())
+    n = TelegramNotifier(s, session=sess)
+    n.report_thread_validation(n.validate_threads())
+    # No summary message posted (only the two probes were sent).
+    assert all("TOPIC CHECK" not in (c.get("text") or "") for c in sess.calls)
+
+
+# ── invalid-thread fallback to main channel ─────────────────────────────────
+def test_send_falls_back_to_main_channel_on_bad_thread():
+    sess = ThreadAwareSession(bad_threads={"999"})
+    n = TelegramNotifier(_settings(new_signal_thread_id="999"), session=sess)
+    ok = n.send("hi", thread_id="999")
+    assert ok is True
+    # First attempt targets the topic, retry drops message_thread_id.
+    assert sess.calls[0].get("message_thread_id") == "999"
+    assert "message_thread_id" not in sess.calls[1]
