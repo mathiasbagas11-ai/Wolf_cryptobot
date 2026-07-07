@@ -298,7 +298,8 @@ def _stance(g: Optional[GlobalMetrics], s: Optional[StablecoinSupply],
             cb: Optional[CoinbasePremium] = None) -> tuple[str, str]:
     """Heuristic market posture from dominance, dry-powder, chain activity and
     the contrarian fear/institutional-demand pair."""
-    dry_powder = s is not None and s.change_7d_pct > 0.5
+    dry_powder = s is not None and s.change_7d_pct > 0.5        # supply building = sidelined cash
+    dry_powder_outflow = s is not None and s.change_7d_pct < -0.5  # supply shrinking = redemptions
     chain_heat = bool(chains) and chains[0].change_1d > 0
     alts_bid = g is not None and g.market_cap_change_24h > 0 and g.btc_dominance < 56
 
@@ -316,8 +317,8 @@ def _stance(g: Optional[GlobalMetrics], s: Optional[StablecoinSupply],
     if dry_powder and not alts_bid:
         return ("ROTATION", "Stablecoin numpuk jadi amunisi, tapi modal belum agresif "
                             "masuk altcoin — tunggu konfirmasi rotasi.")
-    if g is not None and g.market_cap_change_24h < -2:
-        return ("RISK-OFF", "Market cap turun & dry powder belum dilepas — hati-hati, "
-                            "tunggu smart money mulai deploy.")
+    if dry_powder_outflow or (g is not None and g.market_cap_change_24h < -2):
+        return ("RISK-OFF", "Supply stablecoin nyusut / market cap turun — cash ditebus "
+                            "keluar crypto (redemption), bukan nunggu deploy. Kurangi risiko.")
     return ("NEUTRAL", "Sinyal campur — belum ada arah modal yang jelas. "
                        "Pantau dry powder & rotasi chain sebelum eksekusi.")

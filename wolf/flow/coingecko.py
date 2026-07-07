@@ -48,6 +48,7 @@ class GlobalMetrics:
     btc_dominance: float           # percent
     total_market_cap: float        # usd
     market_cap_change_24h: float   # percent
+    usdt_dominance: float = 0.0    # percent — USDT market cap / total (USDT.D)
 
 
 class CoinGeckoClient:
@@ -116,6 +117,7 @@ class CoinGeckoClient:
             btc_dominance=_f(dom.get("btc") if isinstance(dom, dict) else 0),
             total_market_cap=_f(total.get("usd") if isinstance(total, dict) else 0),
             market_cap_change_24h=_f(data.get("market_cap_change_percentage_24h_usd")),
+            usdt_dominance=_f(dom.get("usdt") if isinstance(dom, dict) else 0),
         )
 
 
