@@ -195,6 +195,8 @@ class Tracker:
         ai_vetoed: bool = False,
         against_regime: bool = False,
         weak_strategy: bool = False,
+        bounce_flagged: bool = False,
+        risk_scale: float = 1.0,
     ) -> Optional[Signal]:
         """Record a freshly-emitted signal as PENDING.
 
@@ -244,6 +246,8 @@ class Tracker:
             ai_vetoed=ai_vetoed,
             against_regime=against_regime,
             weak_strategy=weak_strategy,
+            bounce_flagged=bounce_flagged,
+            risk_scale=risk_scale,
         )
 
         dedup_min = self._settings.dedup_for(signal.signal_type)
@@ -580,6 +584,16 @@ class Tracker:
         against_regime_count, against_regime_win_rate = _flag_win_rate(lambda o: o.against_regime)
         weak_flag_count, weak_flag_win_rate = _flag_win_rate(lambda o: o.weak_strategy)
 
+        # Bounce-guard monitoring: W/L + avg PnL of shorts flagged for bounce
+        # risk. This is the what-if sample that decides when to flip the guard
+        # from monitor to live (and how to calibrate the size/score knobs).
+        bounce_sub = [o for o in graded if getattr(o, "bounce_flagged", False)]
+        bounce_flag_count, bounce_flag_win_rate = _flag_win_rate(
+            lambda o: getattr(o, "bounce_flagged", False)
+        )
+        bounce_pnls = [o.pnl_pct for o in bounce_sub if o.pnl_pct is not None]
+        bounce_flag_avg_pnl = round(sum(bounce_pnls) / len(bounce_pnls), 3) if bounce_pnls else None
+
         return {
             "total_resolved": len(outcomes),
             "total_graded": total,
@@ -596,4 +610,7 @@ class Tracker:
             "against_regime_win_rate": against_regime_win_rate,
             "weak_flag_count": weak_flag_count,
             "weak_flag_win_rate": weak_flag_win_rate,
+            "bounce_flag_count": bounce_flag_count,
+            "bounce_flag_win_rate": bounce_flag_win_rate,
+            "bounce_flag_avg_pnl": bounce_flag_avg_pnl,
         }

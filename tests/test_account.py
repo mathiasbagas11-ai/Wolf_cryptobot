@@ -44,6 +44,17 @@ def test_losing_trade_shrinks_balance(store):
     assert snap["balance"] == 990.0
 
 
+def test_risk_scale_shrinks_pnl_amount(store):
+    # Bounce-guard half-size: same +10% (2R) trade risks half → half the P&L.
+    acc = PaperAccount(store, start_balance=1000.0, risk_pct=1.0)
+    sig = _signal(Status.TP_HIT.value, 10.0)
+    sig.risk_scale = 0.5
+    snap = acc.apply(sig)
+    assert snap["r_multiple"] == 2.0        # R is per-unit, unchanged
+    assert snap["pnl_amount"] == 10.0       # but the amount risked (and won) halved
+    assert acc.balance == 1010.0
+
+
 def test_invalidated_does_not_touch_balance(store):
     acc = PaperAccount(store, start_balance=1000.0)
     assert acc.apply(_signal(Status.INVALIDATED.value, 0.0)) is None

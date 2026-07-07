@@ -194,6 +194,29 @@ class RiskSettings:
     regime_hard_block: bool = False
     autopause_hard_block: bool = False
 
+    # ── Composite regime / bounce-guard (risk-scaling on shorts) ──
+    # Folds flow signals (F&G, USDT.D, dry powder, chain flow) into a macro
+    # context. When a fresh SHORT faces bounce/squeeze risk (extreme fear, or
+    # USDT.D rotating into risk / at a historic extreme) the guard SCALES RISK —
+    # smaller size + a higher score bar — rather than blocking, because the
+    # direction out of extreme fear is genuinely uncertain. Applies to ALL
+    # shorts incl. counter-trend (PREDUMP/TRAP/SCALP), closing the blind spot the
+    # trend-only regime filter leaves open.
+    composite_regime_enabled: bool = True
+    # "monitor" (default) = flag + log the what-if only, change nothing, so we
+    # collect a clean W/L sample of shorts-under-bounce-risk first.
+    # "live" = actually apply the size factor + selectivity floor.
+    bounce_guard_mode: str = "monitor"
+    fear_extreme_max: int = 25              # F&G ≤ this = extreme fear
+    usdtd_riskoff_change_pct: float = 0.2   # |USDT.D 24h Δ| ≥ this = directional flag
+    usdtd_reversal_percentile: float = 85.0  # USDT.D above this percentile = reversal risk
+    usdtd_history_days: int = 90            # rolling window kept for percentile
+    usdtd_min_history_days: int = 7         # min history before percentile is trusted
+    dry_powder_outflow_pct: float = -0.5    # stablecoin 1d Δ ≤ this = risk-off
+    flow_context_ttl_min: int = 30          # cache TTL for slow-moving flow dims
+    bounce_size_factor: float = 0.5         # LIVE: shrink short risk to this fraction
+    bounce_min_score: int = 88              # LIVE: bounce-risk shorts need ≥ this score
+
     # ── Trade-plan / position-sizing engine (surfaced to the user per signal) ──
     # Turns each signal into an executable plan: suggested leverage, margin and
     # the liquidation price, sized so a stop-out costs exactly ``paper_risk_pct``
@@ -533,6 +556,17 @@ class Settings:
             autopause_min_win_rate=_env_float("AUTOPAUSE_MIN_WIN_RATE", 38.0),
             regime_hard_block=_env_bool("REGIME_HARD_BLOCK", False),
             autopause_hard_block=_env_bool("AUTOPAUSE_HARD_BLOCK", False),
+            composite_regime_enabled=_env_bool("COMPOSITE_REGIME_ENABLED", True),
+            bounce_guard_mode=_env_str("BOUNCE_GUARD_MODE", "monitor"),
+            fear_extreme_max=_env_int("FEAR_EXTREME_MAX", 25),
+            usdtd_riskoff_change_pct=_env_float("USDTD_RISKOFF_CHANGE_PCT", 0.2),
+            usdtd_reversal_percentile=_env_float("USDTD_REVERSAL_PERCENTILE", 85.0),
+            usdtd_history_days=_env_int("USDTD_HISTORY_DAYS", 90),
+            usdtd_min_history_days=_env_int("USDTD_MIN_HISTORY_DAYS", 7),
+            dry_powder_outflow_pct=_env_float("DRY_POWDER_OUTFLOW_PCT", -0.5),
+            flow_context_ttl_min=_env_int("FLOW_CONTEXT_TTL_MIN", 30),
+            bounce_size_factor=_env_float("BOUNCE_SIZE_FACTOR", 0.5),
+            bounce_min_score=_env_int("BOUNCE_MIN_SCORE", 88),
             plan_enabled=_env_bool("TRADE_PLAN_ENABLED", True),
             max_leverage=_env_int("MAX_LEVERAGE", 10),
             maintenance_margin_rate=_env_float("MAINTENANCE_MARGIN_RATE", 0.005),

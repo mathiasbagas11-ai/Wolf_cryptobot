@@ -338,8 +338,10 @@ class TelegramNotifier:
         if not (self._risk and getattr(self._risk, "plan_enabled", False)):
             return ""
         balance = self._account.balance if self._account is not None else self._start_balance
+        # Bounce guard shrinks the risked fraction for flagged shorts (1.0 = full).
+        risk_pct = self._risk_pct * (getattr(s, "risk_scale", 1.0) or 1.0)
         plan = build_plan(
-            s.entry_price, s.sl, s.is_long, balance, self._risk_pct,
+            s.entry_price, s.sl, s.is_long, balance, risk_pct,
             max_leverage=self._risk.max_leverage,
             mmr=self._risk.maintenance_margin_rate,
             buffer=self._risk.liq_safety_buffer,

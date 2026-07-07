@@ -160,6 +160,26 @@ def build_application(settings: Settings | None = None) -> Application:
     regime_provider = RegimeProvider(
         client, symbol=settings.risk.regime_symbol, interval=settings.risk.regime_interval
     )
+    macro_provider = None
+    if settings.risk.composite_regime_enabled:
+        from wolf.flow import CoinGeckoClient, DefiLlamaClient, SentimentClient
+        from wolf.regime_composite import CompositeRegimeProvider
+
+        rk = settings.risk
+        macro_provider = CompositeRegimeProvider(
+            regime_provider,
+            sentiment_client=SentimentClient(timeout=settings.http_timeout),
+            coingecko_client=CoinGeckoClient(timeout=settings.http_timeout),
+            defillama_client=DefiLlamaClient(timeout=settings.http_timeout),
+            store=store,
+            fear_extreme_max=rk.fear_extreme_max,
+            usdtd_change_pct=rk.usdtd_riskoff_change_pct,
+            usdtd_reversal_percentile=rk.usdtd_reversal_percentile,
+            usdtd_history_days=rk.usdtd_history_days,
+            usdtd_min_history_days=rk.usdtd_min_history_days,
+            dry_powder_outflow_pct=rk.dry_powder_outflow_pct,
+            ttl_min=rk.flow_context_ttl_min,
+        )
     universe_provider = (
         UniverseProvider(
             client,
@@ -177,6 +197,7 @@ def build_application(settings: Settings | None = None) -> Application:
         validator=validator,
         veto_min_confidence=settings.ai.veto_min_confidence,
         regime_provider=regime_provider,
+        macro_provider=macro_provider,
         account=account,
         risk=settings.risk,
         universe_provider=universe_provider,
