@@ -271,6 +271,28 @@ def test_profitable_low_winrate_strategy_not_paused(fake_client):
     assert screener._weak_strategies() == set()
 
 
+def test_near_breakeven_strategy_paused_by_buffer(fake_client):
+    # Boundary — a barely-positive +0.05% avg PnL is breakeven noise that turns
+    # net-negative after real fees/slippage, so the +0.10% floor pauses it.
+    stats = {"by_strategy": {"MOMENTUM": {"total": 20, "win_rate": 45.0, "avg_pnl": 0.05}}}
+    screener = Screener(
+        fake_client, _FakeTracker(stats), [], universe=[],
+        risk=RiskSettings(autopause_min_trades=12),
+    )
+    assert "MOMENTUM" in screener._weak_strategies()
+
+
+def test_thin_edge_strategy_above_buffer_not_paused(fake_client):
+    # Boundary — SWING-like +0.26% clears the +0.10% floor with margin: a real
+    # (if thin) edge, so it must stay live.
+    stats = {"by_strategy": {"SWING": {"total": 20, "win_rate": 23.5, "avg_pnl": 0.26}}}
+    screener = Screener(
+        fake_client, _FakeTracker(stats), [], universe=[],
+        risk=RiskSettings(autopause_min_trades=12),
+    )
+    assert screener._weak_strategies() == set()
+
+
 def test_strategy_not_paused_below_min_trades(fake_client):
     # Case C — only 5 trades (< min_trades): not enough sample to judge.
     stats = {"by_strategy": {"MOMENTUM": {"total": 5, "win_rate": 10.0, "avg_pnl": -0.73}}}
