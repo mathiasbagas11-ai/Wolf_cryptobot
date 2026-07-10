@@ -359,6 +359,45 @@ class Screener:
                  "PASS" if would_pass else "FILTER")
         return False
 
+    def _active_counts(self) -> tuple[dict[str, int], dict[str, int]]:
+        """Snapshot open-position counts (PENDING + ACTIVE) per strategy and per
+        direction. Read once per cycle so the cap is consistent across the scan.
+        """
+        by_strategy: dict[str, int] = {}
+        by_direction: dict[str, int] = {}
+        try:
+            active = self._tracker.active_signals()
+        except Exception:
+            log.exception("Active-signals read failed for position cap")
+            return by_strategy, by_direction
+        for s in active:
+            by_strategy[s.strategy] = by_strategy.get(s.strategy, 0) + 1
+            by_direction[s.direction] = by_direction.get(s.direction, 0) + 1
+        return by_strategy, by_direction
+
+    def _capped(
+        self,
+        candidate: SignalCandidate,
+        by_strategy: dict[str, int],
+        by_direction: dict[str, int],
+    ) -> bool:
+        """True when emitting ``candidate`` would exceed the per-strategy or
+        per-direction concurrent-position cap. A cap <= 0 disables that limit.
+        """
+        cap_s = self._risk.max_active_per_strategy
+        held_s = by_strategy.get(candidate.strategy, 0)
+        if cap_s > 0 and held_s >= cap_s:
+            log.info("Capped %s — %s already has %d active (max %d)",
+                     candidate.symbol, candidate.strategy, held_s, cap_s)
+            return True
+        cap_d = self._risk.max_active_per_direction
+        held_d = by_direction.get(candidate.direction, 0)
+        if cap_d > 0 and held_d >= cap_d:
+            log.info("Capped %s — %s already has %d active (max %d)",
+                     candidate.symbol, candidate.direction, held_d, cap_d)
+            return True
+        return False
+
     @staticmethod
     def _bounce_reason(ctx: MarketContext) -> str:
         bits = [f"sentiment={ctx.sentiment}", f"usdt_d={ctx.usdt_d}"]
@@ -381,6 +420,7 @@ class Screener:
         ctx = self._current_context()
         regime = ctx.trend
         weak = self._weak_strategies()
+        active_by_strategy, active_by_direction = self._active_counts()
         for symbol in self.current_universe():
             candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
             if not candles:
@@ -393,6 +433,8 @@ class Screener:
             if not self._apply_learning(candidate):
                 continue
             if self._gate_candidate(candidate, regime, weak):
+                continue
+            if self._capped(candidate, active_by_strategy, active_by_direction):
                 continue
             if self._apply_bounce_guard(candidate, ctx):
                 continue
@@ -426,6 +468,9 @@ class Screener:
             )
             if signal is None:
                 continue
+            # Count this fresh position toward the cap for later symbols this cycle.
+            active_by_strategy[candidate.strategy] = active_by_strategy.get(candidate.strategy, 0) + 1
+            active_by_direction[candidate.direction] = active_by_direction.get(candidate.direction, 0) + 1
             recorded.append(signal)
             if self._notifier is not None:
                 self._notifier.announce_signal(signal)

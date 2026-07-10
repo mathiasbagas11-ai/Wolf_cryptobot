@@ -197,6 +197,13 @@ class RiskSettings:
     regime_hard_block: bool = False
     autopause_hard_block: bool = False
 
+    # Concentration caps on concurrent open positions (PENDING + ACTIVE). Stops
+    # one strategy hogging slots (e.g. a losing MOMENTUM taking 4) and caps
+    # single-direction exposure so a regime flip can't hit a stack of correlated
+    # shorts at once. A cap <= 0 disables that limit (unlimited).
+    max_active_per_strategy: int = 4
+    max_active_per_direction: int = 6
+
     # ── Composite regime / bounce-guard (risk-scaling on shorts) ──
     # Folds flow signals (F&G, USDT.D, dry powder, chain flow) into a macro
     # context. When a fresh SHORT faces bounce/squeeze risk (extreme fear, or
@@ -559,6 +566,8 @@ class Settings:
             autopause_min_win_rate=_env_float("AUTOPAUSE_MIN_WIN_RATE", 38.0),
             regime_hard_block=_env_bool("REGIME_HARD_BLOCK", False),
             autopause_hard_block=_env_bool("AUTOPAUSE_HARD_BLOCK", False),
+            max_active_per_strategy=_env_int("MAX_ACTIVE_PER_STRATEGY", 4),
+            max_active_per_direction=_env_int("MAX_ACTIVE_PER_DIRECTION", 6),
             composite_regime_enabled=_env_bool("COMPOSITE_REGIME_ENABLED", True),
             bounce_guard_mode=_env_str("BOUNCE_GUARD_MODE", "monitor"),
             fear_extreme_max=_env_int("FEAR_EXTREME_MAX", 25),

@@ -322,6 +322,63 @@ def test_winrate_fallback_when_avg_pnl_missing(fake_client):
     assert "MOMENTUM" in screener._weak_strategies()
 
 
+# ── concurrent-position caps ─────────────────────────────────────────────────
+def test_cap_per_strategy_rejects_over_limit(fake_client):
+    # 4 PREDUMP already open + cap 4 → the 5th PREDUMP candidate is rejected.
+    screener = Screener(
+        fake_client, _FakeTracker({}), [], universe=[],
+        risk=RiskSettings(max_active_per_strategy=4, max_active_per_direction=0),
+    )
+    cand = _cand(direction="SHORT", signal_type="PREDUMP", strategy="PREDUMP")
+    assert screener._capped(cand, {"PREDUMP": 4}, {}) is True
+    assert screener._capped(cand, {"PREDUMP": 3}, {}) is False
+
+
+def test_cap_per_direction_rejects_over_limit(fake_client):
+    # 6 SHORTs already open + cap 6 → the 7th SHORT candidate is rejected,
+    # regardless of which strategy it belongs to.
+    screener = Screener(
+        fake_client, _FakeTracker({}), [], universe=[],
+        risk=RiskSettings(max_active_per_strategy=0, max_active_per_direction=6),
+    )
+    cand = _cand(direction="SHORT", signal_type="PREDUMP", strategy="PREDUMP")
+    assert screener._capped(cand, {}, {"SHORT": 6}) is True
+    assert screener._capped(cand, {}, {"SHORT": 5}) is False
+
+
+def test_cap_zero_disables_both_limits(fake_client):
+    screener = Screener(
+        fake_client, _FakeTracker({}), [], universe=[],
+        risk=RiskSettings(max_active_per_strategy=0, max_active_per_direction=0),
+    )
+    cand = _cand(direction="SHORT", signal_type="PREDUMP", strategy="PREDUMP")
+    assert screener._capped(cand, {"PREDUMP": 99}, {"SHORT": 99}) is False
+
+
+def test_cap_snapshots_open_positions_and_increments_in_cycle(store, fake_client, tracker_settings):
+    # Snapshot reads already-open positions, and freshly-emitted ones count
+    # toward the cap for later symbols in the same cycle: 3 PREDUMP already
+    # open + cap 4 → only 1 more is recorded across 3 fresh symbols.
+    tracker = Tracker(store, fake_client, tracker_settings)
+    for sym in ("AAAUSDT", "BBBUSDT", "CCCUSDT"):
+        tracker.record_signal(
+            symbol=sym, signal_type="PREDUMP", direction="SHORT",
+            entry_price=100, tp=90, sl=105, score=90, strategy="PREDUMP",
+        )
+    assert len(tracker.active_signals()) == 3
+
+    fresh = ["S1USDT", "S2USDT", "S3USDT"]
+    for sym in fresh:
+        fake_client.klines[sym] = _SMALL_CANDLES
+    screener = Screener(
+        fake_client, tracker, [_short_detector(90)], universe=fresh,
+        risk=RiskSettings(max_active_per_strategy=4),
+    )
+    recorded = screener.run_cycle()
+    assert len(recorded) == 1                      # 3 held + 1 new = cap of 4
+    assert len(tracker.active_signals()) == 4
+
+
 # ── composite-regime bounce guard ────────────────────────────────────────────
 class _FakeMacro:
     def __init__(self, ctx: MarketContext) -> None:
