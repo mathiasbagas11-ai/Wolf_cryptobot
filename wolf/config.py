@@ -182,7 +182,10 @@ class RiskSettings:
     # for older stats that don't carry avg_pnl — a low-WR / high-R:R setup can
     # still be net profitable, so win-rate alone is the wrong gate.
     autopause_min_trades: int = 12
-    autopause_min_expectancy: float = 0.0
+    # +0.10% buffer above breakeven: a near-flat strategy (e.g. +0.05% avg) is
+    # noise that turns net-negative after real fees/slippage, so require a
+    # margin over zero rather than merely "not losing" on paper.
+    autopause_min_expectancy: float = 0.10
     autopause_min_win_rate: float = 38.0
 
     # Enforcement mode for the regime + auto-pause gates.
@@ -193,6 +196,13 @@ class RiskSettings:
     # (hybrid) setup: equity protection is enforced, judgement gates are observed.
     regime_hard_block: bool = False
     autopause_hard_block: bool = False
+
+    # Concentration caps on concurrent open positions (PENDING + ACTIVE). Stops
+    # one strategy hogging slots (e.g. a losing MOMENTUM taking 4) and caps
+    # single-direction exposure so a regime flip can't hit a stack of correlated
+    # shorts at once. A cap <= 0 disables that limit (unlimited).
+    max_active_per_strategy: int = 4
+    max_active_per_direction: int = 6
 
     # ── Composite regime / bounce-guard (risk-scaling on shorts) ──
     # Folds flow signals (F&G, USDT.D, dry powder, chain flow) into a macro
@@ -552,10 +562,12 @@ class Settings:
             regime_interval=_env_str("REGIME_INTERVAL", "1h"),
             drawdown_pause_pct=_env_float("DRAWDOWN_PAUSE_PCT", 15.0),
             autopause_min_trades=_env_int("AUTOPAUSE_MIN_TRADES", 12),
-            autopause_min_expectancy=_env_float("AUTOPAUSE_MIN_EXPECTANCY", 0.0),
+            autopause_min_expectancy=_env_float("AUTOPAUSE_MIN_EXPECTANCY", 0.10),
             autopause_min_win_rate=_env_float("AUTOPAUSE_MIN_WIN_RATE", 38.0),
             regime_hard_block=_env_bool("REGIME_HARD_BLOCK", False),
             autopause_hard_block=_env_bool("AUTOPAUSE_HARD_BLOCK", False),
+            max_active_per_strategy=_env_int("MAX_ACTIVE_PER_STRATEGY", 4),
+            max_active_per_direction=_env_int("MAX_ACTIVE_PER_DIRECTION", 6),
             composite_regime_enabled=_env_bool("COMPOSITE_REGIME_ENABLED", True),
             bounce_guard_mode=_env_str("BOUNCE_GUARD_MODE", "monitor"),
             fear_extreme_max=_env_int("FEAR_EXTREME_MAX", 25),
