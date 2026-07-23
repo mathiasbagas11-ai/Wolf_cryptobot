@@ -6,3 +6,4 @@ uvicorn[standard]>=0.29
 anthropic>=0.40
 pandas>=2.0
 pyarrow>=14.0
+gspread>=6.0
