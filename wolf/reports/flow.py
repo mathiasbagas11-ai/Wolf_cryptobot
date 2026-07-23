@@ -73,6 +73,7 @@ class FlowReporter:
         hyperliquid: Optional[HyperliquidPerps] = None,
         narrator: Optional[LLMClient] = None,
         market_client=None,
+        anomaly=None,
         *,
         markets_limit: int = 60,
         max_picks: int = 3,
@@ -87,6 +88,7 @@ class FlowReporter:
         self._hl = hyperliquid or HyperliquidPerps()
         self._narrator = narrator or NullLLMClient()
         self._market = market_client   # exchange client → funding fallback (optional)
+        self._anomaly = anomaly        # AnomalyScanner → appends its section (optional)
         self._markets_limit = markets_limit
         self._max_picks = max_picks
         self._max_skips = max_skips
@@ -131,7 +133,25 @@ class FlowReporter:
             log.debug("Flow report: no data, skipping")
             return None
         body = self._narrate(brief) or self._template(brief)
+        anomaly = self._anomaly_section(brief.stance)
+        if anomaly:
+            body = f"{body}\n{DIVIDER}\n{anomaly}"
         return f"{body}\n{DIVIDER}\n🕐 {now(self._tz)}"
+
+    def _anomaly_section(self, stance: str) -> str:
+        """Render the ANOMALY SCANNER section; never let it break the report.
+
+        A scan failure degrades to a one-line notice so the rest of the flow
+        message still goes out.
+        """
+        if self._anomaly is None:
+            return ""
+        from anomaly.formatter import simplify_verdict
+        try:
+            return self._anomaly.build_section(simplify_verdict(stance))
+        except Exception as exc:  # anomaly scan must never fail the whole news
+            log.exception("Anomaly scan failed")
+            return f"⚠️ Anomaly scan gagal: {esc(str(exc))}"
 
     # ── single-token deep dive (bull vs bear) ──────────────────────────
     def build_token(self, symbol: str) -> Optional[str]:

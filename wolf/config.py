@@ -375,6 +375,29 @@ class FlowSettings:
 
 
 @dataclass(frozen=True)
+class AnomalySettings:
+    """Anomaly scanner (PAPER MODE) — appended as a section to the flow report.
+
+    Scans a volume-ordered slice of the mid-cap universe for coiling / volume
+    anomalies, scores them, and logs every signal ≥ ``min_score`` to a Google
+    Sheet for later expectancy evaluation. Never executes — advisory only.
+    """
+
+    enabled: bool = False
+    min_score: int = 55
+    max_picks: int = 3
+    paper_mode: bool = True            # guard flag: always paper, no execution
+    # Runtime discipline (CoinGecko free tier · Railway < 8 min/cycle).
+    scan_limit: int = 50               # coins scanned per cycle (top by volume)
+    time_budget_sec: int = 360         # wall-clock stop for the scan loop
+    # Google-Sheet paper log (Phase 6).
+    paper_log_enabled: bool = False
+    sheet_name: str = "Anomaly_Paper_Log"
+    sheets_credentials: str = ""       # service-account JSON (raw or file path)
+    backfill_interval_hours: int = 24
+
+
+@dataclass(frozen=True)
 class AISettings:
     """AI debate-layer configuration.
 
@@ -475,6 +498,7 @@ class Settings:
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
     flow: FlowSettings = field(default_factory=FlowSettings)
+    anomaly: AnomalySettings = field(default_factory=AnomalySettings)
     learning: LearningSettings = field(default_factory=LearningSettings)
     backtest: BacktestSettings = field(default_factory=BacktestSettings)
 
@@ -532,6 +556,18 @@ class Settings:
             max_watch=_env_int("FLOW_MAX_WATCH", 2),
             narrator_provider=_env_str("FLOW_NARRATOR_PROVIDER", "deepseek"),
             narrator_model=_env_str("FLOW_NARRATOR_MODEL", ""),
+        )
+        anomaly = AnomalySettings(
+            enabled=_env_bool("ANOMALY_ENABLED", False),
+            min_score=_env_int("ANOMALY_MIN_SCORE", 55),
+            max_picks=_env_int("ANOMALY_MAX_PICKS", 3),
+            paper_mode=_env_bool("ANOMALY_PAPER_MODE", True),
+            scan_limit=_env_int("ANOMALY_SCAN_LIMIT", 50),
+            time_budget_sec=_env_int("ANOMALY_TIME_BUDGET_SEC", 360),
+            paper_log_enabled=_env_bool("ANOMALY_PAPER_ENABLED", False),
+            sheet_name=_env_str("ANOMALY_SHEET_NAME", "Anomaly_Paper_Log"),
+            sheets_credentials=_env_str("GOOGLE_SHEETS_CREDENTIALS", ""),
+            backfill_interval_hours=_env_int("ANOMALY_BACKFILL_INTERVAL_HOURS", 24),
         )
         learning = LearningSettings(
             enabled=_env_bool("LEARNING_ENABLED", True),
@@ -641,6 +677,7 @@ class Settings:
             news=news,
             reports=reports,
             flow=flow,
+            anomaly=anomaly,
             learning=learning,
             backtest=backtest,
         )

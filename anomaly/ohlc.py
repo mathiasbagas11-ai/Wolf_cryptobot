@@ -124,6 +124,37 @@ def merge_ohlc_volume(ohlc_raw, market_chart_raw) -> pd.DataFrame:
     return merged[_COLUMNS].reset_index(drop=True)
 
 
+def fetch_prices(
+    coin_ids: list[str],
+    *,
+    base_url: str = _CG_BASE,
+    session: Optional[requests.Session] = None,
+    sleep: float = _CALL_SPACING_SEC,
+    chunk_size: int = 100,
+) -> dict:
+    """Return ``{coin_id: usd_price}`` from CoinGecko ``/simple/price``.
+
+    Batched (comma-separated ids) to spend as few calls as possible — used by
+    the daily outcome-backfill job, which needs a spot price per open signal.
+    """
+    sess = session or requests.Session()
+    out: dict[str, float] = {}
+    ids = [c for c in dict.fromkeys(coin_ids) if c]      # dedupe, keep order
+    for i in range(0, len(ids), chunk_size):
+        chunk = ids[i:i + chunk_size]
+        payload = _get_with_retry(sess, f"{base_url}/simple/price", {
+            "ids": ",".join(chunk), "vs_currencies": "usd",
+        }, sleep=sleep)
+        if isinstance(payload, dict):
+            for cid, d in payload.items():
+                if isinstance(d, dict) and d.get("usd") is not None:
+                    try:
+                        out[cid] = float(d["usd"])
+                    except (TypeError, ValueError):
+                        continue
+    return out
+
+
 # ── network fetch ──────────────────────────────────────────────────────────
 def _get_with_retry(session: requests.Session, url: str, params: dict, *, sleep: float):
     """Rate-limit-friendly GET: space calls, back off on error, 60s on a 429."""

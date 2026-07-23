@@ -112,11 +112,27 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
                     "whale", r.whale_interval_min,
                     lambda: app.notifier.notify_whale(app.whale.build()))
 
-    # Flow-intelligence brief (Nansen-style thread) → News topic.
+    # Flow-intelligence brief (Nansen-style thread) → News topic. The anomaly
+    # scanner (when enabled) appends its PAPER-MODE section to this same message.
     if getattr(app, "flow", None) is not None:
         _add_report_job(scheduler, app.notifier.enabled, "flow",
                         app.settings.flow.interval_min,
                         lambda: app.notifier.notify_flow(app.flow.build()))
+
+    # Daily backfill of anomaly paper-log outcomes (7d/14d/30d % change).
+    anomaly = getattr(app, "anomaly", None)
+    if anomaly is not None:
+        hours = app.settings.anomaly.backfill_interval_hours
+        if hours > 0:
+            scheduler.add_job(
+                _guarded(anomaly.run_backfill, "anomaly_backfill"),
+                "interval",
+                hours=hours,
+                id="anomaly_backfill",
+                max_instances=1,
+                coalesce=True,
+                next_run_time=_soon(),
+            )
     return scheduler
 
 

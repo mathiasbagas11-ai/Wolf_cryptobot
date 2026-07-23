@@ -66,6 +66,7 @@ class Application:
     pulse: Optional[MarketPulse] = None
     whale: Optional[WhaleTracker] = None
     flow: Optional[FlowReporter] = None
+    anomaly: object = None            # anomaly.scanner.AnomalyScanner (optional)
 
     def warm_start_learning(self) -> None:
         """Seed learning memory from a backtest — only when memory is empty.
@@ -241,7 +242,8 @@ def build_application(settings: Settings | None = None) -> Application:
     pulse = MarketPulse(client, tz=tz, llm=analysis_llm) if r.pulse_enabled else None
     whale = WhaleTracker(client, store, min_usd=r.whale_min_usd, tz=tz) if r.whale_enabled else None
 
-    flow = build_flow_reporter(settings, client) if settings.flow.enabled else None
+    anomaly = build_anomaly_scanner(settings) if settings.anomaly.enabled else None
+    flow = build_flow_reporter(settings, client, anomaly=anomaly) if settings.flow.enabled else None
 
     return Application(
         settings=settings,
@@ -262,10 +264,38 @@ def build_application(settings: Settings | None = None) -> Application:
         pulse=pulse,
         whale=whale,
         flow=flow,
+        anomaly=anomaly,
     )
 
 
-def build_flow_reporter(settings: Settings, client: MarketDataClient) -> FlowReporter:
+def build_anomaly_scanner(settings: Settings):
+    """Construct the anomaly scanner (PAPER MODE), wiring the optional Google-Sheet
+    paper logger from the deployment's service-account credentials. A Sheets
+    problem is swallowed so the scanner still runs (and posts) without logging."""
+    from anomaly.scanner import AnomalyScanner
+
+    a = settings.anomaly
+    paper_logger = None
+    if a.paper_log_enabled and a.sheets_credentials:
+        try:
+            from anomaly.logger import AnomalyPaperLogger, open_worksheet
+            ws = open_worksheet(a.sheets_credentials, a.sheet_name)
+            paper_logger = AnomalyPaperLogger(ws, min_score=a.min_score)
+        except Exception:  # never break boot on a Sheets/gspread issue
+            log.exception("Anomaly paper logger unavailable — scanning without it")
+
+    return AnomalyScanner(
+        min_score=a.min_score,
+        max_picks=a.max_picks,
+        scan_limit=a.scan_limit,
+        time_budget_sec=a.time_budget_sec,
+        paper_mode=a.paper_mode,
+        logger=paper_logger,
+    )
+
+
+def build_flow_reporter(settings: Settings, client: MarketDataClient,
+                        anomaly=None) -> FlowReporter:
     """Construct the flow-intelligence reporter (used by the scheduler and the
     on-demand REST endpoints, so a deep-dive works even when scheduling is off)."""
     from wolf.flow import (
@@ -286,6 +316,7 @@ def build_flow_reporter(settings: Settings, client: MarketDataClient) -> FlowRep
         hyperliquid=HyperliquidPerps(timeout=settings.http_timeout),
         narrator=narrator,
         market_client=client,
+        anomaly=anomaly,
         markets_limit=f.markets_limit,
         max_picks=f.max_picks,
         max_skips=f.max_skips,

@@ -130,6 +130,20 @@ class AnomalyPaperLogger:
                 log.exception("anomaly log: failed to append %s", coin.get("symbol"))
         return written
 
+    def open_coin_ids(self) -> list:
+        """Distinct coin_ids of rows still ``status=OPEN`` (for a batched price fetch)."""
+        values = self._ws.get_all_values()
+        if len(values) < 2:
+            return []
+        col = {name: i for i, name in enumerate(values[0])}
+        ids: list[str] = []
+        for row in values[1:]:
+            if _cell(row, col, "status") == "OPEN":
+                cid = _cell(row, col, "coin_id")
+                if cid and cid not in ids:
+                    ids.append(cid)
+        return ids
+
     def backfill_outcomes(self, price_lookup: Callable[[str], Optional[float]], *,
                           now: Optional[datetime] = None) -> dict:
         """Fill elapsed outcome windows for OPEN rows; CLOSE rows past 30 days.
