@@ -18,6 +18,9 @@ venv/
 state_data/
 *.tmp
 
+# Anomaly scanner caches (universe snapshot + per-coin OHLC) — regenerated at runtime
+data/
+
 # Test / coverage artifacts
 .pytest_cache/
 .coverage
