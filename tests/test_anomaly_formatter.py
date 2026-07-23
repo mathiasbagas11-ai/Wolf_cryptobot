@@ -18,7 +18,7 @@ def _coin(symbol, score, *, price=1.50, flagged=False, dca=False, ladder=None):
         "current_price": price,
         "components": {"volatility_contraction": 18, "volume_anomaly": 24,
                        "structure_position": 16, "supply_health": 10},
-        "metrics": {"bbw_percentile": 0.12, "volume_ratio": 2.4,
+        "metrics": {"atr_ratio": 0.45, "volume_ratio": 2.4,
                     "range_position": 0.6, "fdv_mc": 1.4},
         "ladder": ladder,
     }

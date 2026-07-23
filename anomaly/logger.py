@@ -58,8 +58,7 @@ def build_row(coin: dict, market_verdict: str, now: datetime) -> list:
     metrics = coin.get("metrics", {})
     ladder = coin.get("ladder") or {}
     price = coin.get("current_price")
-    atr14 = ladder.get("atr14")
-    atr_ratio = (atr14 / price) if (atr14 and price) else None
+    atr_ratio = metrics.get("atr_ratio")        # ATR(14)/ATR(60) contraction ratio
 
     return [
         now.astimezone(timezone.utc).isoformat(),

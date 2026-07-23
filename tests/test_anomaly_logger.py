@@ -37,7 +37,7 @@ def _coin(symbol="BANK", score=72, **over):
         "components": {"volatility_contraction": 21, "volume_anomaly": 27,
                        "structure_position": 16, "supply_health": 8},
         "metrics": {"fdv_mc": 1.3, "turnover": 0.1, "volume_ratio": 2.9,
-                    "range_position": 0.62},
+                    "range_position": 0.62, "atr_ratio": 0.48},
         "ladder": {"l1": 1.49, "l2": 1.45, "l3": 1.40, "invalidation": 1.2,
                    "tp1": 1.8, "tp2": 2.1, "rr_ratio": 2.0, "atr14": 0.06},
     }
@@ -59,14 +59,15 @@ def test_build_row_matches_header_length_and_order():
     assert d["in_dca_sleeve"] == "FALSE"
     assert d["status"] == "OPEN"
     assert d["outcome_7d"] == "" and d["outcome_30d"] == "" and d["notes"] == ""
-    # atr_ratio = atr14 / price
-    assert d["atr_ratio"] == round(0.06 / 1.5, 4)
+    # atr_ratio comes from the scoring metric (ATR14/ATR60 contraction ratio)
+    assert d["atr_ratio"] == 0.48
 
 
 def test_build_row_blanks_missing_ladder():
     row = build_row(_coin(ladder=None), "NEUTRAL", NOW)
     d = dict(zip(HEADER, row))
-    assert d["l1"] == "" and d["invalidation"] == "" and d["atr_ratio"] == ""
+    assert d["l1"] == "" and d["invalidation"] == ""
+    assert d["atr_ratio"] == 0.48                     # atr_ratio is metric-sourced, not ladder
 
 
 # ── logging ────────────────────────────────────────────────────────────────

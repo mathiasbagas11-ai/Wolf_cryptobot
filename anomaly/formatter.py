@@ -156,8 +156,8 @@ def _component_line(components: dict) -> str:
 
 def _metrics_line(m: dict) -> str:
     parts = []
-    if m.get("bbw_percentile") is not None:
-        parts.append(f"BBW pctile {m['bbw_percentile'] * 100:.0f}")
+    if m.get("atr_ratio") is not None:
+        parts.append(f"ATR14/60 {m['atr_ratio']:.2f}")
     if m.get("volume_ratio") is not None:
         parts.append(f"vol {m['volume_ratio']:.1f}x")
     if m.get("range_position") is not None:
