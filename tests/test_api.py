@@ -41,6 +41,28 @@ def test_health_redacts_secrets(client):
     assert body["config"]["gemini_api_key"] in (True, False)
 
 
+class _FakeFlow:
+    def build(self):
+        return "FLOW REPORT TEXT"
+    def build_token(self, symbol):
+        return f"DEEP DIVE {symbol.upper()}" if symbol.upper() == "ENA" else None
+
+
+def test_flow_endpoint_posts_report(client):
+    api, app_obj = client
+    app_obj.flow = _FakeFlow()
+    resp = api.post("/flow")
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "FLOW REPORT TEXT"
+
+
+def test_flow_deep_dive_endpoint(client):
+    api, app_obj = client
+    app_obj.flow = _FakeFlow()
+    assert api.post("/flow/ena").json()["text"] == "DEEP DIVE ENA"
+    assert api.post("/flow/nope").status_code == 404
+
+
 def test_record_and_list_active(client):
     api, _ = client
     payload = {

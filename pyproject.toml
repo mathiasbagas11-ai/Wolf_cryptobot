@@ -15,10 +15,13 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "anthropic>=0.40",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "gspread>=6.0",
 ]
 
 [tool.setuptools]
-packages = ["wolf", "wolf.state", "wolf.exchange", "wolf.detectors", "wolf.notify", "wolf.api", "wolf.ai", "wolf.news", "wolf.reports"]
+packages = ["wolf", "wolf.state", "wolf.exchange", "wolf.detectors", "wolf.notify", "wolf.api", "wolf.ai", "wolf.news", "wolf.reports", "anomaly"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

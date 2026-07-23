@@ -104,3 +104,6 @@ class MarketDataClient:
 
     def get_open_interest_change(self, symbol: str, period: str = "5m", limit: int = 12) -> Optional[float]:
         return self._futures.get_open_interest_change(symbol, period, limit) if self._futures else None
+
+    def get_long_short_ratio(self, symbol: str, period: str = "5m", limit: int = 2) -> Optional[dict]:
+        return self._futures.get_long_short_ratio(symbol, period, limit) if self._futures else None

@@ -34,6 +34,20 @@ class SignalCandidate:
     confluence_level: str = ""
     entry_mode: str = "RETEST_WAIT"
     tps: Optional[list[dict]] = None
+    # Populated by Screener after the AI debate runs (monitor mode).
+    ai_verdict: str = ""
+    ai_confidence: int = 0
+    ai_rationale: str = ""
+    ai_vetoed: bool = False
+    # Risk gates (monitor mode): set when the signal trades against the market
+    # regime or comes from an underperforming strategy. Kept for win-rate study.
+    against_regime: bool = False
+    weak_strategy: bool = False
+    # Composite-regime bounce guard: flagged when a SHORT faces bounce/squeeze
+    # risk. ``risk_scale`` shrinks the position size (1.0 = full). In monitor
+    # mode the flag is set but risk_scale stays 1.0 (observation only).
+    bounce_flagged: bool = False
+    risk_scale: float = 1.0
 
 
 class Detector(ABC):
@@ -47,13 +61,16 @@ class Detector(ABC):
 
     @abstractmethod
     def evaluate(
-        self, symbol: str, candles: Sequence[Candle], context=None
+        self, symbol: str, candles: Sequence[Candle], context=None, features=None
     ) -> Optional[SignalCandidate]:
         """Return a candidate if the setup triggers, else ``None``.
 
         ``context`` is an optional :class:`~wolf.market.MarketContext` carrying
-        derivatives data (funding, OI). Detectors that don't need it ignore it;
-        passing ``None`` keeps every detector fully usable from candles alone.
+        derivatives data (funding, OI).  ``features`` is an optional
+        :class:`~wolf.indicator_cache.CandleFeatures` with pre-computed
+        indicators shared across all detectors in one cycle; when present
+        detectors skip redundant computation.  Both default to ``None`` so
+        every detector remains fully usable with candles alone.
         """
         raise NotImplementedError
 

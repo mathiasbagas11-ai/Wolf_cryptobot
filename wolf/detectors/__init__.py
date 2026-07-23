@@ -11,6 +11,7 @@ from wolf.detectors.prepump import PrePumpDetector
 from wolf.detectors.predump import PreDumpDetector
 from wolf.detectors.scalp import ScalpDetector
 from wolf.detectors.swing import SwingDetector
+from wolf.detectors.trap import LiquidityTrapDetector
 
 
 def default_detectors() -> list[Detector]:
@@ -21,6 +22,7 @@ def default_detectors() -> list[Detector]:
         PreDumpDetector(),
         ScalpDetector(),
         SwingDetector(),
+        LiquidityTrapDetector(),
     ]
 
 
@@ -33,5 +35,6 @@ __all__ = [
     "PreDumpDetector",
     "ScalpDetector",
     "SwingDetector",
+    "LiquidityTrapDetector",
     "default_detectors",
 ]

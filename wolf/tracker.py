@@ -80,6 +80,33 @@ def normalize_ladder(
     return rungs
 
 
+def _partial_pnl(
+    entry: float,
+    is_long: bool,
+    ladder: list[TpRung],
+    tps_hit: list[int],
+    stop_price: float,
+) -> float:
+    """Blended PnL% of a scaled exit.
+
+    Models an equal position slice per ladder rung: each *hit* rung's slice is
+    booked at its target price, and every remaining slice is closed at
+    ``stop_price`` (breakeven once TP1 has moved the stop). Used to score a
+    TP1-banked stop-out as the partial win it actually is.
+    """
+    n = len(ladder)
+    if n == 0 or entry <= 0:
+        return 0.0
+
+    def pct(px: float) -> float:
+        move = (px - entry) if is_long else (entry - px)
+        return move / entry * 100
+
+    hit = set(tps_hit)
+    total = sum(pct(r.price if r.level in hit else stop_price) for r in ladder)
+    return total / n
+
+
 class EvalResult:
     """Outcome of replaying candles for one signal."""
 
@@ -91,6 +118,7 @@ class EvalResult:
         "terminal",
         "exit_price",
         "exit_time",
+        "realized_pnl_pct",
     )
 
     def __init__(self) -> None:
@@ -101,6 +129,9 @@ class EvalResult:
         self.terminal: Optional[Status] = None
         self.exit_price: Optional[float] = None
         self.exit_time: Optional[datetime] = None
+        # Blended PnL% of a scaled exit; set only for a partial (TP1-banked) win
+        # so _resolve books the realized number instead of the single-exit geom.
+        self.realized_pnl_pct: Optional[float] = None
 
 
 class Tracker:
@@ -110,11 +141,15 @@ class Tracker:
         client: BinanceClient,
         settings: TrackerSettings,
         notify: Optional[NotifyFn] = None,
+        account=None,
+        learning=None,
     ) -> None:
         self._store = store
         self._client = client
         self._settings = settings
         self._notify = notify or (lambda *_: None)
+        self._account = account  # optional PaperAccount for the Trade Report
+        self._learning = learning  # optional LearningEngine fed on resolution
         # Guards the compound read-modify-write of pending_signals. StateStore
         # makes each read/write atomic, but record_signal and check_pending each
         # do load -> mutate -> save, which would otherwise interleave when the
@@ -154,6 +189,14 @@ class Tracker:
         strategy: str = "CONFIRMED",
         entry_mode: str = EntryMode.RETEST_WAIT.value,
         tps: Optional[list[dict]] = None,
+        ai_verdict: str = "",
+        ai_confidence: int = 0,
+        ai_rationale: str = "",
+        ai_vetoed: bool = False,
+        against_regime: bool = False,
+        weak_strategy: bool = False,
+        bounce_flagged: bool = False,
+        risk_scale: float = 1.0,
     ) -> Optional[Signal]:
         """Record a freshly-emitted signal as PENDING.
 
@@ -197,11 +240,20 @@ class Tracker:
             entry_mode=(entry_mode or EntryMode.RETEST_WAIT.value).upper(),
             tp_ladder=[r.to_dict() for r in ladder],
             timeout_hours=self._settings.timeout_for(signal_type),
+            ai_verdict=ai_verdict,
+            ai_confidence=ai_confidence,
+            ai_rationale=ai_rationale,
+            ai_vetoed=ai_vetoed,
+            against_regime=against_regime,
+            weak_strategy=weak_strategy,
+            bounce_flagged=bounce_flagged,
+            risk_scale=risk_scale,
         )
 
+        dedup_min = self._settings.dedup_for(signal.signal_type)
         with self._lock:
             pending = self._load_pending()
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=self._settings.dedup_minutes)
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=dedup_min)
             for existing in pending:
                 if (
                     existing.symbol == symbol
@@ -210,7 +262,7 @@ class Tracker:
                 ):
                     try:
                         if _parse_iso(existing.created_at) > cutoff:
-                            log.debug("Dedup %s %s within %dm", symbol, direction, self._settings.dedup_minutes)
+                            log.debug("Dedup %s %s within %dm", symbol, direction, dedup_min)
                             return None
                     except ValueError:
                         continue
@@ -250,6 +302,24 @@ class Tracker:
             # Stop-loss is checked first (conservative).
             sl_hit = (is_long and c.low <= eff_sl) or (not is_long and c.high >= eff_sl)
             if sl_hit:
+                banked = first_lvl is not None and first_lvl in res.tps_hit
+                if banked and self._settings.tp1_banks_win:
+                    # TP1 is already locked in and the stop now sits at breakeven,
+                    # so a scaled exit (a slice booked at each hit rung, the rest
+                    # at the stop) nets a partial profit — grade it a win.
+                    realized = round(
+                        _partial_pnl(entry, is_long, ladder, res.tps_hit, eff_sl), 3
+                    )
+                    res.terminal = Status.TP_HIT
+                    res.realized_pnl_pct = realized
+                    # Effective single exit price consistent with the blended PnL,
+                    # so the report's Entry→Exit never contradicts the PnL%.
+                    res.exit_price = (
+                        entry * (1 + realized / 100) if is_long
+                        else entry * (1 - realized / 100)
+                    )
+                    res.exit_time = c_time
+                    break
                 res.terminal = Status.SL_HIT
                 res.exit_price = eff_sl
                 res.exit_time = c_time
@@ -362,14 +432,52 @@ class Tracker:
         for sig, event, info in pending_notifications:
             self._safe_notify(sig, event, info)
         for sig in resolved:
-            self._safe_notify(sig, "RESOLVED", {})
+            self._safe_notify(sig, "RESOLVED", self._resolution_info(sig))
         return resolved
+
+    def _resolution_info(self, sig: Signal) -> dict:
+        """Trade-Report payload: paper-account move + a learned-edge note."""
+        if self._learning is not None:
+            try:
+                self._learning.observe(sig)
+            except Exception:  # learning must never break tracking/notify
+                log.exception("Learning observe failed for %s", sig.symbol)
+        info: dict = {"lesson": self._lesson(sig)}
+        if self._account is not None:
+            try:
+                snapshot = self._account.apply(sig)
+            except Exception:  # the account must never break tracking/notify
+                log.exception("Paper account update failed for %s", sig.symbol)
+                snapshot = None
+            if snapshot:
+                info.update(snapshot)
+        return info
+
+    def _lesson(self, sig: Signal) -> str:
+        """One-line takeaway from the cumulative record for this strategy."""
+        bucket = self.stats().get("by_strategy", {}).get(sig.strategy)
+        if not bucket or not bucket.get("total"):
+            return f"{sig.strategy}: first graded trade — building a baseline."
+        wr = bucket["win_rate"]
+        n = bucket["total"]
+        avg = bucket["avg_pnl"]
+        if wr >= 55 and avg > 0:
+            verdict = "edge holding — keep taking these"
+        elif wr >= 45:
+            verdict = "roughly coin-flip — needs tighter filters"
+        else:
+            verdict = "underperforming — tighten or pause this setup"
+        return f"{sig.strategy}: {wr:.0f}% win over {n} ({avg:+.2f}% avg) — {verdict}."
 
     def _resolve(self, sig: Signal, res: EvalResult, created_at: datetime, now: datetime) -> None:
         exit_price = res.exit_price
         exit_time = res.exit_time or now
         hold_hours = (exit_time - created_at).total_seconds() / 3600
-        if exit_price and sig.entry_price > 0 and res.terminal != Status.INVALIDATED:
+        if res.realized_pnl_pct is not None:
+            # Scaled-exit (TP1-banked) partial win: book the blended realized PnL
+            # rather than the single-exit geometry off the breakeven stop.
+            pnl = res.realized_pnl_pct
+        elif exit_price and sig.entry_price > 0 and res.terminal != Status.INVALIDATED:
             pnl = (
                 (exit_price - sig.entry_price) / sig.entry_price * 100
                 if sig.is_long
@@ -406,6 +514,7 @@ class Tracker:
     def stats(self) -> dict:
         """Aggregate win-rate / PnL stats over resolved outcomes."""
         outcomes = self.outcomes()
+        active_sigs = self.active_signals()
         graded = [o for o in outcomes if Status(o.status).is_win or Status(o.status).is_loss]
         wins = [o for o in graded if Status(o.status).is_win]
         total = len(graded)
@@ -413,16 +522,77 @@ class Tracker:
         pnls = [o.pnl_pct for o in graded if o.pnl_pct is not None]
         avg_pnl = (sum(pnls) / len(pnls)) if pnls else 0.0
 
-        by_strategy: dict[str, dict] = {}
-        for o in graded:
-            bucket = by_strategy.setdefault(o.strategy, {"wins": 0, "total": 0, "pnl": 0.0})
-            bucket["total"] += 1
-            bucket["pnl"] += o.pnl_pct or 0.0
-            if Status(o.status).is_win:
-                bucket["wins"] += 1
-        for bucket in by_strategy.values():
-            bucket["win_rate"] = round(bucket["wins"] / bucket["total"] * 100, 1) if bucket["total"] else 0.0
-            bucket["avg_pnl"] = round(bucket["pnl"] / bucket["total"], 3) if bucket["total"] else 0.0
+        def _bucket_group(outcomes_iter, key_fn) -> dict[str, dict]:
+            buckets: dict[str, dict] = {}
+            for o in outcomes_iter:
+                b = buckets.setdefault(key_fn(o), {"wins": 0, "total": 0, "pnl": 0.0})
+                b["total"] += 1
+                b["pnl"] += o.pnl_pct or 0.0
+                if Status(o.status).is_win:
+                    b["wins"] += 1
+            for b in buckets.values():
+                b["win_rate"] = round(b["wins"] / b["total"] * 100, 1) if b["total"] else 0.0
+                b["avg_pnl"] = round(b["pnl"] / b["total"], 3) if b["total"] else 0.0
+            return buckets
+
+        by_strategy = _bucket_group(graded, lambda o: o.strategy)
+
+        # Emit counts: all recorded signals (active + all resolved), not just graded.
+        # This lets us compare "how many fired" vs "how many got resolved" per detector.
+        emitted_by_strategy: dict[str, int] = {}
+        active_count_by_strategy: dict[str, int] = {}
+        for sig in active_sigs:
+            emitted_by_strategy[sig.strategy] = emitted_by_strategy.get(sig.strategy, 0) + 1
+            active_count_by_strategy[sig.strategy] = active_count_by_strategy.get(sig.strategy, 0) + 1
+        for o in outcomes:  # ALL resolved (graded + invalidated + expired)
+            emitted_by_strategy[o.strategy] = emitted_by_strategy.get(o.strategy, 0) + 1
+        for name, bucket in by_strategy.items():
+            bucket["emitted"] = emitted_by_strategy.get(name, bucket["total"])
+            bucket["active"] = active_count_by_strategy.get(name, 0)
+        # Create zero-stat entries for strategies that only have active signals
+        # (no resolved outcomes yet), so the per-detector emit count is visible.
+        for name, emitted in emitted_by_strategy.items():
+            if name not in by_strategy:
+                by_strategy[name] = {
+                    "wins": 0, "total": 0, "pnl": 0.0,
+                    "win_rate": 0.0, "avg_pnl": 0.0,
+                    "emitted": emitted,
+                    "active": active_count_by_strategy.get(name, 0),
+                }
+
+        # AI verdict breakdown: was the AI predictive?
+        # "NO_AI" = AI was not configured; "ABSTAIN" = AI ran but couldn't decide.
+        by_ai_verdict = _bucket_group(graded, lambda o: o.ai_verdict if o.ai_verdict else "NO_AI")
+
+        # Veto signal: win rate of signals the AI flagged as REJECT+high-confidence
+        # (ai_vetoed=True). If this is significantly lower than overall, enabling
+        # veto mode would have improved results.
+        vetoed = [o for o in graded if o.ai_vetoed]
+        vetoed_wins = sum(1 for o in vetoed if Status(o.status).is_win)
+        vetoed_win_rate = round(vetoed_wins / len(vetoed) * 100, 1) if vetoed else None
+
+        # Risk-gate monitoring: win-rate of signals that fought the regime or came
+        # from a flagged strategy. If these underperform, promoting the gate to a
+        # hard block (REGIME_HARD_BLOCK / AUTOPAUSE_HARD_BLOCK) is justified.
+        def _flag_win_rate(predicate) -> tuple[int, Optional[float]]:
+            sub = [o for o in graded if predicate(o)]
+            if not sub:
+                return 0, None
+            sub_wins = sum(1 for o in sub if Status(o.status).is_win)
+            return len(sub), round(sub_wins / len(sub) * 100, 1)
+
+        against_regime_count, against_regime_win_rate = _flag_win_rate(lambda o: o.against_regime)
+        weak_flag_count, weak_flag_win_rate = _flag_win_rate(lambda o: o.weak_strategy)
+
+        # Bounce-guard monitoring: W/L + avg PnL of shorts flagged for bounce
+        # risk. This is the what-if sample that decides when to flip the guard
+        # from monitor to live (and how to calibrate the size/score knobs).
+        bounce_sub = [o for o in graded if getattr(o, "bounce_flagged", False)]
+        bounce_flag_count, bounce_flag_win_rate = _flag_win_rate(
+            lambda o: getattr(o, "bounce_flagged", False)
+        )
+        bounce_pnls = [o.pnl_pct for o in bounce_sub if o.pnl_pct is not None]
+        bounce_flag_avg_pnl = round(sum(bounce_pnls) / len(bounce_pnls), 3) if bounce_pnls else None
 
         return {
             "total_resolved": len(outcomes),
@@ -431,6 +601,16 @@ class Tracker:
             "losses": total - len(wins),
             "win_rate": round(win_rate, 1),
             "avg_pnl_pct": round(avg_pnl, 3),
-            "active": len(self.active_signals()),
+            "active": len(active_sigs),
             "by_strategy": by_strategy,
+            "by_ai_verdict": by_ai_verdict,
+            "vetoed_count": len(vetoed),
+            "vetoed_win_rate": vetoed_win_rate,
+            "against_regime_count": against_regime_count,
+            "against_regime_win_rate": against_regime_win_rate,
+            "weak_flag_count": weak_flag_count,
+            "weak_flag_win_rate": weak_flag_win_rate,
+            "bounce_flag_count": bounce_flag_count,
+            "bounce_flag_win_rate": bounce_flag_win_rate,
+            "bounce_flag_avg_pnl": bounce_flag_avg_pnl,
         }

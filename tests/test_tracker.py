@@ -6,6 +6,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+from wolf.config import TrackerSettings
 from wolf.models import Candle, Status
 from wolf.tracker import Tracker, normalize_ladder
 
@@ -72,6 +73,94 @@ def test_long_signal_hits_tp(store, fake_client, tracker_settings):
     ])
     resolved = tracker.check_pending()
     assert len(resolved) == 1
+    assert resolved[0].status == Status.TP_HIT.value
+    assert resolved[0].pnl_pct == 10.0
+
+
+# ── TP1-banks-win grading (partial-win after breakeven stop) ─────────────────
+def _tp1_then_breakeven(store, fake_client):
+    """Record a LONG that hits TP1 (105) then pulls back to the breakeven stop."""
+    tracker_stub = Tracker(store, fake_client, TrackerSettings())
+    sig = tracker_stub.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=[{"level": 1, "price": 105}, {"level": 2, "price": 110}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [
+        (100, 102, 99, 101),
+        (101, 106, 100, 105),   # TP1 at 105 -> stop trails to breakeven (100)
+        (100, 101, 99, 100),    # low pierces the breakeven stop
+    ])
+
+
+def test_tp1_then_breakeven_stop_is_loss_by_default(store, fake_client):
+    # Legacy all-or-nothing rule: TP1 banked then stopped at BE == a loss.
+    _tp1_then_breakeven(store, fake_client)
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=False))
+    resolved = tracker.check_pending()
+    assert resolved[0].status == Status.SL_HIT.value
+    assert resolved[0].pnl_pct == 0.0
+
+
+def test_tp1_then_breakeven_stop_banks_partial_win(store, fake_client):
+    # With the fix: half booked at TP1 (+5%), half at BE (0%) -> +2.5% win.
+    _tp1_then_breakeven(store, fake_client)
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    resolved = tracker.check_pending()
+    r = resolved[0]
+    assert r.status == Status.TP_HIT.value
+    assert Status(r.status).is_win
+    assert r.pnl_pct == 2.5
+    # Exit price must be consistent with the booked PnL (no contradictory report).
+    assert r.exit_price == 100 * (1 + 2.5 / 100)  # 102.5
+
+
+def test_tp1_then_breakeven_stop_partial_win_short(store, fake_client):
+    # Short mirror: TP1 at 95 (+5%), stop trails to BE (100) -> +2.5% win.
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "SOLUSDT", "SCREENER", "SHORT", 100, tp=90, sl=105,
+        entry_mode="MOMENTUM_NOW", tps=[{"level": 1, "price": 95}, {"level": 2, "price": 90}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["SOLUSDT"] = _candles_after(now_ms, [
+        (100, 101, 94, 95),     # TP1 at 95 -> stop trails to breakeven (100)
+        (100, 101, 99, 100),    # high pierces the breakeven stop
+    ])
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    r = tracker.check_pending()[0]
+    assert r.status == Status.TP_HIT.value
+    assert r.pnl_pct == 2.5
+    assert r.exit_price == 100 * (1 - 2.5 / 100)  # 97.5
+
+
+def test_stop_before_tp1_still_loss_when_enabled(store, fake_client):
+    # No rung banked -> a real loss even with the flag on.
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    sig = tracker.record_signal(
+        "ETHUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=[{"level": 1, "price": 105}, {"level": 2, "price": 110}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["ETHUSDT"] = _candles_after(now_ms, [(100, 101, 94, 96)])
+    resolved = tracker.check_pending()
+    assert resolved[0].status == Status.SL_HIT.value
+    assert resolved[0].pnl_pct == -5.0
+
+
+def test_full_ladder_win_unaffected_when_enabled(store, fake_client):
+    # Reaching the final rung stays a full win at the final-rung PnL.
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    sig = tracker.record_signal(
+        "SOLUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=[{"level": 1, "price": 105}, {"level": 2, "price": 110}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["SOLUSDT"] = _candles_after(now_ms, [
+        (100, 106, 100, 105),   # TP1
+        (105, 111, 104, 110),   # TP2 -> terminal
+    ])
+    resolved = tracker.check_pending()
     assert resolved[0].status == Status.TP_HIT.value
     assert resolved[0].pnl_pct == 10.0
 
@@ -158,6 +247,65 @@ def test_stats_win_rate(store, fake_client, tracker_settings):
     assert stats["wins"] == 1
     assert stats["losses"] == 1
     assert stats["win_rate"] == 50.0
+    assert "by_ai_verdict" in stats
+    assert "vetoed_win_rate" in stats
+
+
+def test_stats_ai_verdict_breakdown(store, fake_client, tracker_settings):
+    tracker = Tracker(store, fake_client, tracker_settings)
+
+    # Win flagged CONFIRM by AI
+    sig = tracker.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", ai_verdict="CONFIRM", ai_confidence=85,
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [(100, 111, 99, 110)])
+    tracker.check_pending()
+
+    # Loss flagged REJECT (ai_vetoed=True) by AI
+    sig2 = tracker.record_signal(
+        "ETHUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", ai_verdict="REJECT", ai_confidence=80, ai_vetoed=True,
+    )
+    now_ms2 = int(datetime.fromisoformat(sig2.created_at).timestamp() * 1000)
+    fake_client.klines["ETHUSDT"] = _candles_after(now_ms2, [(100, 101, 94, 96)])
+    tracker.check_pending()
+
+    stats = tracker.stats()
+    by_ai = stats["by_ai_verdict"]
+    assert by_ai["CONFIRM"]["wins"] == 1 and by_ai["CONFIRM"]["total"] == 1
+    assert by_ai["REJECT"]["wins"] == 0 and by_ai["REJECT"]["total"] == 1
+    assert stats["vetoed_count"] == 1
+    assert stats["vetoed_win_rate"] == 0.0
+
+
+# ── trade report payload (paper account + lesson) ───────────────────────────
+def test_resolution_info_includes_balance_and_lesson(store, fake_client, tracker_settings):
+    from wolf.account import PaperAccount
+
+    events = []
+    account = PaperAccount(store, start_balance=1000.0, risk_pct=1.0)
+    tracker = Tracker(
+        store, fake_client, tracker_settings,
+        notify=lambda sig, event, info: events.append((event, info)),
+        account=account,
+    )
+    sig = tracker.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", strategy="MOMENTUM",
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [(100, 111, 99, 110)])
+    tracker.check_pending()
+
+    resolved = [info for ev, info in events if ev == "RESOLVED"]
+    assert resolved, "expected a RESOLVED notification"
+    info = resolved[0]
+    # +10% on a 5% stop = +2R; risk 1% of 1000 = 10 => +20 -> balance 1020.
+    assert info["r_multiple"] == 2.0
+    assert info["balance"] == 1020.0
+    assert "lesson" in info and "MOMENTUM" in info["lesson"]
 
 
 # ── concurrency ────────────────────────────────────────────────────────────
@@ -199,3 +347,23 @@ def test_record_concurrent_with_check_pending(store, fake_client, tracker_settin
 
     # BTC + 20 ALT signals, none lost to a race.
     assert len(tracker.active_signals()) == 21
+
+
+# ── emit count tracking ─────────────────────────────────────────────────────
+def test_stats_emit_count_per_strategy(store, fake_client, tracker_settings):
+    """by_strategy['emitted'] counts all recorded signals, not just graded ones."""
+    tracker = Tracker(store, fake_client, tracker_settings)
+    # Two SCALP signals — different symbols so dedup doesn't block them.
+    tracker.record_signal(
+        "BTCUSDT", "SCALP", "LONG", 100, tp=110, sl=95,
+        entry_mode="MOMENTUM_NOW", strategy="SCALP",
+    )
+    tracker.record_signal(
+        "ETHUSDT", "SCALP", "SHORT", 100, tp=90, sl=105,
+        entry_mode="MOMENTUM_NOW", strategy="SCALP",
+    )
+    stats = tracker.stats()
+    scalp = stats["by_strategy"].get("SCALP", {})
+    assert scalp.get("emitted", 0) == 2    # both recorded
+    assert scalp.get("active", 0) == 2     # both still pending
+    assert scalp.get("total", 0) == 0      # none graded yet
