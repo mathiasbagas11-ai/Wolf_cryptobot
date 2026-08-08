@@ -74,7 +74,16 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
     stats_hours = app.settings.stats_report_hours
     if stats_hours > 0 and app.notifier.enabled:
         scheduler.add_job(
-            _guarded(lambda: app.notifier.notify_stats(app.tracker.stats()), "stats"),
+            # Report the period just elapsed, with all-time as a second line.
+            # Cumulative-only meant each message blended every day since startup,
+            # so a run that was deteriorating still looked healthy.
+            _guarded(
+                lambda: app.notifier.notify_stats(
+                    app.tracker.stats(window_hours=stats_hours),
+                    app.tracker.stats(),
+                ),
+                "stats",
+            ),
             "interval",
             hours=stats_hours,
             id="stats",

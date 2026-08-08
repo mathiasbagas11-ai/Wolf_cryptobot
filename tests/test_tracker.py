@@ -367,3 +367,131 @@ def test_stats_emit_count_per_strategy(store, fake_client, tracker_settings):
     assert scalp.get("emitted", 0) == 2    # both recorded
     assert scalp.get("active", 0) == 2     # both still pending
     assert scalp.get("total", 0) == 0      # none graded yet
+
+
+# ── regression: pre-activation candles must not grade a position ────────────
+def test_pre_activation_candles_cannot_hit_tp(store, fake_client, tracker_settings):
+    """A retest entry must not inherit TP hits from before it went live.
+
+    Every cycle replays from created_at, so once ``activated`` was persisted the
+    replay treated the pre-retest candles as live. For a LONG that waits for a
+    dip, those candles sit above entry — right where the TP rungs are — so the
+    second cycle booked a phantom TP_HIT.
+    """
+    tracker = Tracker(store, fake_client, tracker_settings)
+    sig = tracker.record_signal(
+        "ADAUSDT", "SWING", "LONG", 90, tp=100, sl=85,
+        entry_mode="RETEST_WAIT", tps=[{"level": 1, "price": 95}, {"level": 2, "price": 100}],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["ADAUSDT"] = _candles_after(now_ms, [
+        (98, 101, 96, 97),  # above entry throughout: sweeps past TP1 *and* TP2
+        (94, 94, 89, 91),   # dips to 90 -> entry finally touched, no TP in range
+    ])
+
+    assert tracker.check_pending() == []  # activated, nothing terminal yet
+    active = tracker.active_signals()
+    assert len(active) == 1 and active[0].tps_hit == []
+
+    # Second cycle over the same history must reach the same conclusion.
+    assert tracker.check_pending() == []
+    assert tracker.active_signals()[0].tps_hit == []
+
+
+# ── grading in R ────────────────────────────────────────────────────────────
+def _age_pending(store, hours: float) -> None:
+    pending = store.read("pending_signals")
+    old = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    pending[0]["created_at"] = old
+    if pending[0].get("activated_at"):
+        pending[0]["activated_at"] = old
+    store.write("pending_signals", pending)
+
+
+def test_r_multiple_normalises_pnl_by_risk(store, fake_client, tracker_settings):
+    """The same -1R loss on two coins of very different volatility."""
+    tracker = Tracker(store, fake_client, tracker_settings)
+    for sym, entry, sl, low in (("QUIET", 100, 99.7, 99.6), ("WILD", 100, 97.0, 96.9)):
+        tracker.record_signal(sym, "SCREENER", "LONG", entry, tp=entry * 1.1, sl=sl,
+                              entry_mode="MOMENTUM_NOW")
+        created = [s for s in tracker.active_signals() if s.symbol == sym][0].created_at
+        now_ms = int(datetime.fromisoformat(created).timestamp() * 1000)
+        fake_client.klines[sym] = _candles_after(now_ms, [(entry, entry, low, low)])
+
+    resolved = {s.symbol: s for s in tracker.check_pending()}
+    assert resolved["QUIET"].pnl_pct == -0.3     # wildly different percentages...
+    assert resolved["WILD"].pnl_pct == -3.0
+    assert resolved["QUIET"].r_multiple == -1.0  # ...identical risk-adjusted damage
+    assert resolved["WILD"].r_multiple == -1.0
+
+
+def test_r_multiple_derived_for_pre_existing_outcomes(store, fake_client, tracker_settings):
+    """Outcomes booked before r_multiple existed still report in R.
+
+    entry and sl are persisted, so the conversion is recoverable on read — no
+    backfill migration needed for the outcome log already on disk.
+    """
+    from wolf.tracker import r_multiple_of
+
+    tracker = Tracker(store, fake_client, tracker_settings)
+    sig = tracker.record_signal("ETHUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+                                entry_mode="MOMENTUM_NOW")
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["ETHUSDT"] = _candles_after(now_ms, [(100, 101, 94, 96)])
+    tracker.check_pending()
+
+    outcomes = store.read("signal_outcomes")
+    outcomes[0].pop("r_multiple")  # as an old record would look
+    store.write("signal_outcomes", outcomes)
+
+    assert r_multiple_of(tracker.outcomes()[0]) == -1.0
+    assert tracker.stats()["avg_r"] == -1.0
+
+
+def test_expiry_inside_dead_band_carries_no_verdict(store, fake_client, tracker_settings):
+    tracker = Tracker(store, fake_client, tracker_settings)
+    tracker.record_signal("SOLUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+                          entry_mode="MOMENTUM_NOW")
+    _age_pending(store, 30)  # past the 24h SCREENER timeout
+    now_ms = int(time.time() * 1000)
+    fake_client.klines["SOLUSDT"] = _candles_after(now_ms - 31 * 3600_000, [(100, 101, 99, 100)])
+    fake_client.prices["SOLUSDT"] = 100.1  # +0.1% on 5% risk = 0.02R, pure noise
+
+    resolved = tracker.check_pending()
+    assert resolved[0].status == Status.EXPIRED_FLAT.value
+    stats = tracker.stats()
+    assert stats["wins"] == 0 and stats["losses"] == 0
+    assert stats["flat"] == 1
+    assert stats["total_traded"] == 1  # still a trade for expectancy purposes
+
+
+def test_expiry_beyond_dead_band_still_grades(store, fake_client, tracker_settings):
+    tracker = Tracker(store, fake_client, tracker_settings)
+    tracker.record_signal("BNBUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+                          entry_mode="MOMENTUM_NOW")
+    _age_pending(store, 30)
+    now_ms = int(time.time() * 1000)
+    fake_client.klines["BNBUSDT"] = _candles_after(now_ms - 31 * 3600_000, [(100, 101, 99, 100)])
+    fake_client.prices["BNBUSDT"] = 102.0  # +2% on 5% risk = 0.4R
+
+    resolved = tracker.check_pending()
+    assert resolved[0].status == Status.EXPIRED_WIN.value
+    assert resolved[0].r_multiple == 0.4
+
+
+def test_stats_window_excludes_older_outcomes(store, fake_client, tracker_settings):
+    """A 24h report must describe that day, not every day since startup."""
+    tracker = Tracker(store, fake_client, tracker_settings)
+    sig = tracker.record_signal("BTCUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
+                                entry_mode="MOMENTUM_NOW")
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [(100, 111, 99, 110)])
+    tracker.check_pending()
+
+    outcomes = store.read("signal_outcomes")
+    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    outcomes[0]["resolved_at"] = outcomes[0]["exit_time"] = old
+    store.write("signal_outcomes", outcomes)
+
+    assert tracker.stats()["total_traded"] == 1               # all-time sees it
+    assert tracker.stats(window_hours=24)["total_traded"] == 0  # yesterday does not

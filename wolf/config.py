@@ -280,8 +280,14 @@ class TrackerSettings:
     dedup_screener_min: int = 30
     dedup_swing_min: int = 60
 
-    # Keep at most this many resolved outcomes on disk.
-    max_outcomes: int = 500
+    # Keep at most this many resolved outcomes on disk. At ~65 outcomes/day the
+    # old 500 cap silently discarded the oldest records after roughly a week,
+    # which quietly turned "all-time" stats into a rolling window.
+    max_outcomes: int = 5000
+
+    # A signal that times out within this many R of entry is graded EXPIRED_FLAT
+    # (no verdict) instead of being scored as a win or a loss on noise.
+    expiry_flat_r: float = 0.25
 
     # Grading: once TP1 (the first ladder rung) is banked, a later stop-out at
     # breakeven is booked as a partial win (models a scaled exit — part off at
@@ -589,8 +595,9 @@ class Settings:
             dedup_predump_min=_env_int("TRACKER_DEDUP_PREDUMP_MIN", 20),
             dedup_screener_min=_env_int("TRACKER_DEDUP_SCREENER_MIN", dedup_default),
             dedup_swing_min=_env_int("TRACKER_DEDUP_SWING_MIN", 60),
-            max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", 500),
+            max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", 5000),
             tp1_banks_win=_env_bool("TRACKER_TP1_BANKS_WIN", False),
+            expiry_flat_r=_env_float("TRACKER_EXPIRY_FLAT_R", 0.25),
         )
         risk = RiskSettings(
             regime_filter_enabled=_env_bool("REGIME_FILTER_ENABLED", True),

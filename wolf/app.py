@@ -141,18 +141,29 @@ def build_application(settings: Settings | None = None) -> Application:
     )
     context_provider = ContextProvider(client)
 
-    def _role_client(role):
-        return build_llm_client(
+    def _role_client(role, label: str = ""):
+        llm = build_llm_client(
             role.provider, settings.api_key_for(role.provider), role.model
         )
+        if label and not llm.available:
+            # An enabled-but-unusable client degrades to a permanent ABSTAIN,
+            # which in the stats is indistinguishable from "the AI looked and
+            # had no opinion". Two days of 100% ABSTAIN went unnoticed that way.
+            log.warning(
+                "AI role %s is enabled (provider=%s) but its client is unavailable "
+                "— missing API key or unsupported provider. It will ABSTAIN on "
+                "every signal and filter nothing.",
+                label, role.provider,
+            )
+        return llm
 
     validator = None
     analysis_llm = None
     if settings.ai.enabled:
         validator = DebateValidator(
-            bull=_role_client(settings.ai.bull),
-            bear=_role_client(settings.ai.bear),
-            arbiter=_role_client(settings.ai.arbiter),
+            bull=_role_client(settings.ai.bull, "bull"),
+            bear=_role_client(settings.ai.bear, "bear"),
+            arbiter=_role_client(settings.ai.arbiter, "arbiter"),
             chart_candles=settings.ai.chart_candles,
         )
         # Reuse the (cheap) arbiter model to narrate market/session reports.

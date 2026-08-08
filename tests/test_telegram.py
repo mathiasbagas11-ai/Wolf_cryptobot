@@ -345,3 +345,37 @@ def test_send_falls_back_to_main_channel_on_bad_thread():
     # First attempt targets the topic, retry drops message_thread_id.
     assert sess.calls[0].get("message_thread_id") == "999"
     assert "message_thread_id" not in sess.calls[1]
+
+
+def test_stats_card_leads_with_r_and_window():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(stats_thread_id="9"), session=sess)
+    n.notify_stats(
+        {"window_hours": 24, "wins": 25, "losses": 38, "win_rate": 39.7,
+         "avg_r": 0.02, "avg_pnl_pct": 0.07, "active": 5, "conclusive": True,
+         "flat": 6, "total_traded": 63, "by_strategy": {}, "by_ai_verdict": {}},
+        {"win_rate": 44.3, "avg_r": 0.05, "total_traded": 131},
+    )
+    text = sess.calls[0]["text"]
+    assert "PERFORMANCE SUMMARY · 24h" in text
+    assert "Win rate 39.7%" in text      # the window leads...
+    assert "All-time 44.3%" in text      # ...cumulative is context, not headline
+    assert "+0.02R" in text              # expectancy in R, comparable across coins
+    assert "Flat 6" in text              # no-verdict outcomes stay visible
+
+
+def test_stats_card_flags_small_samples():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(stats_thread_id="9"), session=sess)
+    n.notify_stats({
+        "wins": 0, "losses": 1, "win_rate": 0.0, "avg_r": -0.8, "avg_pnl_pct": -0.8,
+        "active": 0, "conclusive": False, "total_traded": 1,
+        "by_strategy": {"PREPUMP": {
+            "win_rate": 0.0, "total": 1, "emitted": 1, "avg_pnl": -0.8,
+            "avg_r": -0.8, "conclusive": False,
+        }},
+        "by_ai_verdict": {},
+    })
+    text = sess.calls[0]["text"]
+    # A 0% win rate off one trade must not read as a verdict on the strategy.
+    assert "small sample" in text and "⚠️" in text

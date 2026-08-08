@@ -46,6 +46,7 @@ class Status(str, Enum):
     INVALIDATED = "INVALIDATED"
     EXPIRED_WIN = "EXPIRED_WIN"
     EXPIRED_LOSS = "EXPIRED_LOSS"
+    EXPIRED_FLAT = "EXPIRED_FLAT"  # timed out inside the noise band — no verdict
     EXPIRED = "EXPIRED"
 
     @property
@@ -137,6 +138,11 @@ class Signal:
     exit_price: Optional[float] = None
     exit_time: Optional[str] = None
     pnl_pct: Optional[float] = None
+    # PnL in units of the trade's own risk (R = pnl_pct / distance to SL).
+    # Targets are ATR multiples, so raw percentages are not comparable across
+    # symbols: -1 ATR is -0.3% on a quiet coin and -3% on a volatile one, and
+    # averaging those in % lets the volatile handful dominate the report.
+    r_multiple: Optional[float] = None
     hold_hours: Optional[float] = None
     resolved_at: Optional[str] = None
 

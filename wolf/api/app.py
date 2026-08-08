@@ -63,8 +63,8 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         return {"count": len(items), "outcomes": [s.to_dict() for s in items]}
 
     @api.get("/stats")
-    def stats() -> dict:
-        return app_obj.tracker.stats()
+    def stats(window_hours: Optional[float] = None) -> dict:
+        return app_obj.tracker.stats(window_hours=window_hours)
 
     @api.get("/paper")
     def paper() -> dict:

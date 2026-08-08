@@ -243,8 +243,8 @@ class TelegramNotifier:
         elif event == "RESOLVED":
             self.send(self._resolved_text(signal, info), self._route_signal(signal, self._settings.route_trade_report()))
 
-    def notify_stats(self, stats: dict) -> None:
-        self.send(self._stats_card(stats), self._settings.route_stats())
+    def notify_stats(self, stats: dict, all_time: Optional[dict] = None) -> None:
+        self.send(self._stats_card(stats, all_time), self._settings.route_stats())
 
     def notify_news(self, items) -> None:
         if items:
@@ -408,13 +408,27 @@ class TelegramNotifier:
         lines.append(self._stamp())
         return "\n".join(lines)
 
-    def _stats_card(self, stats: dict) -> str:
+    def _stats_card(self, stats: dict, all_time: Optional[dict] = None) -> str:
+        window = stats.get("window_hours")
+        title = f"PERFORMANCE SUMMARY · {window:g}h" if window else "PERFORMANCE SUMMARY"
+        flat_n = stats.get("flat", 0)
+        flat_tag = f" · 😐 Flat {flat_n}" if flat_n else ""
         lines = [
-            f"📊 <b>PERFORMANCE SUMMARY</b>\n{DIVIDER}",
+            f"📊 <b>{esc(title)}</b>\n{DIVIDER}",
             f"✅ Wins {stats.get('wins', 0)} · 🛑 Losses {stats.get('losses', 0)} "
-            f"· 📈 Win rate {stats.get('win_rate', 0)}%",
-            f"💰 Avg PnL {stats.get('avg_pnl_pct', 0):+.2f}% · 🔵 Active {stats.get('active', 0)}",
+            f"· 📈 Win rate {stats.get('win_rate', 0)}%"
+            + ("" if stats.get("conclusive", True) else "  ⚠️ small sample"),
+            # Expectancy leads in R: targets are ATR multiples, so a percentage
+            # average is dominated by whichever volatile symbols happened to trade.
+            f"💰 Expectancy {stats.get('avg_r', 0):+.2f}R "
+            f"({stats.get('avg_pnl_pct', 0):+.2f}%){flat_tag} "
+            f"· 🔵 Active {stats.get('active', 0)}",
         ]
+        if all_time:
+            lines.append(
+                f"📚 All-time {all_time.get('win_rate', 0)}% WR · "
+                f"{all_time.get('avg_r', 0):+.2f}R over {all_time.get('total_traded', 0)}"
+            )
 
         by_strategy = stats.get("by_strategy", {})
         if by_strategy:
@@ -424,9 +438,10 @@ class TelegramNotifier:
                 graded_n = b.get("total", 0)
                 active_n = b.get("active", 0)
                 active_tag = f" · {active_n} active" if active_n else ""
+                mark = "" if b.get("conclusive", True) else " ⚠️"
                 lines.append(
-                    f"• {esc(name)}  {b.get('win_rate', 0)}% WR "
-                    f"({graded_n}/{fired} graded{active_tag}, avg {b.get('avg_pnl', 0):+.2f}%)"
+                    f"• {esc(name)}  {b.get('win_rate', 0)}% WR · {b.get('avg_r', 0):+.2f}R "
+                    f"({graded_n}/{fired} graded{active_tag}, avg {b.get('avg_pnl', 0):+.2f}%){mark}"
                 )
 
         by_ai = stats.get("by_ai_verdict", {})

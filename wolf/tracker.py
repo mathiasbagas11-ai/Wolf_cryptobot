@@ -33,6 +33,10 @@ from wolf.state import StateStore
 
 log = logging.getLogger("wolf.tracker")
 
+# Below this many graded trades, a win rate is a small-sample artefact rather
+# than a finding — a "0.0% WR" off one trade says nothing about the strategy.
+MIN_GRADED_FOR_VERDICT = 20
+
 PENDING_KEY = "pending_signals"
 OUTCOMES_KEY = "signal_outcomes"
 
@@ -78,6 +82,53 @@ def normalize_ladder(
     for i, rung in enumerate(rungs, start=1):
         rung.level = i
     return rungs
+
+
+def _resolved_at(sig: Signal) -> Optional[datetime]:
+    """When an outcome was booked, for windowing. ``None`` if unparseable."""
+    for value in (sig.resolved_at, sig.exit_time):
+        if value:
+            try:
+                return _parse_iso(value)
+            except (ValueError, TypeError):
+                continue
+    return None
+
+
+def _risk_pct(sig: Signal) -> float:
+    """Distance from entry to stop, in percent — one unit of risk (1R)."""
+    if sig.entry_price <= 0:
+        return 0.0
+    return abs(sig.entry_price - sig.sl) / sig.entry_price * 100
+
+
+def r_multiple_of(sig: Signal) -> float:
+    """PnL in units of the trade's own risk.
+
+    Derived on read rather than trusted from storage, so outcomes booked before
+    ``r_multiple`` existed still report correctly — entry and sl are persisted,
+    which is all the conversion needs. No backfill migration required.
+    """
+    if sig.r_multiple is not None:
+        return sig.r_multiple
+    risk = _risk_pct(sig)
+    if not risk or sig.pnl_pct is None:
+        return 0.0
+    return round(sig.pnl_pct / risk, 3)
+
+
+def _activation_time(sig: Signal, created_at: datetime) -> datetime:
+    """When the position actually went live.
+
+    Falls back to ``created_at`` for MOMENTUM_NOW entries (live on arrival) and
+    for records written before ``activated_at`` was persisted.
+    """
+    if sig.activated_at:
+        try:
+            return _parse_iso(sig.activated_at)
+        except (ValueError, TypeError):
+            pass
+    return created_at
 
 
 def _partial_pnl(
@@ -284,7 +335,13 @@ class Tracker:
         momentum = sig.entry_mode.upper() == EntryMode.MOMENTUM_NOW.value
 
         res.activated = bool(sig.activated) or momentum
-        res.activated_time = created_at if res.activated else None
+        # A signal that activated on an earlier cycle must resume from the candle
+        # it actually activated on, not from created_at. Every cycle replays the
+        # whole history, so treating pre-activation candles as live would let them
+        # register TP/SL hits the position was never open for — for a RETEST_WAIT
+        # long, price sits *above* entry until the retest, which is exactly where
+        # the TP rungs are.
+        res.activated_time = _activation_time(sig, created_at) if res.activated else None
         eff_sl = sig.sl
         first_lvl = ladder[0].level if ladder else None
 
@@ -298,6 +355,8 @@ class Tracker:
                     res.activated_time = c_time
                 else:
                     continue
+            elif res.activated_time is not None and c_time < res.activated_time:
+                continue  # candle predates activation — no position existed yet
 
             # Stop-loss is checked first (conservative).
             sl_hit = (is_long and c.low <= eff_sl) or (not is_long and c.high >= eff_sl)
@@ -351,8 +410,16 @@ class Tracker:
                 else:
                     curr = self._client.get_price(sig.symbol)
                     if curr:
-                        pnl = (curr - entry) if is_long else (entry - curr)
-                        res.terminal = Status.EXPIRED_WIN if pnl > 0 else Status.EXPIRED_LOSS
+                        pnl_pct = ((curr - entry) if is_long else (entry - curr)) / entry * 100
+                        risk = _risk_pct(sig)
+                        r = (pnl_pct / risk) if risk else 0.0
+                        # Without a dead-band, timing out at +0.01% scored a win
+                        # worth as much as a TP hit — which is how a short
+                        # timeout manufactures a ~50% win rate out of noise.
+                        if abs(r) < self._settings.expiry_flat_r:
+                            res.terminal = Status.EXPIRED_FLAT
+                        else:
+                            res.terminal = Status.EXPIRED_WIN if r > 0 else Status.EXPIRED_LOSS
                         res.exit_price = curr
                     else:
                         res.terminal = Status.EXPIRED
@@ -489,6 +556,8 @@ class Tracker:
         sig.exit_price = exit_price
         sig.exit_time = exit_time.isoformat()
         sig.pnl_pct = round(pnl, 3)
+        risk_pct = _risk_pct(sig)
+        sig.r_multiple = round(pnl / risk_pct, 3) if risk_pct else 0.0
         sig.hold_hours = round(hold_hours, 2)
         sig.tps_hit = res.tps_hit
         sig.resolved_at = now.isoformat()
@@ -511,9 +580,19 @@ class Tracker:
         raw = self._store.read(OUTCOMES_KEY, default=[])
         return [Signal.from_dict(d) for d in raw if isinstance(d, dict)]
 
-    def stats(self) -> dict:
-        """Aggregate win-rate / PnL stats over resolved outcomes."""
+    def stats(self, window_hours: Optional[float] = None) -> dict:
+        """Aggregate win-rate / PnL stats over resolved outcomes.
+
+        ``window_hours=None`` reports all-time. Passing the report interval makes
+        a daily message describe *that day* — cumulative figures blend every day
+        since startup, which can show improvement while the run deteriorates.
+        """
         outcomes = self.outcomes()
+        if window_hours and window_hours > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+            # Records with no usable timestamp predate the field and are old by
+            # definition, so they fall outside any recent window.
+            outcomes = [o for o in outcomes if (ts := _resolved_at(o)) is not None and ts >= cutoff]
         active_sigs = self.active_signals()
         graded = [o for o in outcomes if Status(o.status).is_win or Status(o.status).is_loss]
         wins = [o for o in graded if Status(o.status).is_win]
@@ -525,14 +604,19 @@ class Tracker:
         def _bucket_group(outcomes_iter, key_fn) -> dict[str, dict]:
             buckets: dict[str, dict] = {}
             for o in outcomes_iter:
-                b = buckets.setdefault(key_fn(o), {"wins": 0, "total": 0, "pnl": 0.0})
+                b = buckets.setdefault(key_fn(o), {"wins": 0, "total": 0, "pnl": 0.0, "r": 0.0})
                 b["total"] += 1
                 b["pnl"] += o.pnl_pct or 0.0
+                b["r"] += r_multiple_of(o)
                 if Status(o.status).is_win:
                     b["wins"] += 1
             for b in buckets.values():
                 b["win_rate"] = round(b["wins"] / b["total"] * 100, 1) if b["total"] else 0.0
                 b["avg_pnl"] = round(b["pnl"] / b["total"], 3) if b["total"] else 0.0
+                # Targets are ATR multiples, so percent averages are dominated by
+                # whichever volatile symbols happened to trade. R is comparable.
+                b["avg_r"] = round(b["r"] / b["total"], 3) if b["total"] else 0.0
+                b["conclusive"] = b["total"] >= MIN_GRADED_FOR_VERDICT
             return buckets
 
         by_strategy = _bucket_group(graded, lambda o: o.strategy)
@@ -594,13 +678,25 @@ class Tracker:
         bounce_pnls = [o.pnl_pct for o in bounce_sub if o.pnl_pct is not None]
         bounce_flag_avg_pnl = round(sum(bounce_pnls) / len(bounce_pnls), 3) if bounce_pnls else None
 
+        # Expectancy spans every outcome that actually took a position, scratches
+        # included: a breakeven or flat exit really happened, tied up risk and
+        # paid fees, so dropping it from the average would flatter the result.
+        traded = [o for o in outcomes if o.status != Status.INVALIDATED.value]
+        avg_r = (sum(r_multiple_of(o) for o in traded) / len(traded)) if traded else 0.0
+
         return {
+            "window_hours": window_hours,
             "total_resolved": len(outcomes),
             "total_graded": total,
+            "total_traded": len(traded),
             "wins": len(wins),
             "losses": total - len(wins),
+            "flat": sum(1 for o in outcomes if o.status == Status.EXPIRED_FLAT.value),
+            "invalidated": sum(1 for o in outcomes if o.status == Status.INVALIDATED.value),
             "win_rate": round(win_rate, 1),
             "avg_pnl_pct": round(avg_pnl, 3),
+            "avg_r": round(avg_r, 3),
+            "conclusive": total >= MIN_GRADED_FOR_VERDICT,
             "active": len(active_sigs),
             "by_strategy": by_strategy,
             "by_ai_verdict": by_ai_verdict,
