@@ -176,16 +176,21 @@ class RiskSettings:
     # equity is this far below its peak (percent). Protects realized gains.
     drawdown_pause_pct: float = 15.0
 
-    # Auto-pause underperformers: once a strategy has at least this many graded
-    # trades, judge it on realized edge (expectancy = avg PnL % per trade) and
-    # flag it when that edge falls below the floor. Win-rate is only a fallback
-    # for older stats that don't carry avg_pnl — a low-WR / high-R:R setup can
-    # still be net profitable, so win-rate alone is the wrong gate.
-    autopause_min_trades: int = 12
-    # +0.10% buffer above breakeven: a near-flat strategy (e.g. +0.05% avg) is
-    # noise that turns net-negative after real fees/slippage, so require a
-    # margin over zero rather than merely "not losing" on paper.
-    autopause_min_expectancy: float = 0.10
+    # Auto-pause underperformers, judged on realized edge in R (PnL per unit of
+    # the trade's own risk) rather than in percent: targets are ATR multiples, so
+    # a percent average is dominated by whichever volatile symbols traded.
+    #
+    # A strategy is paused only when the upper bound of its one-sided confidence
+    # interval is still below the floor — avg_r + z*se_r < floor. Comparing a
+    # bare average to a threshold ignores how noisy the average is; at the old
+    # 12-trade minimum the standard error was ~0.4R, which is why the gate
+    # flagged ~78% of signals and the flagged ones then outperformed.
+    autopause_min_trades: int = 30
+    # 0.0R = pause only what is confidently losing on a risk-adjusted basis.
+    # Raise it to demand a margin over breakeven (fees run roughly 0.2-0.4R).
+    autopause_min_expectancy_r: float = 0.0
+    # 1.65 = one-sided 95%. Lower it to pause sooner on weaker evidence.
+    autopause_confidence_z: float = 1.65
     autopause_min_win_rate: float = 38.0
 
     # Enforcement mode for the regime + auto-pause gates.
@@ -604,8 +609,9 @@ class Settings:
             regime_symbol=_env_str("REGIME_SYMBOL", "BTCUSDT"),
             regime_interval=_env_str("REGIME_INTERVAL", "1h"),
             drawdown_pause_pct=_env_float("DRAWDOWN_PAUSE_PCT", 15.0),
-            autopause_min_trades=_env_int("AUTOPAUSE_MIN_TRADES", 12),
-            autopause_min_expectancy=_env_float("AUTOPAUSE_MIN_EXPECTANCY", 0.10),
+            autopause_min_trades=_env_int("AUTOPAUSE_MIN_TRADES", 30),
+            autopause_min_expectancy_r=_env_float("AUTOPAUSE_MIN_EXPECTANCY_R", 0.0),
+            autopause_confidence_z=_env_float("AUTOPAUSE_CONFIDENCE_Z", 1.65),
             autopause_min_win_rate=_env_float("AUTOPAUSE_MIN_WIN_RATE", 38.0),
             regime_hard_block=_env_bool("REGIME_HARD_BLOCK", False),
             autopause_hard_block=_env_bool("AUTOPAUSE_HARD_BLOCK", False),
