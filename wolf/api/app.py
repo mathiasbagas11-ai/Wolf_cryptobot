@@ -10,13 +10,14 @@ GET  /health            liveness + redacted config
 GET  /signals/active    currently pending/active signals
 GET  /signals/outcomes  resolved outcomes (most recent first)
 GET  /stats             aggregate win-rate / PnL stats
+POST /signals/outcomes/import  merge an exported outcome log back into state
 POST /scan              run one screening cycle now
 POST /track             advance pending signals now
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 
@@ -45,8 +46,15 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
 
     @api.get("/health")
     def health() -> dict:
+        # state_dir is reported absolute, and outcomes_stored alongside it, so a
+        # wiped history after a redeploy is visible instead of being mistaken for
+        # a quiet week. A relative path means the container filesystem, which
+        # Railway discards on every deploy unless a volume is mounted there.
+        store = app_obj.store
         return {
             "status": "ok",
+            "state_dir": store.base_dir,
+            "outcomes_stored": len(store.read("signal_outcomes", default=[]) or []),
             "telegram_enabled": app_obj.notifier.enabled,
             "config": app_obj.settings.describe(),
         }
@@ -117,6 +125,43 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"Token '{symbol}' not found")
         app_obj.notifier.notify_flow(text)
         return {"posted": app_obj.notifier.enabled, "text": text}
+
+    @api.post("/signals/outcomes/import", dependencies=[Depends(require_api_key)])
+    def import_outcomes(payload: Any = Body(...)) -> dict:
+        """Merge a previously exported outcome log back into state.
+
+        Restores the sample after a redeploy has wiped an unmounted state dir.
+        Merging is by signal ``id`` and never overwrites a record already
+        present, so re-running an import is a no-op rather than a duplication —
+        and a stale export cannot clobber fresher outcomes.
+
+        Accepts what ``GET /signals/outcomes`` returns: either the whole
+        response object or a bare list.
+        """
+        raw = payload.get("outcomes", payload) if isinstance(payload, dict) else payload
+        if not isinstance(raw, list):
+            raise HTTPException(status_code=400, detail="Expected a list of outcomes")
+
+        incoming = [d for d in raw if isinstance(d, dict) and d.get("id")]
+        skipped = len(raw) - len(incoming)
+
+        def _merge(current):
+            existing = list(current or [])
+            seen = {d.get("id") for d in existing if isinstance(d, dict)}
+            added = [d for d in incoming if d["id"] not in seen]
+            # Oldest-first ordering is what the outcome log and the max_outcomes
+            # trim both assume; restored records are older than whatever the
+            # fresh container has already booked.
+            merged = added + existing
+            return merged[-app_obj.settings.tracker.max_outcomes:]
+
+        before = len(app_obj.store.read("signal_outcomes", default=[]) or [])
+        merged = app_obj.store.update("signal_outcomes", _merge, default=[])
+        return {
+            "imported": len(merged) - before,
+            "skipped_without_id": skipped,
+            "total_stored": len(merged),
+        }
 
     @api.post("/signals", dependencies=[Depends(require_api_key)])
     def record_manual(payload: dict = Body(...)) -> dict:

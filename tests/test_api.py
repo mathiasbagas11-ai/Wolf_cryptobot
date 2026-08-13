@@ -113,3 +113,52 @@ def test_open_when_no_key_configured(client):
     api, _ = client
     payload = {"symbol": "ETHUSDT", "direction": "LONG", "entry_price": 100, "tp": 110, "sl": 95}
     assert api.post("/signals", json=payload).status_code == 200
+
+
+# ── outcome import (restore after an ephemeral state dir was wiped) ─────────
+def test_health_reports_state_location_and_depth(client):
+    api, _ = client
+    body = api.get("/health").json()
+    assert body["state_dir"].startswith("/")   # absolute: verifiable against a volume
+    assert body["outcomes_stored"] == 0
+
+
+def test_import_outcomes_restores_exported_log(client):
+    api, app_obj = client
+    export = {"count": 2, "outcomes": [
+        {"id": "BTCUSDT_1", "symbol": "BTCUSDT", "signal_type": "SCREENER",
+         "direction": "LONG", "entry_price": 100.0, "tp": 110.0, "sl": 95.0,
+         "status": "TP_HIT", "pnl_pct": 10.0, "strategy": "SCALP"},
+        {"id": "ETHUSDT_2", "symbol": "ETHUSDT", "signal_type": "SCREENER",
+         "direction": "LONG", "entry_price": 100.0, "tp": 110.0, "sl": 95.0,
+         "status": "SL_HIT", "pnl_pct": -5.0, "strategy": "SCALP"},
+    ]}
+    resp = api.post("/signals/outcomes/import", json=export)
+    assert resp.status_code == 200
+    assert resp.json()["imported"] == 2
+    assert len(app_obj.tracker.outcomes()) == 2
+    assert app_obj.tracker.stats()["wins"] == 1
+
+
+def test_import_outcomes_is_idempotent(client):
+    """Re-running an import must not duplicate the sample it restores."""
+    api, app_obj = client
+    export = {"outcomes": [
+        {"id": "BTCUSDT_1", "symbol": "BTCUSDT", "signal_type": "SCREENER",
+         "direction": "LONG", "entry_price": 100.0, "tp": 110.0, "sl": 95.0,
+         "status": "TP_HIT", "pnl_pct": 10.0, "strategy": "SCALP"},
+    ]}
+    api.post("/signals/outcomes/import", json=export)
+    second = api.post("/signals/outcomes/import", json=export)
+    assert second.json() == {"imported": 0, "skipped_without_id": 0, "total_stored": 1}
+    assert len(app_obj.tracker.outcomes()) == 1
+
+
+def test_import_outcomes_accepts_bare_list_and_rejects_junk(client):
+    api, _ = client
+    ok = api.post("/signals/outcomes/import", json=[
+        {"id": "X_1", "symbol": "X", "signal_type": "SCREENER", "direction": "LONG",
+         "entry_price": 1.0, "tp": 2.0, "sl": 0.5, "status": "TP_HIT"},
+    ])
+    assert ok.json()["imported"] == 1
+    assert api.post("/signals/outcomes/import", json={"outcomes": "nope"}).status_code == 400

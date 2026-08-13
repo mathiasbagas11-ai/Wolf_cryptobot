@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import logging
+import os
 
 from wolf.account import PaperAccount
 from wolf.ai import DebateValidator, build_llm_client
@@ -123,6 +124,20 @@ def build_application(settings: Settings | None = None) -> Application:
     settings = settings or Settings.from_env()
 
     store = StateStore(settings.state_dir)
+    # Log where state actually landed and how much history survived. On Railway a
+    # relative STATE_DIR resolves inside the container filesystem, which is
+    # discarded on every redeploy — so "0 outcomes" right after a deploy that had
+    # hundreds means the sample was wiped, not that trading went quiet.
+    if not os.path.isabs(settings.state_dir):
+        log.warning(
+            "STATE_DIR=%r is relative -> %s. On an ephemeral filesystem every "
+            "redeploy discards signal history. Mount a volume and point STATE_DIR at it.",
+            settings.state_dir, store.base_dir,
+        )
+    log.info(
+        "State dir %s (%d resolved outcomes on disk)",
+        store.base_dir, len(store.read("signal_outcomes", default=[]) or []),
+    )
     client = _build_market_client(settings)
     account = PaperAccount(
         store,
