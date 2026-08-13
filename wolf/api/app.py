@@ -20,9 +20,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi.responses import PlainTextResponse
 
 from wolf.app import Application, build_application, build_flow_reporter
 from wolf.config import Settings
+from wolf.diagnose import diagnose, render_digest
 from wolf.logging_setup import setup_logging
 
 
@@ -125,6 +127,28 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"Token '{symbol}' not found")
         app_obj.notifier.notify_flow(text)
         return {"posted": app_obj.notifier.enabled, "text": text}
+
+    @api.get("/diagnostics")
+    def diagnostics(window_hours: Optional[float] = None, format: str = "json"):
+        """Derived statistics behind a performance verdict.
+
+        ``format=text`` returns the compact digest — a fixed-shape block small
+        enough to paste whole into a conversation, carrying the verdicts and the
+        evidence needed to argue with them.
+        """
+        validator = getattr(app_obj.screener, "_validator", None)
+        client = getattr(validator, "_client", None)
+        diag = diagnose(
+            app_obj.tracker,
+            window_hours=window_hours,
+            round_trip_bps=app_obj.settings.round_trip_cost_bps,
+            tp1_banks_win=app_obj.settings.tracker.tp1_banks_win,
+            state_dir=app_obj.settings.state_dir,
+            ai_available=bool(getattr(client, "available", False)) if validator else None,
+        )
+        if format == "text":
+            return PlainTextResponse(render_digest(diag))
+        return diag
 
     @api.post("/signals/outcomes/import", dependencies=[Depends(require_api_key)])
     def import_outcomes(payload: Any = Body(...)) -> dict:

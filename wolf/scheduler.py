@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from wolf.app import Application
+from wolf.diagnose import diagnose, render_digest
 
 log = logging.getLogger("wolf.scheduler")
 
@@ -41,6 +42,32 @@ def _guarded(fn, label: str):
             log.exception("Scheduled job '%s' failed", label)
 
     return wrapper
+
+
+def _report_stats(app: Application, window_hours: int) -> None:
+    """Send the period's performance card, then the diagnostic digest.
+
+    Two messages by design: the card is read at a glance, the digest is copied
+    whole into an analysis. A failure to build the digest must not cost you the
+    card, so it is guarded separately.
+    """
+    app.notifier.notify_stats(
+        app.tracker.stats(window_hours=window_hours),
+        app.tracker.stats(),
+    )
+    try:
+        validator = getattr(app.screener, "_validator", None)
+        client = getattr(validator, "_client", None)
+        app.notifier.notify_diagnostics(render_digest(diagnose(
+            app.tracker,
+            window_hours=window_hours,
+            round_trip_bps=app.settings.round_trip_cost_bps,
+            tp1_banks_win=app.settings.tracker.tp1_banks_win,
+            state_dir=app.settings.state_dir,
+            ai_available=bool(getattr(client, "available", False)) if validator else None,
+        )))
+    except Exception:
+        log.exception("Diagnostics digest failed — performance card was still sent")
 
 
 def build_scheduler(app: Application) -> BackgroundScheduler:
@@ -77,13 +104,7 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
             # Report the period just elapsed, with all-time as a second line.
             # Cumulative-only meant each message blended every day since startup,
             # so a run that was deteriorating still looked healthy.
-            _guarded(
-                lambda: app.notifier.notify_stats(
-                    app.tracker.stats(window_hours=stats_hours),
-                    app.tracker.stats(),
-                ),
-                "stats",
-            ),
+            _guarded(lambda: _report_stats(app, stats_hours), "stats"),
             "interval",
             hours=stats_hours,
             id="stats",
