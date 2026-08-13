@@ -61,6 +61,16 @@ class Status(str, Enum):
     def is_loss(self) -> bool:
         return self in (Status.SL_HIT, Status.EXPIRED_LOSS)
 
+    @property
+    def is_graded(self) -> bool:
+        """Whether this outcome carries a win/loss verdict at all.
+
+        EXPIRED_FLAT deliberately does not: an exit inside the noise band says
+        nothing about the setup, and scoring it either way is how a short
+        timeout manufactures a win rate out of coin flips.
+        """
+        return self.is_win or self.is_loss
+
 
 @dataclass(frozen=True)
 class Candle:

@@ -246,6 +246,16 @@ class TelegramNotifier:
     def notify_stats(self, stats: dict, all_time: Optional[dict] = None) -> None:
         self.send(self._stats_card(stats, all_time), self._settings.route_stats())
 
+    def notify_diagnostics(self, digest: str) -> None:
+        """Post the diagnostic digest as a preformatted block.
+
+        Sent as a second message rather than folded into the card: the card is
+        for reading at a glance, this is for copying whole into an analysis.
+        """
+        if not digest:
+            return
+        self.send(f"<pre>{esc(digest)}</pre>", self._settings.route_stats())
+
     def notify_news(self, items) -> None:
         if items:
             self.send(self._news_card(items), self._settings.route_news())

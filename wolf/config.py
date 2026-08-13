@@ -473,6 +473,11 @@ class Settings:
     tracker_interval_min: int = 5
     # Periodic performance summary to Telegram (hours; 0 disables).
     stats_report_hours: int = 24
+    # All-in round-trip trading cost in basis points (taker both sides plus
+    # slippage), used to report expectancy net of costs. It matters more than it
+    # looks: targets are ATR multiples, so 1R is often well under 1% and 20bps
+    # can be a third of the risk unit.
+    round_trip_cost_bps: float = 20.0
 
     # API server
     api_host: str = "0.0.0.0"
@@ -666,6 +671,7 @@ class Settings:
             screener_interval_min=_env_int("SCREENER_INTERVAL_MIN", 10),
             tracker_interval_min=_env_int("TRACKER_INTERVAL_MIN", 5),
             stats_report_hours=_env_int("STATS_REPORT_HOURS", 24),
+            round_trip_cost_bps=_env_float("ROUND_TRIP_COST_BPS", 20.0),
             api_host=_env_str("API_HOST", "0.0.0.0"),
             api_port=_env_int("API_PORT", 8000),
             api_key=_env_str("API_KEY"),

@@ -162,3 +162,13 @@ def test_import_outcomes_accepts_bare_list_and_rejects_junk(client):
     ])
     assert ok.json()["imported"] == 1
     assert api.post("/signals/outcomes/import", json={"outcomes": "nope"}).status_code == 400
+
+
+def test_diagnostics_json_and_text(client):
+    api, _ = client
+    body = api.get("/diagnostics").json()
+    assert body["overall"]["verdict"] == "INCONCLUSIVE"  # empty history buys nothing
+    assert "cost" in body and "concurrency" in body
+
+    text = api.get("/diagnostics", params={"format": "text"}).text
+    assert text.startswith("WOLF-DIAG v1")

@@ -111,6 +111,45 @@ Flagged signals carry `against_regime` / `weak_strategy` on the outcome record,
 and the periodic stats card shows a **Risk-gate monitor** comparing their
 win-rate to the overall — your evidence for whether to flip a gate to hard.
 
+### Diagnostics
+
+The stats card answers *how did it go*. `wolf/diagnose.py` answers *does that
+mean anything* — four things an aggregate cannot say:
+
+* **How noisy the average is.** `+0.085R` over 226 trades sounds like an edge;
+  the same number with `se 0.094` is a coin flip. Every figure carries its
+  standard error, t-statistic and 95% interval.
+* **What "no edge" looks like here.** A win rate means nothing against 50%: a
+  ladder with a 1.5R stop and a 3R target pays out ~25% of the time under a
+  driftless walk. `no_edge_win_rate` is derived per strategy from the geometry
+  those trades actually carried, and `win_rate_z` scores the gap.
+* **What the trade cost.** Targets are ATR multiples, so 1R is often well under
+  1% and a 20bps round trip (`ROUND_TRIP_COST_BPS`) can be a third of the risk
+  unit. Expectancy is reported net.
+* **How many independent observations there are.** `eff_n_floor` divides by the
+  mean number of simultaneously open positions — the worst case under perfect
+  correlation, so a floor rather than an estimate.
+
+Verdicts are hard to earn: under 100 graded trades, or `|t| < 2`, the answer is
+`INCONCLUSIVE` regardless of how good the sample looks. With samples this size
+that is usually correct, and a diagnostic that cannot say "I don't know" is a
+machine for manufacturing confidence.
+
+`format=text` renders a fixed-shape digest, also posted to the stats topic after
+each scheduled card — small enough to paste whole into an analysis:
+
+```
+WOLF-DIAG v1 | 2026-08-13T10:39:26+00:00 | window=all
+sample   traded=226 graded=226 flat=0 invalid=0 unpriced=0
+cost     20bps / 1R=0.50% => 0.400R
+overall  meanR=+0.124 sdR=1.49 n=226 se=0.099 t=+1.26 ci95=[-0.070,+0.318]
+         netR=-0.276  => INCONCLUSIVE
+SWING     n=60 graded=60 wr=16.7 noedge_wr=25.0 wr_z=-1.49
+          meanR=-0.058 sd=1.85 t=-0.24 ci95=[-0.525,+0.410] 1R=0.50% netR=-0.458 => INCONCLUSIVE
+concur   mean_open=7.29 max_open=8 eff_n_floor=31
+flags    STATE_NOT_PERSISTED AI_NEVER_DECIDES TP1_BANKS_WIN_OFF
+```
+
 ### Why auto-pause gates on a confidence bound
 
 An earlier version compared average PnL **percent** against a threshold at a
@@ -307,6 +346,7 @@ The API is then available at `http://localhost:8000` (interactive docs at
 | `POST` | `/scan` | Run one screening cycle now |
 | `POST` | `/track` | Advance pending signals now |
 | `POST` | `/signals` | Record a signal manually (external strategies) |
+| `GET`  | `/diagnostics?window_hours=24&format=text` | Statistics behind a verdict (see below) |
 | `POST` | `/signals/outcomes/import` | Merge an exported outcome log back into state |
 | `POST` | `/flow` | Build the flow-intelligence brief now → News topic |
 | `POST` | `/flow/{symbol}` | Single-token contrarian deep-dive (bull vs bear) → News topic |
