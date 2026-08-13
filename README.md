@@ -280,13 +280,14 @@ The API is then available at `http://localhost:8000` (interactive docs at
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/health` | Liveness + redacted config |
+| `GET`  | `/health` | Liveness + redacted config, resolved `state_dir`, `outcomes_stored` |
 | `GET`  | `/signals/active` | Currently pending/active signals |
 | `GET`  | `/signals/outcomes?limit=50` | Resolved outcomes (newest first) |
 | `GET`  | `/stats` | Win-rate / PnL aggregates (incl. per-strategy) |
 | `POST` | `/scan` | Run one screening cycle now |
 | `POST` | `/track` | Advance pending signals now |
 | `POST` | `/signals` | Record a signal manually (external strategies) |
+| `POST` | `/signals/outcomes/import` | Merge an exported outcome log back into state |
 | `POST` | `/flow` | Build the flow-intelligence brief now → News topic |
 | `POST` | `/flow/{symbol}` | Single-token contrarian deep-dive (bull vs bear) → News topic |
 
@@ -352,9 +353,38 @@ Runs as a single long-lived worker process:
 * **Railway** — `railway.toml` (nixpacks, Python 3.11, `python -m wolf.main`)
 * **Heroku-style** — `Procfile` (`worker: python -m wolf.main`)
 
-State is persisted to `STATE_DIR`. On platforms with ephemeral filesystems,
-mount a volume there (or wire the `StateStore` to a database — it is the single
-swap point).
+### Persisting signal history (do this before it matters)
+
+`STATE_DIR` defaults to `state_data`, a **relative** path. On Railway that
+resolves inside the container filesystem, which is replaced on every deploy — so
+each redeploy silently discards the accumulated outcome history. Win-rate and
+expectancy then restart from zero, and a wiped log is indistinguishable from a
+quiet trading week.
+
+Both are surfaced so this is checkable rather than discovered later: startup logs
+warn when `STATE_DIR` is relative, and `GET /health` reports the resolved
+absolute `state_dir` alongside `outcomes_stored`.
+
+To make history survive deploys on Railway:
+
+1. Add a Volume to the service and mount it at `/data`.
+2. Set `STATE_DIR=/data/state`.
+3. Redeploy, then confirm `GET /health` shows `"state_dir": "/data/state"`.
+
+Note that step 3 is itself a deploy, so **export first** and restore afterwards:
+
+```bash
+curl -s "$HOST/signals/outcomes?limit=5000" > outcomes-backup.json
+# ...mount the volume, set STATE_DIR, redeploy...
+curl -X POST "$HOST/signals/outcomes/import" \
+     -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+     --data @outcomes-backup.json
+```
+
+The import merges by signal `id` and never overwrites an existing record, so
+running it twice is a no-op and a stale export cannot clobber fresher outcomes.
+
+Alternatively, wire the `StateStore` to a database — it is the single swap point.
 
 ---
 
