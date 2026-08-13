@@ -22,6 +22,8 @@ Design notes (improvements over the previous bot):
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
@@ -604,19 +606,30 @@ class Tracker:
         def _bucket_group(outcomes_iter, key_fn) -> dict[str, dict]:
             buckets: dict[str, dict] = {}
             for o in outcomes_iter:
-                b = buckets.setdefault(key_fn(o), {"wins": 0, "total": 0, "pnl": 0.0, "r": 0.0})
+                b = buckets.setdefault(
+                    key_fn(o), {"wins": 0, "total": 0, "pnl": 0.0, "r": 0.0, "_rs": []}
+                )
                 b["total"] += 1
                 b["pnl"] += o.pnl_pct or 0.0
-                b["r"] += r_multiple_of(o)
+                r = r_multiple_of(o)
+                b["r"] += r
+                b["_rs"].append(r)
                 if Status(o.status).is_win:
                     b["wins"] += 1
             for b in buckets.values():
-                b["win_rate"] = round(b["wins"] / b["total"] * 100, 1) if b["total"] else 0.0
-                b["avg_pnl"] = round(b["pnl"] / b["total"], 3) if b["total"] else 0.0
+                rs = b.pop("_rs")
+                n = b["total"]
+                b["win_rate"] = round(b["wins"] / n * 100, 1) if n else 0.0
+                b["avg_pnl"] = round(b["pnl"] / n, 3) if n else 0.0
                 # Targets are ATR multiples, so percent averages are dominated by
                 # whichever volatile symbols happened to trade. R is comparable.
-                b["avg_r"] = round(b["r"] / b["total"], 3) if b["total"] else 0.0
-                b["conclusive"] = b["total"] >= MIN_GRADED_FOR_VERDICT
+                b["avg_r"] = round(b["r"] / n, 3) if n else 0.0
+                # Spread of R, and the standard error that follows from it. An
+                # average alone cannot say whether a strategy is losing or merely
+                # unlucky, which is what let a 12-trade sample drive live gating.
+                b["sd_r"] = round(statistics.stdev(rs), 3) if n > 1 else 0.0
+                b["se_r"] = round(b["sd_r"] / math.sqrt(n), 3) if n > 1 else 0.0
+                b["conclusive"] = n >= MIN_GRADED_FOR_VERDICT
             return buckets
 
         by_strategy = _bucket_group(graded, lambda o: o.strategy)

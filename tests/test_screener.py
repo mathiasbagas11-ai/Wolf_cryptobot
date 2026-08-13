@@ -38,6 +38,19 @@ class _FakeAccount:
         return self._dd
 
 
+def _bucket(total: int, avg_r: float, se_r: float, win_rate: float = 40.0) -> dict:
+    """A by_strategy bucket shaped like the one stats() emits."""
+    return {
+        "total": total, "win_rate": win_rate, "avg_r": avg_r, "se_r": se_r,
+        "sd_r": round(se_r * (total ** 0.5), 3), "avg_pnl": 0.0,
+    }
+
+
+def _weak_bucket() -> dict:
+    """Confidently losing: -0.50R ± 0.10 → one-sided upper bound -0.34R."""
+    return _bucket(total=40, avg_r=-0.50, se_r=0.10, win_rate=30.0)
+
+
 class _FakeTracker:
     """Minimal tracker exposing only stats() for auto-pause unit tests."""
 
@@ -223,12 +236,12 @@ def test_weak_strategy_flagged_in_monitor_mode(store, fake_client, tracker_setti
 
     class _StatsTracker(Tracker):
         def stats(self):
-            return {"by_strategy": {"MOMENTUM": {"total": 15, "win_rate": 30.0, "avg_pnl": -0.5}}}
+            return {"by_strategy": {"MOMENTUM": _weak_bucket()}}
 
     tracker = _StatsTracker(store, fake_client, tracker_settings)
     screener = Screener(
         fake_client, tracker, [MomentumBreakoutDetector()], universe=["BTCUSDT"],
-        risk=RiskSettings(autopause_min_trades=12),
+        risk=RiskSettings(autopause_min_trades=30),
     )
     recorded = screener.run_cycle()
     assert len(recorded) == 1
@@ -240,86 +253,106 @@ def test_weak_strategy_hard_block_drops_signal(store, fake_client, tracker_setti
 
     class _StatsTracker(Tracker):
         def stats(self):
-            return {"by_strategy": {"MOMENTUM": {"total": 15, "win_rate": 30.0, "avg_pnl": -0.5}}}
+            return {"by_strategy": {"MOMENTUM": _weak_bucket()}}
 
     tracker = _StatsTracker(store, fake_client, tracker_settings)
     screener = Screener(
         fake_client, tracker, [MomentumBreakoutDetector()], universe=["BTCUSDT"],
-        risk=RiskSettings(autopause_min_trades=12, autopause_hard_block=True),
+        risk=RiskSettings(autopause_min_trades=30, autopause_hard_block=True),
     )
     assert screener.run_cycle() == []
 
 
-def test_negative_expectancy_strategy_paused(fake_client):
-    # Case B — MOMENTUM: 14% WR AND -0.73% avg PnL is a genuine bleed → pause.
-    stats = {"by_strategy": {"MOMENTUM": {"total": 15, "win_rate": 14.0, "avg_pnl": -0.73}}}
+def test_confidently_losing_strategy_paused(fake_client):
+    # -0.50R with a tight standard error: upper bound -0.34R is still under the
+    # floor, so the strategy is losing rather than unlucky.
+    stats = {"by_strategy": {"MOMENTUM": _weak_bucket()}}
     screener = Screener(
         fake_client, _FakeTracker(stats), [], universe=[],
-        risk=RiskSettings(autopause_min_trades=12),
+        risk=RiskSettings(autopause_min_trades=30),
     )
     assert "MOMENTUM" in screener._weak_strategies()
+
+
+def test_noisy_negative_average_not_paused(fake_client):
+    """The anti-predictive case: a bad-looking average that proves nothing.
+
+    Same -0.50R as the paused strategy, but four times the standard error, so
+    the upper bound sits above zero. Gating on the point estimate alone flagged
+    ~78% of live signals — and the flagged ones went on to outperform.
+    """
+    stats = {"by_strategy": {"MOMENTUM": _bucket(total=40, avg_r=-0.50, se_r=0.40)}}
+    screener = Screener(
+        fake_client, _FakeTracker(stats), [], universe=[],
+        risk=RiskSettings(autopause_min_trades=30),
+    )
+    assert screener._weak_strategies() == set()
+
+
+def test_live_swing_sample_is_still_inconclusive(fake_client):
+    """SWING's real four-day numbers: worst performer, but not yet provable.
+
+    -0.187R over 60 graded trades with se 0.186 gives an upper bound of +0.12R.
+    The honest answer is "keep collecting", not "pause".
+    """
+    stats = {"by_strategy": {"SWING": _bucket(total=60, avg_r=-0.187, se_r=0.186)}}
+    screener = Screener(
+        fake_client, _FakeTracker(stats), [], universe=[],
+        risk=RiskSettings(autopause_min_trades=30),
+    )
+    assert screener._weak_strategies() == set()
 
 
 def test_profitable_low_winrate_strategy_not_paused(fake_client):
-    # Case A — PREDUMP: 36.9% WR is under the old 38% floor, but +0.16% avg PnL
-    # is a real edge (low WR, high R:R). Expectancy gate keeps it live.
-    stats = {"by_strategy": {"PREDUMP": {"total": 25, "win_rate": 36.9, "avg_pnl": 0.16}}}
+    # A low win rate with high reward:risk is a real edge, not a bleed.
+    stats = {"by_strategy": {"PREDUMP": _bucket(total=40, avg_r=0.30, se_r=0.10, win_rate=36.9)}}
     screener = Screener(
         fake_client, _FakeTracker(stats), [], universe=[],
-        risk=RiskSettings(autopause_min_trades=12, autopause_min_win_rate=38.0),
+        risk=RiskSettings(autopause_min_trades=30, autopause_min_win_rate=38.0),
     )
     assert screener._weak_strategies() == set()
 
 
-def test_near_breakeven_strategy_paused_by_buffer(fake_client):
-    # Boundary — a barely-positive +0.05% avg PnL is breakeven noise that turns
-    # net-negative after real fees/slippage, so the +0.10% floor pauses it.
-    stats = {"by_strategy": {"MOMENTUM": {"total": 20, "win_rate": 45.0, "avg_pnl": 0.05}}}
-    screener = Screener(
-        fake_client, _FakeTracker(stats), [], universe=[],
-        risk=RiskSettings(autopause_min_trades=12),
-    )
-    assert "MOMENTUM" in screener._weak_strategies()
-
-
-def test_thin_edge_strategy_above_buffer_not_paused(fake_client):
-    # Boundary — SWING-like +0.26% clears the +0.10% floor with margin: a real
-    # (if thin) edge, so it must stay live.
-    stats = {"by_strategy": {"SWING": {"total": 20, "win_rate": 23.5, "avg_pnl": 0.26}}}
-    screener = Screener(
-        fake_client, _FakeTracker(stats), [], universe=[],
-        risk=RiskSettings(autopause_min_trades=12),
-    )
-    assert screener._weak_strategies() == set()
+def test_floor_can_demand_a_margin_over_breakeven(fake_client):
+    # Fees run roughly 0.2-0.4R, so a floor above zero pauses a strategy that is
+    # positive on paper but net-negative once costs are paid.
+    stats = {"by_strategy": {"SCALP": _bucket(total=40, avg_r=0.05, se_r=0.05)}}
+    live = RiskSettings(autopause_min_trades=30)
+    strict = RiskSettings(autopause_min_trades=30, autopause_min_expectancy_r=0.30)
+    assert Screener(fake_client, _FakeTracker(stats), [], universe=[], risk=live)._weak_strategies() == set()
+    assert "SCALP" in Screener(
+        fake_client, _FakeTracker(stats), [], universe=[], risk=strict
+    )._weak_strategies()
 
 
 def test_strategy_not_paused_below_min_trades(fake_client):
-    # Case C — only 5 trades (< min_trades): not enough sample to judge.
-    stats = {"by_strategy": {"MOMENTUM": {"total": 5, "win_rate": 10.0, "avg_pnl": -0.73}}}
+    # Too small to judge, however bad it looks.
+    stats = {"by_strategy": {"MOMENTUM": _bucket(total=5, avg_r=-0.90, se_r=0.05)}}
     screener = Screener(
         fake_client, _FakeTracker(stats), [], universe=[],
-        risk=RiskSettings(autopause_min_trades=12),
+        risk=RiskSettings(autopause_min_trades=30),
     )
     assert screener._weak_strategies() == set()
 
 
 def test_healthy_strategy_not_paused(fake_client):
-    stats = {"by_strategy": {"MOMENTUM": {"total": 30, "win_rate": 55.0, "avg_pnl": 1.2}}}
+    stats = {"by_strategy": {"MOMENTUM": _bucket(total=40, avg_r=0.80, se_r=0.15)}}
     screener = Screener(
         fake_client, _FakeTracker(stats), [], universe=[],
-        risk=RiskSettings(autopause_min_trades=12),
+        risk=RiskSettings(autopause_min_trades=30),
     )
     assert screener._weak_strategies() == set()
 
 
-def test_winrate_fallback_when_avg_pnl_missing(fake_client):
-    # Older stats without avg_pnl fall back to the win-rate floor.
-    stats = {"by_strategy": {"MOMENTUM": {"total": 15, "win_rate": 30.0}}}
+def test_bucket_without_r_is_not_judged(fake_client):
+    # Percent-only buckets carry no risk-adjusted edge to gate on; skip rather
+    # than fall back to a metric that flagged the wrong strategies.
+    stats = {"by_strategy": {"MOMENTUM": {"total": 40, "win_rate": 30.0, "avg_pnl": -0.73}}}
     screener = Screener(
         fake_client, _FakeTracker(stats), [], universe=[],
-        risk=RiskSettings(autopause_min_trades=12, autopause_min_win_rate=38.0),
+        risk=RiskSettings(autopause_min_trades=30),
     )
-    assert "MOMENTUM" in screener._weak_strategies()
+    assert screener._weak_strategies() == set()
 
 
 # ── concurrent-position caps ─────────────────────────────────────────────────

@@ -105,11 +105,31 @@ hard block (`REGIME_HARD_BLOCK` / `AUTOPAUSE_HARD_BLOCK`). Configured under
 |------|---------|--------------|-----|
 | **Regime filter** | monitor | Reads a bellwether's trend (BTC, price vs EMA20/EMA50) and flags trend-following LONGs in a BEARISH market and SHORTs in a BULLISH one. Counter-trend setups (`SCALP`/`PREDUMP`/`TRAP`) are exempt — they're *meant* to fade the tape. | `REGIME_FILTER_ENABLED`, `REGIME_HARD_BLOCK`, `REGIME_SYMBOL`, `REGIME_INTERVAL` |
 | **Drawdown throttle** | **hard** | Tracks the paper equity's high-water mark and pauses **all** new entries once the balance falls a set % below its peak — stops a correction from giving back realized gains. | `DRAWDOWN_PAUSE_PCT` |
-| **Auto-pause** | monitor | Watches the "lesson": once a strategy has enough graded trades and its win-rate is below a floor, it flags (or, when hard, stops emitting) it. | `AUTOPAUSE_MIN_TRADES`, `AUTOPAUSE_MIN_WIN_RATE`, `AUTOPAUSE_HARD_BLOCK` |
+| **Auto-pause** | monitor | Pauses a strategy only when it is *confidently* losing: with enough graded trades, the one-sided upper bound of its expectancy in R (`avg_r + z·se_r`) must still sit below the floor. Judging a bare average against a threshold flags noise — see below. | `AUTOPAUSE_MIN_TRADES`, `AUTOPAUSE_MIN_EXPECTANCY_R`, `AUTOPAUSE_CONFIDENCE_Z`, `AUTOPAUSE_HARD_BLOCK` |
 
 Flagged signals carry `against_regime` / `weak_strategy` on the outcome record,
 and the periodic stats card shows a **Risk-gate monitor** comparing their
 win-rate to the overall — your evidence for whether to flip a gate to hard.
+
+### Why auto-pause gates on a confidence bound
+
+An earlier version compared average PnL **percent** against a threshold at a
+12-trade minimum. Both halves of that were wrong, and four days of live data
+showed it:
+
+* **Percent is the wrong unit.** Targets are ATR multiples, so the same −1R loss
+  reads as −0.3% on a quiet coin and −3% on a volatile one. Over those four days
+  the percent and R averages disagreed in *sign* on 6 of 16 strategy-days — one
+  strategy showed −0.57% while sitting at **+0.27R**.
+* **An average is not evidence.** At 12 trades the standard error is roughly
+  0.4R, so a strategy at +0.2R and one at −0.2R are indistinguishable.
+
+Together they made the gate flag ~78% of all signals, and the flagged ones then
+*outperformed* the unflagged — an anti-predictive filter. Requiring
+`avg_r + z·se_r < floor` means a strategy is paused when being wrong is
+unlikely, not when the sample happens to look bad. The trade-off is patience: at
+a −0.19R effect size it takes roughly 160 graded trades to trigger. That is the
+honest cost of not acting on noise.
 
 ## Universe
 

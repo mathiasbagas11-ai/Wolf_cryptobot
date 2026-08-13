@@ -29,7 +29,9 @@ def _risk_gates_label(risk) -> str:
         parts.append(f"regime({risk.regime_symbol},{mode})")
     parts.append(f"drawdown≥{risk.drawdown_pause_pct:.0f}%(hard)")
     ap_mode = "hard" if risk.autopause_hard_block else "monitor"
-    parts.append(f"autopause<{risk.autopause_min_win_rate:.0f}%/{risk.autopause_min_trades}({ap_mode})")
+    parts.append(
+        f"autopause<{risk.autopause_min_expectancy_r:+.2f}R/{risk.autopause_min_trades}({ap_mode})"
+    )
     return " · ".join(parts)
 
 

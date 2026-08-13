@@ -495,3 +495,22 @@ def test_stats_window_excludes_older_outcomes(store, fake_client, tracker_settin
 
     assert tracker.stats()["total_traded"] == 1               # all-time sees it
     assert tracker.stats(window_hours=24)["total_traded"] == 0  # yesterday does not
+
+
+def test_stats_reports_spread_of_r_not_just_the_average(store, fake_client, tracker_settings):
+    """The gate needs to know how noisy an average is before acting on it."""
+    tracker = Tracker(store, fake_client, tracker_settings)
+    # Two -1R losses and one +2R win, all on the same 5% risk.
+    for sym, high, low in (("A", 101, 94), ("B", 101, 94), ("C", 111, 99)):
+        tracker.record_signal(sym, "SCREENER", "LONG", 100, tp=110, sl=95,
+                              entry_mode="MOMENTUM_NOW")
+        created = [s for s in tracker.active_signals() if s.symbol == sym][0].created_at
+        now_ms = int(datetime.fromisoformat(created).timestamp() * 1000)
+        fake_client.klines[sym] = _candles_after(now_ms, [(100, high, low, 100)])
+    tracker.check_pending()
+
+    b = tracker.stats()["by_strategy"]["CONFIRMED"]
+    assert b["total"] == 3
+    assert b["avg_r"] == 0.0            # (-1 -1 +2) / 3
+    assert b["sd_r"] > 1.0              # ...but wildly spread, so it means nothing
+    assert b["se_r"] == round(b["sd_r"] / 3 ** 0.5, 3)

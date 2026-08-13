@@ -260,29 +260,51 @@ class Screener:
             return False
 
     def _weak_strategies(self) -> set[str]:
-        """Strategies with enough graded trades whose realized edge is negative.
+        """Strategies whose realized edge is *confidently* below the floor.
 
-        Gate on expectancy (avg PnL % per trade), not win-rate: a low-win-rate
-        setup with a high reward:risk can still be net profitable, while a
-        high-win-rate setup with tiny wins and large losses quietly bleeds. We
-        pause a strategy only when its realized edge is below the floor.
-        Win-rate is a fallback for older stats that don't carry ``avg_pnl``.
+        Two corrections over gating on average PnL percent:
+
+        **Unit.** Targets are ATR multiples, so a percent average is dominated by
+        whichever volatile symbols happened to trade — the same -1R loss reads as
+        -0.3% on a quiet coin and -3% on a volatile one. Over four days of live
+        data the percent and R averages disagreed in *sign* on 6 of 16
+        strategy-days, so the gate was reading a number that did not describe the
+        strategy's risk-adjusted edge.
+
+        **Evidence.** Comparing a point estimate to a threshold ignores how noisy
+        that estimate is. At the old 12-trade minimum the standard error is
+        roughly 0.4R — wide enough that a strategy at +0.2R and one at -0.2R are
+        indistinguishable. The gate flagged ~78% of all signals, and the flagged
+        ones went on to *outperform* the average, which is what an anti-predictive
+        filter looks like.
+
+        So a strategy is paused only when the upper bound of its one-sided
+        confidence interval is still below the floor — i.e. when being wrong is
+        unlikely, not merely when the sample happens to look bad.
         """
         try:
             by_strategy = self._tracker.stats().get("by_strategy", {})
         except Exception:
             log.exception("Stats read failed for auto-pause")
             return set()
+
+        floor = self._risk.autopause_min_expectancy_r
+        z = self._risk.autopause_confidence_z
         weak: set[str] = set()
         for name, b in by_strategy.items():
-            if b.get("total", 0) < self._risk.autopause_min_trades:
+            n = b.get("total", 0)
+            if n < self._risk.autopause_min_trades:
                 continue
-            expectancy = b.get("avg_pnl")
-            if expectancy is not None:
-                if expectancy < self._risk.autopause_min_expectancy:
-                    weak.add(name)
-            elif b.get("win_rate", 100.0) < self._risk.autopause_min_win_rate:
+            avg_r = b.get("avg_r")
+            if avg_r is None:
+                continue
+            upper = avg_r + z * b.get("se_r", 0.0)
+            if upper < floor:
                 weak.add(name)
+                log.info(
+                    "Auto-pause %s: %.3fR over %d (95%% upper %.3fR < floor %.2fR)",
+                    name, avg_r, n, upper, floor,
+                )
         return weak
 
     def _fights_regime(self, candidate: SignalCandidate, regime: str) -> bool:
