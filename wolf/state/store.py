@@ -40,6 +40,16 @@ class StateStore:
         self._global_lock = threading.Lock()
         self._locks: dict[str, threading.RLock] = defaultdict(threading.RLock)
 
+    @property
+    def base_dir(self) -> str:
+        """Absolute path of the state directory.
+
+        Surfaced so an operator can confirm state lives on a mounted volume: a
+        relative default resolves inside the container filesystem, where every
+        redeploy silently discards the accumulated outcome history.
+        """
+        return os.path.abspath(self._base_dir)
+
     def _path(self, key: str) -> str:
         if not key or "/" in key or "\\" in key or key.startswith("."):
             raise ValueError(f"Invalid state key: {key!r}")

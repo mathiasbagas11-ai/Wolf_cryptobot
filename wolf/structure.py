@@ -9,8 +9,9 @@ re-deriving the logic inline.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf.models import Candle
@@ -105,3 +106,117 @@ def rsi_divergence(candles: Sequence[Candle], lookback: int = 25, period: int = 
         if window[b].high > window[a].high and rsi[b] < rsi[a]:
             out.bear_score = 10
     return out
+
+
+@dataclass
+class OrderBlock:
+    kind: str        # "BULL" | "BEAR"
+    top: float       # body high: max(open, close) of the OB candle
+    bottom: float    # body low:  min(open, close) of the OB candle
+
+
+def find_order_blocks(
+    candles: Sequence[Candle],
+    lookback: int = 50,
+    impulse_candles: int = 3,
+) -> list[OrderBlock]:
+    """Identify Order Blocks — zones where institutional orders drove a displacement.
+
+    A bullish OB is the last bearish candle before a sustained upward impulse
+    (``impulse_candles`` consecutive bullish closes with total move ≥ 0.5 ATR).
+    Smart money placed buy orders in this zone; it tends to act as support when
+    price returns. A bearish OB mirrors this for downward impulses.
+
+    Zone = candle body: ``[min(open, close), max(open, close)]``.
+    """
+    n = len(candles)
+    if n < lookback + impulse_candles + 5:
+        return []
+    atr_val = ind.atr(candles, 14)
+    if math.isnan(atr_val) or atr_val <= 0:
+        return []
+    min_move = atr_val * 0.5
+
+    window = list(candles[max(0, n - lookback):])
+    m = len(window)
+    blocks: list[OrderBlock] = []
+
+    for i in range(1, m - impulse_candles):
+        # Bullish impulse: impulse_candles consecutive bullish closes
+        if all(window[i + j].close > window[i + j].open for j in range(impulse_candles)):
+            total_up = window[i + impulse_candles - 1].close - window[i].open
+            ob = window[i - 1]
+            if total_up >= min_move and ob.close < ob.open:  # preceding candle is bearish → OB
+                blocks.append(OrderBlock(
+                    "BULL",
+                    top=max(ob.open, ob.close),
+                    bottom=min(ob.open, ob.close),
+                ))
+
+        # Bearish impulse: impulse_candles consecutive bearish closes
+        if all(window[i + j].close < window[i + j].open for j in range(impulse_candles)):
+            total_down = window[i].open - window[i + impulse_candles - 1].close
+            ob = window[i - 1]
+            if total_down >= min_move and ob.close > ob.open:  # preceding candle is bullish → OB
+                blocks.append(OrderBlock(
+                    "BEAR",
+                    top=max(ob.open, ob.close),
+                    bottom=min(ob.open, ob.close),
+                ))
+
+    return blocks
+
+
+def price_in_ob(price: float, blocks: list[OrderBlock], kind: str) -> bool:
+    """True when ``price`` sits inside any Order Block of the requested kind."""
+    return any(b.kind == kind and b.bottom <= price <= b.top for b in blocks)
+
+
+@dataclass
+class StructureBreak:
+    kind: str        # "BOS" (trend continuation) | "CHOCH" (reversal signal)
+    direction: str   # "BULLISH" | "BEARISH"
+    broken_level: float
+
+
+def find_structure_break(
+    candles: Sequence[Candle],
+    lookback: int = 40,
+) -> Optional[StructureBreak]:
+    """Detect a Break of Structure or Change of Character on the latest candle.
+
+    BOS (Break of Structure): price closes above/below a confirmed swing pivot,
+    extending the current trend. ChoCh (Change of Character): same break but the
+    prior sequence was making lower highs (or higher lows) — a structural reversal.
+
+    Only the most recent candle is evaluated; ``lookback`` determines how far back
+    to search for confirmed swing pivots.
+    """
+    if len(candles) < lookback:
+        return None
+
+    window = list(candles[-lookback:])
+    last = window[-1]
+
+    # Confirmed pivots only: need 2 neighbours on each side, and must not be
+    # within the last 3 candles (right-side confirmation not yet available).
+    highs_idx = [i for i in swing_highs(window, left=2, right=2) if i < len(window) - 3]
+    lows_idx  = [i for i in swing_lows(window, left=2, right=2) if i < len(window) - 3]
+
+    # Bullish BOS/ChoCh: close above the most recent confirmed swing high
+    if highs_idx:
+        sh_price = window[highs_idx[-1]].high
+        if last.close > sh_price:
+            prior_highs = [window[h].high for h in highs_idx[:-1][-2:]]
+            choch = len(prior_highs) >= 2 and prior_highs[-1] < prior_highs[-2]
+            return StructureBreak("CHOCH" if choch else "BOS", "BULLISH", sh_price)
+
+    # Bearish BOS/ChoCh: close below the most recent confirmed swing low
+    if lows_idx:
+        sl_price = window[lows_idx[-1]].low
+        if last.close < sl_price:
+            prior_lows = [window[l].low for l in lows_idx[:-1][-2:]]
+            choch = len(prior_lows) >= 2 and prior_lows[-1] > prior_lows[-2]
+            return StructureBreak("CHOCH" if choch else "BOS", "BEARISH", sl_price)
+
+    return None

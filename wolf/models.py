@@ -8,7 +8,7 @@ the rest of the code attribute access, defaults and validation in one place.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields as dc_fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
@@ -30,6 +30,7 @@ class SignalType(str, Enum):
     SCALP = "SCALP"
     SWING = "SWING"
     CONFIRMED = "CONFIRMED"
+    NEWS = "NEWS"
 
 
 class EntryMode(str, Enum):
@@ -45,6 +46,7 @@ class Status(str, Enum):
     INVALIDATED = "INVALIDATED"
     EXPIRED_WIN = "EXPIRED_WIN"
     EXPIRED_LOSS = "EXPIRED_LOSS"
+    EXPIRED_FLAT = "EXPIRED_FLAT"  # timed out inside the noise band — no verdict
     EXPIRED = "EXPIRED"
 
     @property
@@ -58,6 +60,16 @@ class Status(str, Enum):
     @property
     def is_loss(self) -> bool:
         return self in (Status.SL_HIT, Status.EXPIRED_LOSS)
+
+    @property
+    def is_graded(self) -> bool:
+        """Whether this outcome carries a win/loss verdict at all.
+
+        EXPIRED_FLAT deliberately does not: an exit inside the noise band says
+        nothing about the setup, and scoring it either way is how a short
+        timeout manufactures a win rate out of coin flips.
+        """
+        return self.is_win or self.is_loss
 
 
 @dataclass(frozen=True)
@@ -136,8 +148,32 @@ class Signal:
     exit_price: Optional[float] = None
     exit_time: Optional[str] = None
     pnl_pct: Optional[float] = None
+    # PnL in units of the trade's own risk (R = pnl_pct / distance to SL).
+    # Targets are ATR multiples, so raw percentages are not comparable across
+    # symbols: -1 ATR is -0.3% on a quiet coin and -3% on a volatile one, and
+    # averaging those in % lets the volatile handful dominate the report.
+    r_multiple: Optional[float] = None
     hold_hours: Optional[float] = None
     resolved_at: Optional[str] = None
+
+    # AI debate fields (empty when AI is not configured). In monitor mode the
+    # verdict is recorded but never blocks the signal; ai_vetoed flags a signal
+    # the AI would have rejected, kept for later win-rate analysis.
+    ai_verdict: str = ""
+    ai_confidence: int = 0
+    ai_rationale: str = ""
+    ai_vetoed: bool = False
+
+    # Risk-gate flags (monitor mode). against_regime: the entry fought the broad
+    # market trend; weak_strategy: emitted by an underperforming strategy. Both
+    # are recorded but don't block, so we can later compare their win-rates.
+    against_regime: bool = False
+    weak_strategy: bool = False
+    # Composite-regime bounce guard. bounce_flagged: a SHORT emitted into
+    # bounce/squeeze risk (recorded even in monitor mode for the what-if study).
+    # risk_scale: position-size multiplier actually applied (1.0 = full size).
+    bounce_flagged: bool = False
+    risk_scale: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -156,5 +192,6 @@ class Signal:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Signal":
-        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        # Unknown keys are dropped → safe to load old state files without ai_* fields.
+        known = {f.name for f in dc_fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in known})

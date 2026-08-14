@@ -109,3 +109,38 @@ def test_whale_flags_large_trades_and_dedups(store):
 def test_whale_none_when_no_large_trades(store):
     client = FakeMarketClient(trades={"BTCUSDT": [_trade(1, "BTCUSDT", 100, 1)]})
     assert WhaleTracker(client, store, symbols=["BTCUSDT"], min_usd=250_000).build() is None
+
+
+class FakePositioningClient(FakeMarketClient):
+    """Adds the futures positioning surface the whale report can use."""
+
+    def __init__(self, ls=None, oi=None, **kw):
+        super().__init__(**kw)
+        self._ls = ls or {}
+        self._oi = oi or {}
+
+    def get_long_short_ratio(self, symbol, period="5m", limit=2):
+        return self._ls.get(symbol)
+
+    def get_open_interest_change(self, symbol, period="5m", limit=12):
+        return self._oi.get(symbol)
+
+
+def test_whale_positioning_long_short_and_accumulation(store):
+    client = FakePositioningClient(
+        ls={"BTCUSDT": {"ratio": 1.9, "long_pct": 66.0, "short_pct": 34.0}},
+        oi={"BTCUSDT": 3.4},
+    )
+    card = WhaleTracker(client, store, symbols=["BTCUSDT"], min_usd=250_000).build()
+    assert "Positioning" in card
+    assert "L/S 1.90" in card and "longs dominate" in card
+    assert "accumulating" in card
+
+
+def test_whale_positioning_shorts_dominate(store):
+    client = FakePositioningClient(
+        ls={"ETHUSDT": {"ratio": 0.7, "long_pct": 41.0, "short_pct": 59.0}},
+        oi={"ETHUSDT": -3.0},
+    )
+    card = WhaleTracker(client, store, symbols=["ETHUSDT"], min_usd=250_000).build()
+    assert "shorts dominate" in card and "unwinding" in card

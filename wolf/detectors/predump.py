@@ -28,18 +28,28 @@ class PreDumpDetector(Detector):
     name = "PREDUMP"
     min_candles = 60
 
-    def __init__(self, score_threshold: int = 65) -> None:
+    def __init__(self, score_threshold: int = 70) -> None:
         self.score_threshold = score_threshold
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
+    def evaluate(
+        self, symbol: str, candles: Sequence[Candle], context=None, features=None
+    ) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
-        closes = ind.closes(candles)
-        price = closes[-1]
-        atr = ind.atr(candles, 14)
-        rsi = ind.rsi(closes, 14)
-        if any(math.isnan(x) for x in (atr, rsi)) or atr <= 0:
-            return None
+
+        if features is not None and features.valid:
+            price = features.price
+            atr = features.atr
+            rsi = features.rsi
+            vr = features.vol_ratio
+        else:
+            closes = ind.closes(candles)
+            price = closes[-1]
+            atr = ind.atr(candles, 14)
+            rsi = ind.rsi(closes, 14)
+            if any(math.isnan(x) for x in (atr, rsi)) or atr <= 0:
+                return None
+            vr = ind.volume_ratio(candles, 20)
 
         score = 0
         reasons: list[str] = []
@@ -70,16 +80,28 @@ class PreDumpDetector(Detector):
             reasons.append("Bearish rejection candle — upper-wick selling")
 
         # 4. Distribution — volume fading vs average
-        vr = ind.volume_ratio(candles, 20)
         if not math.isnan(vr) and vr < 0.8:
             score += 15
             reasons.append(f"Volume fading: {vr:.1f}x average — distribution")
 
-        # 5. Risk/reward sanity
+        # 5. VWAP premium — distribution at fair value or above (+15)
+        vwap_val = ind.vwap(candles, lookback=50)
+        if not math.isnan(vwap_val) and price >= vwap_val:
+            score += 15
+            reasons.append(f"Price at VWAP premium {vwap_val:.6g} — distribution zone")
+
+        # 6. Bearish FvG above price — structural resistance overhead (+10)
+        fvgs = ind.find_fvgs(candles, lookback=50)
+        bear_fvg = next((g for g in fvgs if g["type"] == "BEAR" and g["bottom"] >= price), None)
+        if bear_fvg:
+            score += 10
+            reasons.append(f"Bearish FvG above ({bear_fvg['bottom']:.6g}–{bear_fvg['top']:.6g}) — supply overhead")
+
+        # 7. Risk/reward sanity
         if atr / price < 0.1:
             score += 5
 
-        # 6. Derivatives confluence (optional) — overheated positive funding
+        # 8. Derivatives confluence (optional) — overheated positive funding
         #    means longs are crowded and ripe for liquidation.
         if context is not None:
             if context.funding_overheated_long:
