@@ -172,3 +172,11 @@ def test_diagnostics_json_and_text(client):
 
     text = api.get("/diagnostics", params={"format": "text"}).text
     assert text.startswith("WOLF-DIAG v1")
+
+
+def test_health_reports_ai_intent_versus_reality(client):
+    """enabled vs available: when they disagree, every signal abstains."""
+    api, _ = client
+    ai = api.get("/health").json()["ai"]
+    assert ai["enabled"] is False          # no AI configured in test settings
+    assert ai["available"] is False

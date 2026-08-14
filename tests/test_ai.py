@@ -5,6 +5,7 @@ from __future__ import annotations
 from wolf.ai import DebateValidator, NullLLMClient, build_llm_client
 from wolf.ai.base import LLMClient
 from wolf.ai.debate import Decision
+from wolf.config import Settings
 from wolf.detectors import MomentumBreakoutDetector
 from wolf.detectors.base import SignalCandidate
 from wolf.models import Candle
@@ -164,3 +165,59 @@ def test_no_validator_leaves_ai_fields_empty(store, fake_client, tracker_setting
     assert len(recorded) == 1
     assert recorded[0].ai_verdict == ""
     assert recorded[0].ai_vetoed is False
+
+
+# ── availability: the arbiter is the load-bearing role ──────────────────────
+class _EchoClient(LLMClient):
+    """A usable client: free text, and a well-formed verdict."""
+
+    def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
+        return "argument"
+
+    def complete_json(self, system, user, schema, *, max_tokens: int = 1024) -> dict:
+        return {"decision": "CONFIRM", "confidence": 80, "rationale": "ok"}
+
+
+def test_live_bull_with_dead_arbiter_is_not_available():
+    """The exact production failure: one key set, three providers configured.
+
+    bull=deepseek had a key; bear=groq and arbiter=hermes did not. `any()` across
+    the roles reported the layer healthy, so validate() ran, the null arbiter
+    returned {}, and every signal abstained — silently.
+    """
+    v = DebateValidator(bull=_EchoClient(), bear=NullLLMClient(), arbiter=NullLLMClient())
+    assert v.available is False
+    assert v.degraded_roles == ["bear", "arbiter"]
+
+
+def test_available_tracks_the_arbiter_only():
+    v = DebateValidator(bull=NullLLMClient(), bear=NullLLMClient(), arbiter=_EchoClient())
+    assert v.available is True          # degraded, but it can still decide
+    assert v.degraded_roles == ["bull", "bear"]
+
+
+def test_silent_arbiter_abstain_is_logged(caplog):
+    """An arbiter returning no JSON must never abstain without saying so."""
+
+    class _NoJson(_EchoClient):
+        def complete_json(self, system, user, schema, *, max_tokens: int = 1024) -> dict:
+            return {}
+
+    v = DebateValidator(bull=_EchoClient(), bear=_EchoClient(), arbiter=_NoJson())
+    with caplog.at_level("WARNING"):
+        verdict = v.validate(_candidate())
+    assert verdict.decision == Decision.ABSTAIN
+    assert "no verdict JSON" in caplog.text
+
+
+def test_all_debate_roles_default_to_one_provider(monkeypatch):
+    """A single DEEPSEEK_API_KEY must be enough, as the docs have always said.
+
+    from_env previously defaulted bear to groq and arbiter to hermes, quietly
+    requiring three keys.
+    """
+    for var in ("DEBATE_BULL_PROVIDER", "DEBATE_BEAR_PROVIDER", "DEBATE_ARBITER_PROVIDER"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("AI_DEBATE_ENABLED", "true")
+    ai = Settings.from_env().ai
+    assert ai.bull.provider == ai.bear.provider == ai.arbiter.provider == "deepseek"

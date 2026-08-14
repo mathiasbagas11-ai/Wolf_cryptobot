@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from wolf.app import Application
+from wolf.app import Application, ai_status
 from wolf.diagnose import diagnose, render_digest
 
 log = logging.getLogger("wolf.scheduler")
@@ -56,15 +56,13 @@ def _report_stats(app: Application, window_hours: int) -> None:
         app.tracker.stats(),
     )
     try:
-        validator = getattr(app.screener, "_validator", None)
-        client = getattr(validator, "_client", None)
         app.notifier.notify_diagnostics(render_digest(diagnose(
             app.tracker,
             window_hours=window_hours,
             round_trip_bps=app.settings.round_trip_cost_bps,
             tp1_banks_win=app.settings.tracker.tp1_banks_win,
             state_dir=app.settings.state_dir,
-            ai_available=bool(getattr(client, "available", False)) if validator else None,
+            ai_available=ai_status(app)["available"],
         )))
     except Exception:
         log.exception("Diagnostics digest failed — performance card was still sent")

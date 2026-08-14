@@ -120,6 +120,27 @@ def _build_market_client(settings: Settings) -> MarketDataClient:
     return MarketDataClient(sources, futures=futures, funding_sources=funding_sources)
 
 
+def ai_status(app: "Application") -> dict:
+    """Whether the debate layer can actually return a verdict, and what is missing.
+
+    ``enabled`` is intent, ``available`` is reality. They disagree whenever the
+    arbiter has no usable client, which produces an unbroken run of ABSTAIN
+    verdicts that the stats cannot tell apart from genuine abstentions.
+    """
+    validator = getattr(app.screener, "_validator", None)
+    if validator is None:
+        return {
+            "enabled": app.settings.ai.enabled,
+            "available": False,
+            "degraded_roles": [],
+        }
+    return {
+        "enabled": app.settings.ai.enabled,
+        "available": bool(getattr(validator, "available", False)),
+        "degraded_roles": list(getattr(validator, "degraded_roles", [])),
+    }
+
+
 def build_application(settings: Settings | None = None) -> Application:
     settings = settings or Settings.from_env()
 
@@ -181,6 +202,24 @@ def build_application(settings: Settings | None = None) -> Application:
             arbiter=_role_client(settings.ai.arbiter, "arbiter"),
             chart_candles=settings.ai.chart_candles,
         )
+        # The arbiter alone returns the structured verdict, so without it the
+        # layer cannot decide anything — it abstains on every signal while
+        # looking configured. Say which roles are live, at boot, either way.
+        if not validator.available:
+            log.error(
+                "AI debate is ENABLED but the arbiter (provider=%s) has no usable "
+                "client — every signal will ABSTAIN. Set the arbiter provider's API "
+                "key, or point DEBATE_ARBITER_PROVIDER at one you have.",
+                settings.ai.arbiter.provider,
+            )
+        else:
+            log.info(
+                "AI debate ready — bull=%s bear=%s arbiter=%s%s",
+                settings.ai.bull.provider, settings.ai.bear.provider,
+                settings.ai.arbiter.provider,
+                f" (no client for: {', '.join(validator.degraded_roles)})"
+                if validator.degraded_roles else "",
+            )
         # Reuse the (cheap) arbiter model to narrate market/session reports.
         analysis_llm = _role_client(settings.ai.arbiter)
 

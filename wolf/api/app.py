@@ -22,7 +22,7 @@ from typing import Any, Optional
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 
-from wolf.app import Application, build_application, build_flow_reporter
+from wolf.app import Application, ai_status, build_application, build_flow_reporter
 from wolf.config import Settings
 from wolf.diagnose import diagnose, render_digest
 from wolf.logging_setup import setup_logging
@@ -58,6 +58,8 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             "state_dir": store.base_dir,
             "outcomes_stored": len(store.read("signal_outcomes", default=[]) or []),
             "telegram_enabled": app_obj.notifier.enabled,
+            # enabled vs available: when they disagree, every signal abstains.
+            "ai": ai_status(app_obj),
             "config": app_obj.settings.describe(),
         }
 
@@ -136,15 +138,13 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         enough to paste whole into a conversation, carrying the verdicts and the
         evidence needed to argue with them.
         """
-        validator = getattr(app_obj.screener, "_validator", None)
-        client = getattr(validator, "_client", None)
         diag = diagnose(
             app_obj.tracker,
             window_hours=window_hours,
             round_trip_bps=app_obj.settings.round_trip_cost_bps,
             tp1_banks_win=app_obj.settings.tracker.tp1_banks_win,
             state_dir=app_obj.settings.state_dir,
-            ai_available=bool(getattr(client, "available", False)) if validator else None,
+            ai_available=ai_status(app_obj)["available"],
         )
         if format == "text":
             return PlainTextResponse(render_digest(diag))
