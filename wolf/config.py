@@ -413,8 +413,15 @@ class AISettings:
     """AI debate-layer configuration.
 
     All three roles default to DeepSeek so a single DEEPSEEK_API_KEY is enough
-    to run the full debate. Override individual roles via env vars if you want
-    the multi-provider setup (e.g. Groq for bear, Hermes for arbiter).
+    to run the full debate — and ``from_env`` now agrees. It previously defaulted
+    bear to Groq and arbiter to Hermes, quietly requiring three keys: with only
+    DEEPSEEK_API_KEY set the arbiter fell back to a null client, returned no
+    JSON, and every signal abstained without logging anything.
+
+    Override individual roles via env vars for a multi-provider debate
+    (DEBATE_BEAR_PROVIDER=groq, DEBATE_ARBITER_PROVIDER=hermes, ...). Each
+    provider needs its own key; a role whose key is missing is reported at
+    startup rather than silently degrading the debate.
 
     Enable with: AI_DEBATE_ENABLED=true  (not AI_ENABLED)
     """
@@ -650,12 +657,12 @@ class Settings:
                 model=_env_str("DEBATE_BULL_MODEL", "deepseek-chat"),
             ),
             bear=DebateRole(
-                provider=_env_str("DEBATE_BEAR_PROVIDER", "groq"),
-                model=_env_str("DEBATE_BEAR_MODEL", "llama-3.3-70b-versatile"),
+                provider=_env_str("DEBATE_BEAR_PROVIDER", "deepseek"),
+                model=_env_str("DEBATE_BEAR_MODEL", "deepseek-chat"),
             ),
             arbiter=DebateRole(
-                provider=_env_str("DEBATE_ARBITER_PROVIDER", "hermes"),
-                model=_env_str("DEBATE_ARBITER_MODEL", "nousresearch/hermes-3-llama-3.1-405b"),
+                provider=_env_str("DEBATE_ARBITER_PROVIDER", "deepseek"),
+                model=_env_str("DEBATE_ARBITER_MODEL", "deepseek-chat"),
             ),
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),

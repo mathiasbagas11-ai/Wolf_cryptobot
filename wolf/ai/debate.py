@@ -208,11 +208,29 @@ class DebateValidator(SignalValidator):
         self._chart_candles = chart_candles
 
     @property
-    def _available(self) -> bool:
-        return any(c.available for c in (self._bull, self._bear, self._arbiter))
+    def available(self) -> bool:
+        """Whether this validator can actually produce a verdict.
+
+        Only the arbiter returns the structured decision, so it is the hard
+        requirement — ``any()`` across the three roles was wrong: a live bull
+        with a null arbiter made the layer look healthy while every signal
+        abstained, because the arbiter's ``complete_json`` returned ``{}``.
+        """
+        return self._arbiter.available
+
+    @property
+    def degraded_roles(self) -> list[str]:
+        """Roles with no usable client. Bull/bear missing weakens the debate
+        rather than disabling it: the arbiter still decides, but on a one-sided
+        argument, so it is worth naming out loud."""
+        return [
+            name for name, client in
+            (("bull", self._bull), ("bear", self._bear), ("arbiter", self._arbiter))
+            if not client.available
+        ]
 
     def validate(self, candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> Verdict:
-        if not self._available:
+        if not self.available:
             return Verdict(decision=Decision.ABSTAIN)
 
         chart_data = candles if (self._chart_candles > 0 and candles) else ()
@@ -232,6 +250,14 @@ class DebateValidator(SignalValidator):
             return Verdict(decision=Decision.ABSTAIN)
 
         if not data:
+            # The one abstain path that used to be completely silent, and the
+            # one that fired on every signal: an arbiter returning no JSON looks
+            # exactly like a healthy run in the logs.
+            log.warning(
+                "Arbiter returned no verdict JSON for %s — abstaining. Check the "
+                "arbiter provider/key and that its model supports structured output.",
+                candidate.symbol,
+            )
             return Verdict(decision=Decision.ABSTAIN, bull_summary=bull, bear_summary=bear)
 
         decision = str(data.get("decision", Decision.NEUTRAL)).upper()

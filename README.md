@@ -214,10 +214,34 @@ debate before recording it:
 
 A `REJECT` at or above `AI_VETO_MIN_CONFIDENCE` (default 70) vetoes the signal;
 otherwise the rationale is attached to the signal's reasons. The layer is
-provider-agnostic (`wolf/ai/base.py`) with an Anthropic implementation
-(`claude-opus-4-8`, adaptive thinking, structured-output verdicts via the
-official `anthropic` SDK). With no API key it degrades to an `ABSTAIN` verdict
-that never blocks a signal, so the bot runs unchanged with the AI layer off.
+provider-agnostic (`wolf/ai/base.py`) — Anthropic plus any OpenAI-compatible
+provider (DeepSeek, Groq, Hermes/OpenRouter). With no usable client it degrades
+to an `ABSTAIN` verdict that never blocks a signal, so the bot runs unchanged
+with the AI layer off.
+
+### Configuring the roles
+
+All three roles default to **DeepSeek**, so a single `DEEPSEEK_API_KEY` runs the
+whole debate. Each role can be pointed at a different provider:
+
+| Env | Default | Key it needs |
+|-----|---------|--------------|
+| `DEBATE_BULL_PROVIDER` / `_MODEL` | `deepseek` / `deepseek-chat` | `DEEPSEEK_API_KEY` |
+| `DEBATE_BEAR_PROVIDER` / `_MODEL` | `deepseek` / `deepseek-chat` | `DEEPSEEK_API_KEY` |
+| `DEBATE_ARBITER_PROVIDER` / `_MODEL` | `deepseek` / `deepseek-chat` | `DEEPSEEK_API_KEY` |
+
+Supported providers and their keys: `anthropic` → `ANTHROPIC_API_KEY`,
+`deepseek` → `DEEPSEEK_API_KEY`, `groq` → `GROQ_API_KEY`,
+`hermes`/`openrouter` → `HERMES_API_KEY`. **A provider with no matching key
+silently becomes a null client**, so switching a role's provider means setting
+that provider's key too.
+
+**The arbiter is load-bearing.** It alone returns the structured verdict, so if
+its client is unavailable the layer cannot decide anything — every signal
+abstains. `GET /health` reports this as `ai.enabled` (intent) versus
+`ai.available` (reality), with `ai.degraded_roles` naming any role running
+without a client; startup logs an error when the arbiter is missing. A run of
+100% `ABSTAIN` in the stats card means exactly this.
 
 ## Telegram topics
 
@@ -386,6 +410,7 @@ unchanged. Key knobs:
 | `API_PORT` | `8000` | REST API port |
 | `API_KEY` | _(empty)_ | If set, `POST` endpoints require it in `X-API-Key` |
 | `AI_DEBATE_ENABLED` | `false` | Enable the Bull/Bear/arbiter AI layer |
+| `DEBATE_ARBITER_PROVIDER` | `deepseek` | Provider for the verdict — needs its own key |
 | `CLAUDE_MODEL` | `claude-opus-4-8` | Model for the AI arbiter |
 | `AI_VETO_MIN_CONFIDENCE` | `70` | Min `REJECT` confidence to veto a signal |
 
