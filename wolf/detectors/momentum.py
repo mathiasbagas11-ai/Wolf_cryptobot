@@ -25,6 +25,7 @@ from wolf.detectors.base import (
     Detector,
     SignalCandidate,
     ladder_from_risk,
+    score_flow,
 )
 from wolf.models import Candle
 
@@ -42,6 +43,7 @@ class MomentumBreakoutDetector(Detector):
         score_threshold: int = 80,
         breakout_lookback: int = 50,
         ladder: LadderSettings = DEFAULT_LADDER,
+        flow_veto: bool = True,
     ) -> None:
         self.rsi_long = rsi_long
         self.rsi_short = rsi_short
@@ -50,6 +52,7 @@ class MomentumBreakoutDetector(Detector):
         self.score_threshold = score_threshold
         self.breakout_lookback = breakout_lookback
         self.ladder = ladder
+        self.flow_veto = flow_veto
 
     def evaluate(
         self, symbol: str, candles: Sequence[Candle], context=None, features=None
@@ -108,8 +111,20 @@ class MomentumBreakoutDetector(Detector):
         if vol_ratio < self.min_volume_ratio:
             return None  # volume expansion is non-negotiable
 
+        # Hard gate: the breakout must be carried by the matching side of the
+        # tape. The volume gate above is direction-blind — a breakdown prints
+        # the same 2x expansion as a breakout — so a level being taken out on
+        # aggressive selling is a trap, not a long. Scored small on purpose:
+        # its job is to reject, not to push borderline setups over the bar.
+        verdict = score_flow(candles, is_long=direction == "LONG", max_points=10)
+        if verdict.conflict and self.flow_veto:
+            return None
+
         reasons: list[str] = []
         score = 0
+        score += verdict.points
+        if verdict.reason:
+            reasons.append(verdict.reason)
 
         ref_level = recent_high if direction == "LONG" else recent_low
         score += 35

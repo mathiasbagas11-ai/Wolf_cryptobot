@@ -23,6 +23,7 @@ from typing import Optional, Sequence
 from wolf import indicators as ind
 from wolf import structure as struct
 from wolf.config import LadderSettings
+from wolf import orderflow
 from wolf.detectors.base import (
     DEFAULT_LADDER,
     Detector,
@@ -41,11 +42,13 @@ class PrePumpDetector(Detector):
         score_threshold: int = 78,
         squeeze_ratio: float = 1.15,
         ladder: LadderSettings = DEFAULT_LADDER,
+        flow_veto: bool = True,
     ) -> None:
         self.score_threshold = score_threshold
         # Current BB width must be within this multiple of the recent minimum.
         self.squeeze_ratio = squeeze_ratio
         self.ladder = ladder
+        self.flow_veto = flow_veto
 
     def evaluate(
         self, symbol: str, candles: Sequence[Candle], context=None, features=None
@@ -120,13 +123,39 @@ class PrePumpDetector(Detector):
                 score += 30
                 reasons.append("Bollinger squeeze resolving — breakout from consolidation")
 
-        # 2. Volume coil
+        # 2. Volume coil. This detector deliberately does not run the shared
+        #    directional gate: a pre-pump is by definition still flat, so
+        #    demanding a price move would reject the very setup it looks for.
+        #    What it does demand is that the expansion is not being *sold* —
+        #    a squeeze that releases downward is a breakdown, and the size-only
+        #    test scored it identically to accumulation.
+        state = orderflow.analyse(candles)
+        buyers_lead = state.buy_share == state.buy_share and state.buy_share > 0.52
+        sellers_lead = state.buy_share == state.buy_share and state.buy_share < 0.48
+        if state.is_expanding and sellers_lead and self.flow_veto:
+            return None
+
         if not math.isnan(vr) and vr >= 1.8:
             score += 25
-            reasons.append(f"Volume coil released: {vr:.1f}x average")
+            reasons.append(
+                f"Coil released on the bid: {vr:.1f}x volume, "
+                f"{state.buy_share * 100:.0f}% taker buys"
+                if buyers_lead else f"Volume coil released: {vr:.1f}x average"
+            )
         elif not math.isnan(vr) and vr >= 1.3:
             score += 12
             reasons.append(f"Volume building: {vr:.1f}x average")
+
+        # 2b. Quiet accumulation — the trade-count/notional split. Busy trades
+        #     on cold volume is bot churn on its own, but with the bid leading
+        #     during a squeeze it is the patient-absorption footprint.
+        busy_trades = state.trade_ratio == state.trade_ratio and state.trade_ratio >= 1.3
+        if busy_trades and not state.is_expanding and buyers_lead:
+            score += 12
+            reasons.append(
+                f"Quiet accumulation — trades {state.trade_ratio:.1f}x on "
+                f"{state.volume_ratio:.1f}x volume, bid absorbing"
+            )
 
         # 3. Momentum — MACD positive already enforced as hard gate above;
         #    reward when RSI is also in the ideal building zone (50-68).

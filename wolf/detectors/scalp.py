@@ -17,6 +17,7 @@ from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf import structure as struct
+from wolf import orderflow
 from wolf.config import LadderSettings
 from wolf.detectors.base import (
     DEFAULT_LADDER,
@@ -98,14 +99,30 @@ class ScalpDetector(Detector):
             score += 10
             reasons.append(f"RSI overbought: {rsi:.0f}")
 
-        # 4. FvG confluence — sweep reached into an imbalance zone (+15)
+        # 4. Absorption on the reclaim: the aggressive side flipped on the
+        #    candle that took the level back. A sweep trades hard *against* its
+        #    eventual direction on the way through, so unlike the breakout
+        #    detectors this one never vetoes on opposing flow — the flush is
+        #    the setup. What separates a real sweep from the first leg of a
+        #    trend is who stepped in once the stops were taken.
+        last_bias = orderflow.taker_bias(candles, fast=1)
+        if not math.isnan(last_bias):
+            taking = last_bias if is_long else 1 - last_bias
+            if taking >= 0.55:
+                score += 15
+                reasons.append(
+                    f"Absorption on reclaim — {taking * 100:.0f}% taker "
+                    f"{'buys' if is_long else 'sells'}"
+                )
+
+        # 5. FvG confluence — sweep reached into an imbalance zone (+15)
         fvgs = ind.find_fvgs(candles, lookback=40)
         fvg_kind = "BULL" if is_long else "BEAR"
         if ind.price_in_fvg(sweep.level, fvgs, fvg_kind):
             score += 15
             reasons.append(f"Sweep into {fvg_kind} FvG — imbalance reclaimed")
 
-        # 5. VWAP: sweep reached below/above fair value (+10)
+        # 6. VWAP: sweep reached below/above fair value (+10)
         vwap_val = ind.vwap(candles, lookback=40)
         if not math.isnan(vwap_val):
             if is_long and sweep.level <= vwap_val:
@@ -115,7 +132,7 @@ class ScalpDetector(Detector):
                 score += 10
                 reasons.append(f"Sweep above VWAP {vwap_val:.6g} — premium entry")
 
-        # 6. Order Block: sweep targeted a smart-money institutional zone (+10)
+        # 7. Order Block: sweep targeted a smart-money institutional zone (+10)
         obs = struct.find_order_blocks(candles, lookback=40)
         ob_kind = "BULL" if is_long else "BEAR"
         if struct.price_in_ob(sweep.level, obs, ob_kind):

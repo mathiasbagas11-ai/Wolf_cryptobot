@@ -26,6 +26,7 @@ from wolf.detectors.base import (
     Detector,
     SignalCandidate,
     build_targets,
+    score_flow,
 )
 from wolf.models import Candle
 
@@ -35,10 +36,14 @@ class PreDumpDetector(Detector):
     min_candles = 60
 
     def __init__(
-        self, score_threshold: int = 70, ladder: LadderSettings = DEFAULT_LADDER
+        self,
+        score_threshold: int = 70,
+        ladder: LadderSettings = DEFAULT_LADDER,
+        flow_veto: bool = True,
     ) -> None:
         self.score_threshold = score_threshold
         self.ladder = ladder
+        self.flow_veto = flow_veto
 
     def evaluate(
         self, symbol: str, candles: Sequence[Candle], context=None, features=None
@@ -88,7 +93,17 @@ class PreDumpDetector(Detector):
             score += 20
             reasons.append("Bearish rejection candle — upper-wick selling")
 
-        # 4. Distribution — volume fading vs average
+        # 4a. Aggressive buying into the highs vetoes the fade. "Overbought"
+        #     has never been a reason to short on its own; the offer has to be
+        #     in control before distribution is the right read.
+        verdict = score_flow(candles, is_long=False, max_points=10)
+        if verdict.conflict and self.flow_veto:
+            return None
+        score += verdict.points
+        if verdict.reason:
+            reasons.append(verdict.reason)
+
+        # 4b. Distribution — volume fading vs average
         if not math.isnan(vr) and vr < 0.8:
             score += 15
             reasons.append(f"Volume fading: {vr:.1f}x average — distribution")

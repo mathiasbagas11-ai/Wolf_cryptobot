@@ -74,7 +74,23 @@ class Status(str, Enum):
 
 @dataclass(frozen=True)
 class Candle:
-    """A single OHLC candle. ``time`` is epoch milliseconds (Binance native)."""
+    """A single OHLC candle. ``time`` is epoch milliseconds (Binance native).
+
+    ``trades`` and ``taker_buy_volume`` are optional microstructure fields that
+    make order-flow analysis possible (see :mod:`wolf.orderflow`):
+
+    * ``trades`` — executions in the bar. Trade **count** acceleration is a
+      different signal from **volume** acceleration: many tiny fills inflate
+      one without the other, which is what separates real participation from
+      bot churn.
+    * ``taker_buy_volume`` — the share of ``volume`` lifted by aggressive
+      buyers; ``volume`` minus it is aggressive selling. This is what makes a
+      breakout distinguishable from a breakdown, since both print big volume.
+
+    Both default to ``0.0``. Only Binance publishes them, so candles from other
+    venues simply carry no flow reading and the analysis degrades to neutral
+    rather than inventing one.
+    """
 
     time: int
     open: float
@@ -82,9 +98,13 @@ class Candle:
     low: float
     close: float
     volume: float = 0.0
+    trades: int = 0
+    taker_buy_volume: float = 0.0
 
     @classmethod
     def from_binance(cls, row: list) -> "Candle":
+        # Binance kline row: [openTime, o, h, l, c, volume, closeTime,
+        # quoteVolume, trades, takerBuyBase, takerBuyQuote, ignore]
         return cls(
             time=int(row[0]),
             open=float(row[1]),
@@ -92,7 +112,19 @@ class Candle:
             low=float(row[3]),
             close=float(row[4]),
             volume=float(row[5]) if len(row) > 5 else 0.0,
+            trades=int(row[8]) if len(row) > 8 else 0,
+            taker_buy_volume=float(row[9]) if len(row) > 9 else 0.0,
         )
+
+    @property
+    def taker_sell_volume(self) -> float:
+        """Aggressive sell volume — the complement of ``taker_buy_volume``."""
+        return max(self.volume - self.taker_buy_volume, 0.0)
+
+    @property
+    def has_flow_data(self) -> bool:
+        """True when this candle carries a usable buy/sell split."""
+        return self.volume > 0 and self.taker_buy_volume > 0
 
 
 @dataclass

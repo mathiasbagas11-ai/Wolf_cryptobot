@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
+from wolf import orderflow
 from wolf.config import LadderSettings
 from wolf.models import Candle
 
@@ -21,6 +22,8 @@ __all__ = [
     "Detector",
     "build_targets",
     "ladder_from_risk",
+    "score_flow",
+    "FlowVerdict",
     "DEFAULT_LADDER",
 ]
 
@@ -87,6 +90,94 @@ class Detector(ABC):
 
     def _ready(self, candles: Sequence[Candle]) -> bool:
         return len(candles) >= self.min_candles
+
+
+@dataclass(frozen=True)
+class FlowVerdict:
+    """Outcome of the shared order-flow gate."""
+
+    points: int = 0
+    reason: str = ""
+    conflict: bool = False   # measured flow points against the trade
+    state: Optional[orderflow.FlowState] = None
+
+
+def score_flow(
+    candles: Sequence[Candle],
+    is_long: bool,
+    fast: int = 4,
+    baseline: int = 16,
+    max_points: int = 25,
+) -> FlowVerdict:
+    """Score short-term order flow for a trade in ``is_long``'s direction.
+
+    Volume expansion on its own is direction-blind: a capitulation sells as
+    hard as a breakout buys, so a size-only test ("volume is 2x average, add
+    points") rewards the trap and the setup identically. Points are awarded
+    only when the *aggressive* side of that volume agrees with the trade, and a
+    measured disagreement is reported as a ``conflict`` for the caller to
+    reject on.
+
+    Venues that publish no taker split cannot answer the direction question.
+    Rather than guess, the gate falls back to price direction over the same
+    window at ~40% credit and never vetoes on it — half of the test is a hint,
+    not a verdict.
+    """
+    state = orderflow.analyse(candles, fast=fast, baseline=baseline)
+
+    if not state.is_measurable:
+        return _unverified(state, is_long, max_points)
+
+    if state.conflicts_with(is_long):
+        side = "selling" if is_long else "buying"
+        return FlowVerdict(
+            points=0,
+            reason=f"Flow {state.label()} — aggressive {side} against the setup",
+            conflict=True,
+            state=state,
+        )
+
+    if not state.agrees_with(is_long):
+        # MIXED: activity without a directional mandate.
+        return FlowVerdict(points=0, reason="", conflict=False, state=state)
+
+    if state.is_hot:
+        points, detail = max_points, "expanding hard"
+    elif state.is_expanding:
+        points, detail = int(max_points * 0.6), "expanding"
+    else:
+        points, detail = int(max_points * 0.3), "fading but directional"
+
+    dominant = state.buy_share if is_long else 1 - state.buy_share
+    reason = (
+        f"Flow {state.label()} — {detail}, "
+        f"{dominant * 100:.0f}% taker {'buys' if is_long else 'sells'}"
+    )
+    if state.trade_ratio == state.trade_ratio and state.trade_ratio >= 1.3:
+        points = min(max_points, points + 5)
+        reason += f", trades {state.trade_ratio:.1f}x"
+    return FlowVerdict(points=points, reason=reason, conflict=False, state=state)
+
+
+def _unverified(state: orderflow.FlowState, is_long: bool, max_points: int) -> FlowVerdict:
+    """Score a venue that publishes no buy/sell split.
+
+    Falls back to price direction over the flow window, capped at ~40% of the
+    full award. ``conflict`` is never set: without the aggressor data there is
+    nothing solid enough to reject a setup on.
+    """
+    wanted = "BULLISH" if is_long else "BEARISH"
+    if state.price_direction != wanted or not state.is_expanding:
+        return FlowVerdict(points=0, reason="", conflict=False, state=state)
+    return FlowVerdict(
+        points=int(max_points * 0.4),
+        reason=(
+            f"Volume {state.volume_ratio:.1f}x baseline with price "
+            f"({state.price_change * 100:+.1f}%) — direction unverified, no taker data"
+        ),
+        conflict=False,
+        state=state,
+    )
 
 
 def build_targets(
