@@ -318,6 +318,20 @@ class Tracker:
             log.warning("Reject %s SHORT: need tp<entry<sl (%.6g/%.6g/%.6g)", symbol, tp_f, entry, sl_f)
             return None
 
+        # The reward:risk policy is enforced in the screener, which covers every
+        # signal the bot generates itself. A hand-posted API signal bypasses
+        # that path, so flag it here rather than let a sub-policy trade enter
+        # the sample unremarked — deliberate overrides are allowed, silent ones
+        # are what quietly drag the measured expectancy down.
+        risk_per_unit = abs(entry - sl_f)
+        rr = abs(tp_f - entry) / risk_per_unit if risk_per_unit else 0.0
+        if rr and rr < self._ladder.rr_target * 0.8:
+            log.warning(
+                "%s %s recorded at R:R %.2f, below the %.1f target — "
+                "expected only for a manual override",
+                symbol, direction, rr, self._ladder.rr_target,
+            )
+
         ladder = normalize_ladder(tps, tp_f, sl_f, entry, is_long)
         signal = Signal(
             symbol=symbol,
