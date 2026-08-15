@@ -81,6 +81,14 @@ class MarketDataClient:
                 return data
         return []
 
+    def get_book_depth(self) -> dict[str, float]:
+        """Top-of-book depth per symbol from the first venue that provides it."""
+        for source in self._sources:
+            depth = source.get_book_depth()
+            if depth:
+                return depth
+        return {}
+
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
         for source in self._ordered(symbol):
             trades = source.get_recent_trades(symbol, limit)
