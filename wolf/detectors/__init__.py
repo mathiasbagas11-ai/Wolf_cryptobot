@@ -23,17 +23,20 @@ from wolf.detectors.swing import SwingDetector
 from wolf.detectors.trap import LiquidityTrapDetector
 
 
-def default_detectors(ladder: Optional[LadderSettings] = None) -> list[Detector]:
+def default_detectors(
+    ladder: Optional[LadderSettings] = None, flow_veto: bool = True
+) -> list[Detector]:
     """Return a fresh list of the default detector instances.
 
     ``ladder`` is threaded into every detector so the reward:risk policy is set
-    in one place and cannot drift between strategies.
+    in one place and cannot drift between strategies. ``flow_veto`` toggles the
+    order-flow rejection for the detectors that support it.
     """
     ladder = ladder or DEFAULT_LADDER
     return [
-        MomentumBreakoutDetector(ladder=ladder),
-        PrePumpDetector(ladder=ladder),
-        PreDumpDetector(ladder=ladder),
+        MomentumBreakoutDetector(ladder=ladder, flow_veto=flow_veto),
+        PrePumpDetector(ladder=ladder, flow_veto=flow_veto),
+        PreDumpDetector(ladder=ladder, flow_veto=flow_veto),
         ScalpDetector(ladder=ladder),
         SwingDetector(ladder=ladder),
         LiquidityTrapDetector(ladder=ladder),

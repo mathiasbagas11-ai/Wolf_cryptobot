@@ -590,6 +590,9 @@ class Settings:
     # Display timezone for message timestamps (IANA name). Default WIB.
     timezone: str = "Asia/Jakarta"
 
+    # Reject a setup when measured order flow opposes it (see wolf.orderflow).
+    flow_veto: bool = True
+
     # Minimum reward:risk ratio to emit a signal. Sits just below
     # ``LadderSettings.rr_target`` so rounding and structural stops don't trip
     # it, while anything materially under the policy is still dropped.
@@ -784,6 +787,7 @@ class Settings:
             log_level=_env_str("LOG_LEVEL", "INFO"),
             timezone=_env_str("TIMEZONE", "Asia/Jakarta"),
             min_signal_rr=_env_float("MIN_SIGNAL_RR", 2.5),
+            flow_veto=_env_bool("FLOW_VETO", True),
             telegram=telegram,
             tracker=tracker,
             risk=risk,

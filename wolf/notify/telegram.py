@@ -21,7 +21,7 @@ from typing import Optional
 
 import requests
 
-from wolf.config import TelegramSettings
+from wolf.config import LadderSettings, TelegramSettings
 from wolf.models import Signal, Status
 from wolf.risk_plan import build_plan, render_plan
 from wolf.textfmt import DIVIDER, esc, fmt_price, now
@@ -49,6 +49,7 @@ class TelegramNotifier:
         account=None,
         risk_pct: float = 2.0,
         start_balance: float = 1000.0,
+        ladder=None,
     ) -> None:
         self._settings = settings
         self._timeout = timeout
@@ -58,6 +59,7 @@ class TelegramNotifier:
         self._account = account
         self._risk_pct = risk_pct
         self._start_balance = start_balance
+        self._ladder = ladder or LadderSettings()
 
     @property
     def enabled(self) -> bool:
@@ -316,14 +318,36 @@ class TelegramNotifier:
             return ""
         return f"🛡 Risk: {esc(' · '.join(flags))} (monitor)\n"
 
+    def _breakeven_note(self, win_rate: float) -> str:
+        """Show the win rate this ladder needs, next to the one achieved.
+
+        A win rate means nothing without the geometry it was earned at. At the
+        default 1:3 ladder a full run banks ~1.7R after scaling out, so ~37% is
+        breakeven — below that the edge is negative no matter how good the
+        individual signals looked, and above it a "losing" 40% is profitable.
+        """
+        needed = self._ladder.breakeven_win_rate
+        mark = "✅" if win_rate >= needed else "⚠️"
+        return f" ({mark} vs {needed:.0f}% needed)"
+
     def _signal_card(self, s: Signal) -> str:
         is_long = s.is_long
         ladder = s.tp_ladder or [{"level": 1, "price": s.tp}]
-        tp_lines = [
-            f"🎯 TP{r['level']}  <code>{fmt_price(r['price'])}</code>  "
-            f"({_pct(r['price'], s.entry_price, is_long):+.2f}%)"
-            for r in ladder
-        ]
+        # Each rung shows its R multiple and the size closed there, so the card
+        # states what the trade returns rather than only the best price it may
+        # touch — R:R alone describes the last rung, which rarely fills.
+        tp_lines = []
+        for r in ladder:
+            extra = []
+            if r.get("r_multiple"):
+                extra.append(f"{r['r_multiple']:.1f}R")
+            if r.get("allocation"):
+                extra.append(f"close {r['allocation'] * 100:.0f}%")
+            suffix = f"  · {' · '.join(extra)}" if extra else ""
+            tp_lines.append(
+                f"🎯 TP{r['level']}  <code>{fmt_price(r['price'])}</code>  "
+                f"({_pct(r['price'], s.entry_price, is_long):+.2f}%){suffix}"
+            )
         sl_pct = _pct(s.sl, s.entry_price, is_long)
         risk = abs(s.entry_price - s.sl)
         reward = abs(ladder[-1]["price"] - s.entry_price)
@@ -427,6 +451,7 @@ class TelegramNotifier:
             f"📊 <b>{esc(title)}</b>\n{DIVIDER}",
             f"✅ Wins {stats.get('wins', 0)} · 🛑 Losses {stats.get('losses', 0)} "
             f"· 📈 Win rate {stats.get('win_rate', 0)}%"
+            + self._breakeven_note(stats.get("win_rate", 0))
             + ("" if stats.get("conclusive", True) else "  ⚠️ small sample"),
             # Expectancy leads in R: targets are ATR multiples, so a percentage
             # average is dominated by whichever volatile symbols happened to trade.

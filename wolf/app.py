@@ -169,6 +169,7 @@ def build_application(settings: Settings | None = None) -> Application:
         settings.telegram, timeout=settings.http_timeout, tz=settings.timezone,
         risk=settings.risk, account=account,
         risk_pct=settings.paper_risk_pct, start_balance=settings.paper_start_balance,
+        ladder=settings.ladder,
     )
     learning = LearningEngine(store, settings.learning) if settings.learning.enabled else None
     tracker = Tracker(
@@ -256,7 +257,7 @@ def build_application(settings: Settings | None = None) -> Application:
         if settings.universe.dynamic
         else None
     )
-    detectors = default_detectors(ladder=settings.ladder)
+    detectors = default_detectors(ladder=settings.ladder, flow_veto=settings.flow_veto)
     screener = Screener(
         client, tracker, detectors, notifier=notifier,
         context_provider=context_provider,

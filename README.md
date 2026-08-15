@@ -50,6 +50,7 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/exchange/` | Multi-exchange data layer — Binance/OKX/Bybit sources + fallback client |
 | `wolf/indicators.py` | Pure indicator functions (RSI, ATR, EMA, MACD, Bollinger…) |
 | `wolf/structure.py` | Price-action helpers (swing points, liquidity sweep, RSI divergence) |
+| `wolf/orderflow.py` | Candle order flow — volume pace, trade-count pace, taker bias |
 | `wolf/detectors/` | One detector per module (`momentum`, `prepump`, `predump`, `scalp`, `swing`) |
 | `wolf/market.py` | Futures market context (funding rate, open interest) + provider |
 | `wolf/ai/` | AI debate layer + LLM clients (Anthropic / DeepSeek / Groq) |
@@ -320,21 +321,125 @@ Periodic reports each post to their own topic and are **opt-in**:
 Each is a small module that never touches the signal pipeline and degrades to
 nothing if its data is unavailable.
 
+## Order flow
+
+Volume expansion is direction-blind. A capitulation sells as hard as a breakout
+buys, so a size-only test — "volume is 2× its average, add points" — scores the
+trap and the setup identically.
+
+`wolf/orderflow.py` reads *who* was aggressive, from two fields Binance publishes
+in every kline and the old `Candle` threw away:
+
+| Metric | Definition | Reads as |
+|--------|-----------|----------|
+| volume pace | recent volume ÷ its own baseline pace | `1.0` = unchanged, `>1.2` hot |
+| trade pace | the same ratio over **trade counts** | high with flat volume = many small fills (churn) |
+| taker bias | aggressive-buy share of volume | `>0.5` buyers lifting the offer |
+
+Detectors route their volume judgement through one gate, each reading it for
+what its own setup needs:
+
+* **MOMENTUM / PREDUMP** reject a setup the aggressive side opposes. Scored
+  small on purpose — the gate's job is to reject, not to nudge borderline
+  setups over the threshold.
+* **PREPUMP** refuses a squeeze that releases on selling, and credits patient
+  bid absorption during the coil. It skips the directional test deliberately: a
+  pre-pump is flat by definition, so demanding a price move would reject the
+  very setup it looks for.
+* **SCALP** never vetoes. A sweep trades hard against its own eventual direction
+  on the way through the level — that flush *is* the setup — so it checks the
+  aggressor flip on the reclaim candle instead.
+
+The gate judges the aggressor separately from price, which matters more than it
+sounds. Requiring price *and* volume to agree is the stricter reading, but a
+breakout is chosen precisely *because* price is rising, so that test could
+almost never fire on one. Price ticking up while sellers hit every bid is the
+distribution-into-strength that fails, and only the aggressor catches it. A
+lopsided split on quiet volume is not a conflict — without participation behind
+it, that is noise.
+
+Only Binance publishes the taker split. On other venues the gate falls back to
+price direction at partial credit and **never vetoes** — half of the test is a
+hint, not a verdict.
+
+---
+
+## Risk geometry — 1:3
+
+One setting decides the ratio for every strategy. Detectors choose only where
+the **stop** goes — often a structural level beyond a swept wick, not a fixed
+ATR multiple — and the ladder is placed off that real distance, so widening a
+stop to clear the wick widens the targets with it instead of quietly shrinking
+the ratio.
+
+```
+RISK_RR_TARGET=3        entry ──1R──▶ TP1 ──2R──▶ TP2 ──3R──▶ TP3
+RISK_TP_ALLOCATIONS     close 50%      close 30%    close 20%
+```
+
+`MIN_SIGNAL_RR` (2.5) drops anything materially under the policy at the
+emission gate, which covers detector bugs and hand-posted API signals alike.
+
+**The ratio is not the return.** Scaling out early caps a perfect trade at
+**1.7R**, not 3R, because only the last 20% ever reaches the third rung:
+
+```
+full run   = .5×1R + .3×2R + .2×3R = 1.7R
+break even = 100 / (1 + 1.7)       ≈ 37% win rate
+```
+
+Every performance summary prints that number next to the win rate achieved, so
+a 40% result reads as profitable rather than as a failure — and a 30% one is not
+mistaken for "almost there".
+
+---
+
 ## Signal lifecycle
 
 ```
-PENDING ──(price touches entry)──▶ ACTIVE ──(TP rungs)──▶ TP_HIT
+PENDING ──(price touches entry)──▶ ACTIVE ──(all rungs)──▶ TP_HIT
    │                                  │
-   │                                  └──(stop)─────────▶ SL_HIT
-   │                                  └──(timeout, +PnL)─▶ EXPIRED_WIN
-   │                                  └──(timeout, -PnL)─▶ EXPIRED_LOSS
+   │                                  ├──(TP1 banked, then stop)─▶ TP_HIT (partial)
+   │                                  ├──(stop, nothing banked)───▶ SL_HIT
+   │                                  └──(timeout)─▶ EXPIRED_WIN / EXPIRED_LOSS / EXPIRED_FLAT
    └──(entry never touched, timeout)──────────────────────▶ INVALIDATED
 ```
 
 * **TP ladder** — multiple take-profits; the stop moves to **breakeven** after TP1.
+* **Once TP1 is banked the signal cannot become a loss** (`TRACKER_TP1_BANKS_WIN`,
+  on by default). A later breakeven stop is booked as the scaled exit it is:
+  half off at TP1, the rest at entry, ≈ +0.5R. At 1:3 this is the most common
+  shape of a *winning* signal, so the all-or-nothing rule mis-graded most of the
+  winners as losses.
+* **Scaled-exit accounting** — each rung is weighted by the size closed there,
+  not by an even split, since the near rung is the one price actually reaches.
+  Ladders stored before allocations existed keep the even split, so recorded
+  history is never retroactively re-graded.
 * **Entry modes** — `MOMENTUM_NOW` (active immediately) or `RETEST_WAIT`
   (active only once price revisits the entry zone).
-* **Conservative evaluation** — within a candle, the stop is checked before TPs.
+
+### When one bar hits both a TP and the stop
+
+A candle reports its high and its low but not the order they traded in, and on a
+bar wide enough to reach both, that order decides the outcome.
+`INTRABAR_TP_FIRST` (default on) infers it from the bar's own direction: a bar
+closing **down** printed its high first, one closing **up** printed its low
+first.
+
+```
+LONG, entry 100, stop 95, TP1 105
+
+bar 100 ▲106 ▼94 close 96   closes down → high first → TP1 fills, stop to
+                             breakeven, sell-off closes the rest there  → +0.5R
+bar 100 ▲106 ▼94 close 105  closes up   → low first  → stopped out       → −1.0R
+```
+
+Inferring beats fixing the order in either direction. Always assuming the stop
+went first writes off a TP1 that plainly filled before the reversal; always
+assuming the profit went first is worse still, because the bar that *fills* TP1
+routinely dips to entry beforehand and would be closed out by the breakeven stop
+it had just created. Set `INTRABAR_TP_FIRST=false` for the strictly pessimistic
+reading.
 
 ---
 
@@ -406,6 +511,12 @@ unchanged. Key knobs:
 | `SCREENER_INTERVAL_MIN` | `10` | Minutes between screening cycles |
 | `TRACKER_INTERVAL_MIN` | `5` | Minutes between tracking passes |
 | `TRACKER_DEDUP_MINUTES` | `30` | Suppress duplicate symbol+direction |
+| `RISK_RR_TARGET` | `3` | Reward:risk of the final TP — `3` is 1:3 |
+| `RISK_TP_ALLOCATIONS` | `0.5,0.3,0.2` | Position fraction closed at each rung |
+| `MIN_SIGNAL_RR` | `2.5` | Signals paying less than this are never emitted |
+| `TRACKER_TP1_BANKS_WIN` | `true` | A banked TP1 can no longer end as a loss |
+| `INTRABAR_TP_FIRST` | `true` | Infer TP/stop order on a bar that hits both |
+| `FLOW_VETO` | `true` | Reject setups the aggressive side opposes |
 | `STATE_DIR` | `state_data` | Where JSON state is persisted |
 | `API_PORT` | `8000` | REST API port |
 | `API_KEY` | _(empty)_ | If set, `POST` endpoints require it in `X-API-Key` |
