@@ -123,7 +123,7 @@ class NewsSignalScanner:
         atr = atr_vals[-1] if atr_vals else closes[-1] * 0.01
         entry = closes[-1]
         is_long = direction == "LONG"
-        sl, tp, tps = build_targets(entry, atr, is_long, sl_mult=1.5, tp_mults=(2.5, 4.0))
+        sl, tp, tps = build_targets(entry, atr, is_long, sl_mult=1.5)
         bull_h, bear_h = _sentiment(headline)
         return SignalCandidate(
             symbol=symbol,

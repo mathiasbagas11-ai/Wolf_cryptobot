@@ -13,9 +13,20 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
+from wolf.config import LadderSettings
 from wolf.models import Candle
 
-__all__ = ["SignalCandidate", "Detector", "build_targets"]
+__all__ = [
+    "SignalCandidate",
+    "Detector",
+    "build_targets",
+    "ladder_from_risk",
+    "DEFAULT_LADDER",
+]
+
+#: Fallback geometry for detectors constructed without explicit settings
+#: (tests, ad-hoc use). Production wiring passes ``Settings.ladder`` through.
+DEFAULT_LADDER = LadderSettings()
 
 
 @dataclass
@@ -83,16 +94,50 @@ def build_targets(
     atr: float,
     is_long: bool,
     sl_mult: float = 1.5,
-    tp_mults: tuple[float, ...] = (1.5, 3.0),
+    ladder_cfg: LadderSettings = DEFAULT_LADDER,
 ) -> tuple[float, float, list[dict]]:
-    """Build ``(sl, final_tp, tp_ladder)`` from ATR.
+    """Build ``(sl, final_tp, tp_ladder)`` from an ATR-derived stop.
 
-    Shared by every detector so TP/SL sizing is consistent and defined once.
+    Convenience wrapper for detectors whose stop is a plain ATR multiple. The
+    stop distance is 1R and :func:`ladder_from_risk` places the rungs.
     """
-    if is_long:
-        sl = entry - atr * sl_mult
-        ladder = [{"level": i + 1, "price": entry + atr * m} for i, m in enumerate(tp_mults)]
-    else:
-        sl = entry + atr * sl_mult
-        ladder = [{"level": i + 1, "price": entry - atr * m} for i, m in enumerate(tp_mults)]
+    sl = entry - atr * sl_mult if is_long else entry + atr * sl_mult
+    ladder = ladder_from_risk(entry, abs(atr * sl_mult), is_long, ladder_cfg)
+    if not ladder:
+        return (0.0, 0.0, [])
     return sl, ladder[-1]["price"], ladder
+
+
+def ladder_from_risk(
+    entry: float,
+    risk_per_unit: float,
+    is_long: bool,
+    ladder_cfg: LadderSettings = DEFAULT_LADDER,
+) -> list[dict]:
+    """Place the take-profit ladder given the distance from entry to the stop.
+
+    This is the form detectors with a **structural** stop use — a level beyond
+    the swept wick, or beyond the rejection candle — where the stop is set by
+    price, not by an ATR multiple. Passing that real distance in keeps the
+    ratio intact: whatever the stop costs, the last rung pays ``rr_target``
+    times it.
+
+    Each rung carries the ``allocation`` closed there, because reward:risk
+    describes only the final rung. Scaling out 50% at 1R caps a winning 1:3
+    trade near 1.7R, and the tracker grades on that realised figure — so the
+    split belongs in the signal, not in a footnote.
+    """
+    if risk_per_unit <= 0 or entry <= 0:
+        return []
+    fractions = [f for f in ladder_cfg.tp_ladder_fractions if f > 0] or [1.0]
+    allocations = ladder_cfg.allocations_for(len(fractions))
+    sign = 1 if is_long else -1
+    return [
+        {
+            "level": i,
+            "price": entry + sign * risk_per_unit * ladder_cfg.rr_target * frac,
+            "allocation": round(alloc, 4),
+            "r_multiple": round(ladder_cfg.rr_target * frac, 3),
+        }
+        for i, (frac, alloc) in enumerate(zip(fractions, allocations), start=1)
+    ]

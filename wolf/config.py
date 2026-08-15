@@ -61,6 +61,17 @@ def _env_csv(name: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _env_float_csv(name: str, default: tuple[float, ...]) -> tuple[float, ...]:
+    """Parse ``"0.5,0.3,0.2"`` into floats; any bad entry keeps the default."""
+    parts = _env_csv(name)
+    if not parts:
+        return default
+    try:
+        return tuple(float(p) for p in parts)
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class TelegramSettings:
     """Telegram bot credentials and channel/thread routing."""
@@ -247,6 +258,73 @@ class RiskSettings:
 
 
 @dataclass(frozen=True)
+class LadderSettings:
+    """Target geometry — one place decides every signal's reward:risk.
+
+    Distinct from :class:`RiskSettings`, which gates *whether* a signal is
+    emitted. This decides *where* its targets go once it is.
+
+    Detectors choose only how far the stop sits from entry — often at a
+    structural level rather than a fixed ATR multiple — and that distance is
+    1R. Every rung is then placed at a fraction of ``rr_target`` R, so the
+    advertised ratio holds across symbols and volatility regimes and no
+    detector can quietly ship a 1:1 while the others run 1:3.
+
+    ``tp_allocations`` is the fraction of the position closed at each rung, and
+    it is not decoration: reward:risk describes only the *final* rung, so a 1:3
+    signal that takes half off at 1R does not return 3R. The tracker grades on
+    what was realised, which makes the split part of the geometry.
+    """
+
+    rr_target: float = 3.0
+    # Rung placement as fractions of the target — (1/3, 2/3, 1) of 3R.
+    tp_ladder_fractions: tuple[float, ...] = (1 / 3, 2 / 3, 1.0)
+    # Position fraction closed at each rung. Front-loaded: the near rung is the
+    # one price actually reaches, so it carries the most size.
+    tp_allocations: tuple[float, ...] = (0.5, 0.3, 0.2)
+    # When one candle reaches both a take-profit and the stop, infer the order
+    # from the bar's own direction instead of always assuming the stop went
+    # first. See Tracker._evaluate for why inferring beats either fixed rule.
+    intrabar_tp_first: bool = True
+
+    def allocations_for(self, rungs: int) -> tuple[float, ...]:
+        """Allocations resized to a ladder of ``rungs`` rungs.
+
+        Detectors emit ladders of different lengths and the tracker drops rungs
+        on the wrong side of entry, so the configured weights are truncated and
+        renormalised — the position is always fully closed, never partly
+        unaccounted for.
+        """
+        if rungs <= 0:
+            return ()
+        weights = list(self.tp_allocations[:rungs])
+        while len(weights) < rungs:
+            weights.append(0.0)
+        total = sum(weights)
+        if total <= 0:
+            return tuple(1 / rungs for _ in range(rungs))
+        return tuple(w / total for w in weights)
+
+    @property
+    def full_run_r(self) -> float:
+        """R banked when every rung fills — the ladder's real ceiling.
+
+        Not ``rr_target``: only the last slice earns the headline number. With
+        the defaults a perfect trade returns ~1.7R, and that is what a win rate
+        has to be judged against.
+        """
+        fractions = [f for f in self.tp_ladder_fractions if f > 0] or [1.0]
+        allocations = self.allocations_for(len(fractions))
+        return sum(a * self.rr_target * f for a, f in zip(allocations, fractions))
+
+    @property
+    def breakeven_win_rate(self) -> float:
+        """Win rate needed to break even at this geometry, before costs."""
+        run = self.full_run_r
+        return 100 / (1 + run) if run > 0 else 100.0
+
+
+@dataclass(frozen=True)
 class UniverseSettings:
     """How the screener chooses which symbols to scan.
 
@@ -298,9 +376,11 @@ class TrackerSettings:
     # breakeven is booked as a partial win (models a scaled exit — part off at
     # TP1, the rest rides to BE) instead of a loss. This stops trend setups that
     # reliably reach TP1 from being scored as serial losers by the all-or-nothing
-    # rule. Off (default) keeps the legacy rule: a win only when the final rung
-    # is reached; a post-TP1 breakeven stop counts as a loss.
-    tp1_banks_win: bool = False
+    # rule. Off keeps the legacy rule: a win only when the final rung is
+    # reached; a post-TP1 breakeven stop counts as a loss. On by default — at a
+    # 1:3 ladder, "reached TP1 then came back" is the most common shape of a
+    # profitable signal, so the legacy rule mis-grades most of the winners.
+    tp1_banks_win: bool = True
 
     def timeout_for(self, signal_type: str) -> int:
         return {
@@ -510,12 +590,15 @@ class Settings:
     # Display timezone for message timestamps (IANA name). Default WIB.
     timezone: str = "Asia/Jakarta"
 
-    # Minimum reward:risk ratio to emit a signal (lower quality trades dropped).
-    min_signal_rr: float = 1.5
+    # Minimum reward:risk ratio to emit a signal. Sits just below
+    # ``LadderSettings.rr_target`` so rounding and structural stops don't trip
+    # it, while anything materially under the policy is still dropped.
+    min_signal_rr: float = 2.5
 
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
     risk: RiskSettings = field(default_factory=RiskSettings)
+    ladder: LadderSettings = field(default_factory=LadderSettings)
     universe: UniverseSettings = field(default_factory=UniverseSettings)
     ai: AISettings = field(default_factory=AISettings)
     news: NewsSettings = field(default_factory=NewsSettings)
@@ -613,8 +696,14 @@ class Settings:
             dedup_screener_min=_env_int("TRACKER_DEDUP_SCREENER_MIN", dedup_default),
             dedup_swing_min=_env_int("TRACKER_DEDUP_SWING_MIN", 60),
             max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", 5000),
-            tp1_banks_win=_env_bool("TRACKER_TP1_BANKS_WIN", False),
+            tp1_banks_win=_env_bool("TRACKER_TP1_BANKS_WIN", True),
             expiry_flat_r=_env_float("TRACKER_EXPIRY_FLAT_R", 0.25),
+        )
+        ladder = LadderSettings(
+            rr_target=_env_float("RISK_RR_TARGET", 3.0),
+            tp_ladder_fractions=_env_float_csv("RISK_TP_FRACTIONS", (1 / 3, 2 / 3, 1.0)),
+            tp_allocations=_env_float_csv("RISK_TP_ALLOCATIONS", (0.5, 0.3, 0.2)),
+            intrabar_tp_first=_env_bool("INTRABAR_TP_FIRST", True),
         )
         risk = RiskSettings(
             regime_filter_enabled=_env_bool("REGIME_FILTER_ENABLED", True),
@@ -694,10 +783,11 @@ class Settings:
             supabase_anon_key=_env_str("SUPABASE_ANON_KEY"),
             log_level=_env_str("LOG_LEVEL", "INFO"),
             timezone=_env_str("TIMEZONE", "Asia/Jakarta"),
-            min_signal_rr=_env_float("MIN_SIGNAL_RR", 1.5),
+            min_signal_rr=_env_float("MIN_SIGNAL_RR", 2.5),
             telegram=telegram,
             tracker=tracker,
             risk=risk,
+            ladder=ladder,
             universe=universe,
             ai=ai,
             news=news,

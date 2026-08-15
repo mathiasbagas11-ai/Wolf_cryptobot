@@ -17,7 +17,13 @@ from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf import structure as struct
-from wolf.detectors.base import Detector, SignalCandidate, build_targets
+from wolf.config import LadderSettings
+from wolf.detectors.base import (
+    DEFAULT_LADDER,
+    Detector,
+    SignalCandidate,
+    ladder_from_risk,
+)
 from wolf.models import Candle
 
 
@@ -25,8 +31,11 @@ class SwingDetector(Detector):
     name = "SWING"
     min_candles = 80
 
-    def __init__(self, score_threshold: int = 80) -> None:
+    def __init__(
+        self, score_threshold: int = 80, ladder: LadderSettings = DEFAULT_LADDER
+    ) -> None:
         self.score_threshold = score_threshold
+        self.ladder = ladder
 
     def evaluate(
         self, symbol: str, candles: Sequence[Candle], context=None, features=None
@@ -153,7 +162,6 @@ class SwingDetector(Detector):
             return None
 
         entry = fast
-        sl, tp, ladder = build_targets(entry, atr, is_long=is_long, sl_mult=1.5, tp_mults=(2.5, 4.0))
         # Structural stop just beyond the rejection wick (the level that's meant
         # to hold), with at least 0.8 ATR of room so noise doesn't stop us out.
         # A flat EMA-based stop ignored where price actually invalidates — a key
@@ -162,6 +170,13 @@ class SwingDetector(Detector):
             sl = min(last.low - atr * 0.3, entry - atr * 0.8)
         else:
             sl = max(last.high + atr * 0.3, entry + atr * 0.8)
+        # Targets are placed off the *structural* stop distance, not off a fixed
+        # ATR multiple, so widening the stop to clear the wick widens the targets
+        # with it and the configured ratio survives.
+        ladder = ladder_from_risk(entry, abs(entry - sl), is_long, self.ladder)
+        if not ladder:
+            return None
+        tp = ladder[-1]["price"]
         if (is_long and not (tp > entry > sl)) or (not is_long and not (tp < entry < sl)):
             return None
         return SignalCandidate(

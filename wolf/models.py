@@ -97,17 +97,36 @@ class Candle:
 
 @dataclass
 class TpRung:
-    """A single take-profit rung in the ladder."""
+    """A single take-profit rung in the ladder.
+
+    ``allocation`` is the fraction of the position closed here. Without it a
+    ladder is only a list of prices, and a scaled exit has to be priced by
+    assuming every rung carries equal size — which overstates the far rungs
+    that rarely fill. ``0.0`` means "not specified" and callers fall back to an
+    even split, so ladders stored before this field still grade.
+    """
 
     level: int
     price: float
+    allocation: float = 0.0
+    r_multiple: float = 0.0
 
     def to_dict(self) -> dict:
-        return {"level": self.level, "price": self.price}
+        return {
+            "level": self.level,
+            "price": self.price,
+            "allocation": self.allocation,
+            "r_multiple": self.r_multiple,
+        }
 
     @classmethod
     def from_dict(cls, d: dict) -> "TpRung":
-        return cls(level=int(d["level"]), price=float(d["price"]))
+        return cls(
+            level=int(d["level"]),
+            price=float(d["price"]),
+            allocation=float(d.get("allocation") or 0.0),
+            r_multiple=float(d.get("r_multiple") or 0.0),
+        )
 
 
 def _now_iso() -> str:

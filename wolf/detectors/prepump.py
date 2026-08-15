@@ -22,7 +22,13 @@ from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf import structure as struct
-from wolf.detectors.base import Detector, SignalCandidate, build_targets
+from wolf.config import LadderSettings
+from wolf.detectors.base import (
+    DEFAULT_LADDER,
+    Detector,
+    SignalCandidate,
+    build_targets,
+)
 from wolf.models import Candle
 
 
@@ -30,10 +36,16 @@ class PrePumpDetector(Detector):
     name = "PREPUMP"
     min_candles = 60
 
-    def __init__(self, score_threshold: int = 78, squeeze_ratio: float = 1.15) -> None:
+    def __init__(
+        self,
+        score_threshold: int = 78,
+        squeeze_ratio: float = 1.15,
+        ladder: LadderSettings = DEFAULT_LADDER,
+    ) -> None:
         self.score_threshold = score_threshold
         # Current BB width must be within this multiple of the recent minimum.
         self.squeeze_ratio = squeeze_ratio
+        self.ladder = ladder
 
     def evaluate(
         self, symbol: str, candles: Sequence[Candle], context=None, features=None
@@ -165,7 +177,7 @@ class PrePumpDetector(Detector):
         if score < self.score_threshold:
             return None
 
-        sl, tp, ladder = build_targets(price, atr, is_long=True, sl_mult=1.5, tp_mults=(2.0, 4.0))
+        sl, tp, ladder = build_targets(price, atr, is_long=True, sl_mult=1.5, ladder_cfg=self.ladder)
         # Structural stop below the squeeze base — a flat ATR stop is too tight in
         # the low-volatility squeeze and gets wicked out before the expansion.
         sl = min(sl, cons_low - atr * 0.2)

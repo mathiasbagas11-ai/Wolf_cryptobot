@@ -6,9 +6,17 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from wolf.config import TrackerSettings
+from wolf.config import LadderSettings, TrackerSettings
 from wolf.models import Candle, Status
 from wolf.tracker import Tracker, normalize_ladder
+
+# A 1:3 ladder off entry 100 / stop 95: 1R = 5, rungs at 105 / 110 / 115,
+# closing 50% / 30% / 20% of the position.
+LADDER_1_3 = [
+    {"level": 1, "price": 105, "allocation": 0.5, "r_multiple": 1.0},
+    {"level": 2, "price": 110, "allocation": 0.3, "r_multiple": 2.0},
+    {"level": 3, "price": 115, "allocation": 0.2, "r_multiple": 3.0},
+]
 
 
 def _candles_after(now_ms: int, ohlc: list[tuple[float, float, float, float]]):
@@ -100,6 +108,152 @@ def test_tp1_then_breakeven_stop_is_loss_by_default(store, fake_client):
     resolved = tracker.check_pending()
     assert resolved[0].status == Status.SL_HIT.value
     assert resolved[0].pnl_pct == 0.0
+
+
+def test_partial_win_weights_the_ladder_by_allocation(store, fake_client):
+    """A front-loaded ladder banks what it actually closed at TP1, not a third.
+
+    With 50% off at TP1 (+5%) and the remaining 50% stopped at breakeven, the
+    trade returns +2.5% — an even three-way split would have booked only the
+    first of three slices and understated it.
+    """
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=115, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=LADDER_1_3,
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [
+        (100, 106, 99, 105),   # TP1 fills, stop trails to breakeven
+        (105, 106, 99, 100),   # back to entry -> breakeven stop
+    ])
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    r = tracker.check_pending()[0]
+    assert r.status == Status.TP_HIT.value
+    assert r.pnl_pct == 2.5          # 0.5 x (+5%) + 0.5 x 0%
+    assert r.r_multiple == 0.5       # half a position banked at 1R
+
+
+def test_one_bar_sweeping_tp1_and_the_stop_keeps_the_tp1_profit(store, fake_client):
+    """A bar reaching TP1 *and* the stop is graded TP1-first by default.
+
+    It closes down, so its high printed before its low: TP1 filled, the stop
+    moved to breakeven, and the sell-off closed the rest there. Assuming the
+    stop went first would write off a TP1 that plainly filled.
+    """
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=115, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=LADDER_1_3,
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [(100, 106, 94, 96)])
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    r = tracker.check_pending()[0]
+    assert r.status == Status.TP_HIT.value
+    assert r.pnl_pct == 2.5
+    assert r.tps_hit == [1]
+
+
+def test_intrabar_sequence_follows_the_bar_direction(store, fake_client):
+    """The mirror bar — closing up — is read low-first, so the stop wins.
+
+    Without this the rule would be "always optimistic" rather than an
+    inference, and every genuine stop-out that later recovered inside the same
+    bar would be graded a partial win.
+    """
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=115, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=LADDER_1_3,
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [(100, 106, 94, 105)])
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    r = tracker.check_pending()[0]
+    assert r.status == Status.SL_HIT.value
+    assert r.r_multiple == -1.0
+
+
+def test_tp_fill_bar_does_not_trigger_its_own_breakeven_stop(store, fake_client):
+    """A fresh long routinely trades back to entry before it runs.
+
+    The breakeven stop only exists *after* TP1 fills, so the bar that filled it
+    must not be closed out by the stop it just created.
+    """
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=115, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=LADDER_1_3,
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [(101, 106, 100, 105)])
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    assert tracker.check_pending() == []          # still running
+    assert tracker.active_signals()[0].tps_hit == [1]
+
+
+def test_pessimistic_mode_assumes_the_stop_went_first(store, fake_client):
+    """INTRABAR_TP_FIRST=0 restores the strictly conservative reading."""
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=115, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=LADDER_1_3,
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [(100, 106, 94, 96)])
+    tracker = Tracker(
+        store, fake_client, TrackerSettings(tp1_banks_win=True),
+        ladder=LadderSettings(intrabar_tp_first=False),
+    )
+    r = tracker.check_pending()[0]
+    assert r.status == Status.SL_HIT.value
+    assert r.r_multiple == -1.0
+
+
+def test_intrabar_sequence_mirrors_correctly_for_shorts(store, fake_client):
+    """For a short the profit side is the low, so the bar reading flips."""
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "SOLUSDT", "SCREENER", "SHORT", 100, tp=85, sl=105,
+        entry_mode="MOMENTUM_NOW",
+        tps=[
+            {"level": 1, "price": 95, "allocation": 0.5},
+            {"level": 2, "price": 90, "allocation": 0.3},
+            {"level": 3, "price": 85, "allocation": 0.2},
+        ],
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    # Closes up -> low printed first, and for a short the TPs sit at the low.
+    fake_client.klines["SOLUSDT"] = _candles_after(now_ms, [(100, 106, 94, 104)])
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    r = tracker.check_pending()[0]
+    assert r.status == Status.TP_HIT.value
+    assert r.tps_hit == [1]
+    assert r.pnl_pct == 2.5
+
+
+def test_legacy_ladder_without_allocations_still_splits_evenly(store, fake_client):
+    """Old rungs must not be re-graded under the new front-loaded weights."""
+    rungs = normalize_ladder(
+        [{"level": 1, "price": 105}, {"level": 2, "price": 110}], 110, 95, 100, is_long=True
+    )
+    assert [r.allocation for r in rungs] == [0.5, 0.5]
+    assert sum(r.allocation for r in rungs) == 1.0
+
+
+def test_normalize_ladder_renormalises_after_dropping_a_rung(store, fake_client):
+    """A dropped rung must not leave part of the position unaccounted for."""
+    rungs = normalize_ladder(
+        [
+            {"level": 1, "price": 90, "allocation": 0.5},   # wrong side, dropped
+            {"level": 2, "price": 110, "allocation": 0.3},
+            {"level": 3, "price": 115, "allocation": 0.2},
+        ],
+        115, 95, 100, is_long=True,
+    )
+    assert [r.price for r in rungs] == [110, 115]
+    assert sum(r.allocation for r in rungs) == 1.0
 
 
 def test_tp1_then_breakeven_stop_banks_partial_win(store, fake_client):

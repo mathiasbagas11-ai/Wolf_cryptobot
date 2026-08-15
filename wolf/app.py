@@ -173,7 +173,7 @@ def build_application(settings: Settings | None = None) -> Application:
     learning = LearningEngine(store, settings.learning) if settings.learning.enabled else None
     tracker = Tracker(
         store, client, settings.tracker, notify=notifier.on_event,
-        account=account, learning=learning,
+        account=account, learning=learning, ladder=settings.ladder,
     )
     context_provider = ContextProvider(client)
 
@@ -256,7 +256,7 @@ def build_application(settings: Settings | None = None) -> Application:
         if settings.universe.dynamic
         else None
     )
-    detectors = default_detectors()
+    detectors = default_detectors(ladder=settings.ladder)
     screener = Screener(
         client, tracker, detectors, notifier=notifier,
         context_provider=context_provider,

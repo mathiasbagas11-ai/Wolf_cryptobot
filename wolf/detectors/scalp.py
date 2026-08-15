@@ -17,7 +17,13 @@ from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf import structure as struct
-from wolf.detectors.base import Detector, SignalCandidate
+from wolf.config import LadderSettings
+from wolf.detectors.base import (
+    DEFAULT_LADDER,
+    Detector,
+    SignalCandidate,
+    ladder_from_risk,
+)
 from wolf.models import Candle
 
 
@@ -25,9 +31,15 @@ class ScalpDetector(Detector):
     name = "SCALP"
     min_candles = 40
 
-    def __init__(self, score_threshold: int = 65, min_recovery: float = 50.0) -> None:
+    def __init__(
+        self,
+        score_threshold: int = 65,
+        min_recovery: float = 50.0,
+        ladder: LadderSettings = DEFAULT_LADDER,
+    ) -> None:
         self.score_threshold = score_threshold
         self.min_recovery = min_recovery
+        self.ladder = ladder
 
     def evaluate(
         self, symbol: str, candles: Sequence[Candle], context=None, features=None
@@ -122,16 +134,11 @@ class ScalpDetector(Detector):
         risk = (price - sl) if is_long else (sl - price)
         if risk <= 0 or (risk / price) * 100 > 8.0:
             return None  # geometry inverted or sweep too deep
-        if is_long:
-            ladder = [
-                {"level": 1, "price": price + risk * 1.5},
-                {"level": 2, "price": price + risk * 2.5},
-            ]
-        else:
-            ladder = [
-                {"level": 1, "price": price - risk * 1.5},
-                {"level": 2, "price": price - risk * 2.5},
-            ]
+        # Targets derive from the swept-wick stop distance, so a deeper sweep
+        # pushes the targets out with it rather than shrinking the ratio.
+        ladder = ladder_from_risk(price, risk, is_long, self.ladder)
+        if not ladder:
+            return None
         tp = ladder[-1]["price"]
         return SignalCandidate(
             symbol=symbol,

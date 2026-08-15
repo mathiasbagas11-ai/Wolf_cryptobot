@@ -20,7 +20,13 @@ from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf import structure as struct
-from wolf.detectors.base import Detector, SignalCandidate, build_targets
+from wolf.config import LadderSettings
+from wolf.detectors.base import (
+    DEFAULT_LADDER,
+    Detector,
+    SignalCandidate,
+    build_targets,
+)
 from wolf.models import Candle
 
 
@@ -28,8 +34,11 @@ class PreDumpDetector(Detector):
     name = "PREDUMP"
     min_candles = 60
 
-    def __init__(self, score_threshold: int = 70) -> None:
+    def __init__(
+        self, score_threshold: int = 70, ladder: LadderSettings = DEFAULT_LADDER
+    ) -> None:
         self.score_threshold = score_threshold
+        self.ladder = ladder
 
     def evaluate(
         self, symbol: str, candles: Sequence[Candle], context=None, features=None
@@ -114,7 +123,7 @@ class PreDumpDetector(Detector):
         if score < self.score_threshold:
             return None
 
-        sl, tp, ladder = build_targets(price, atr, is_long=False, sl_mult=1.5, tp_mults=(2.0, 4.0))
+        sl, tp, ladder = build_targets(price, atr, is_long=False, sl_mult=1.5, ladder_cfg=self.ladder)
         return SignalCandidate(
             symbol=symbol,
             signal_type="PREDUMP",

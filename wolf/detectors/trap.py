@@ -32,7 +32,13 @@ from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf import structure as struct
-from wolf.detectors.base import Detector, SignalCandidate
+from wolf.config import LadderSettings
+from wolf.detectors.base import (
+    DEFAULT_LADDER,
+    Detector,
+    SignalCandidate,
+    ladder_from_risk,
+)
 from wolf.models import Candle
 
 
@@ -45,6 +51,7 @@ class LiquidityTrapDetector(Detector):
         score_threshold: int = 80,
         min_recovery: float = 60.0,
         max_risk_pct: float = 6.0,
+        ladder: LadderSettings = DEFAULT_LADDER,
     ) -> None:
         self.score_threshold = score_threshold
         # Minimum % of the sweep candle reclaimed by its close — a weak reclaim
@@ -53,6 +60,7 @@ class LiquidityTrapDetector(Detector):
         # Reject setups whose stop (beyond the swept wick) sits further than this
         # from entry: a very deep sweep is too wide to be a clean reversal.
         self.max_risk_pct = max_risk_pct
+        self.ladder = ladder
 
     def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
         if not self._ready(candles):
@@ -142,16 +150,9 @@ class LiquidityTrapDetector(Detector):
         if risk <= 0 or (risk / price) * 100 > self.max_risk_pct:
             return None
 
-        if is_long:
-            ladder = [
-                {"level": 1, "price": price + risk * 1.5},
-                {"level": 2, "price": price + risk * 2.5},
-            ]
-        else:
-            ladder = [
-                {"level": 1, "price": price - risk * 1.5},
-                {"level": 2, "price": price - risk * 2.5},
-            ]
+        ladder = ladder_from_risk(price, risk, is_long, self.ladder)
+        if not ladder:
+            return None
 
         return SignalCandidate(
             symbol=symbol,

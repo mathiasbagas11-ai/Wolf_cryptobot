@@ -28,7 +28,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
-from wolf.config import TrackerSettings
+from wolf.config import LadderSettings, TrackerSettings
 from wolf.exchange import BinanceClient
 from wolf.models import Direction, EntryMode, Signal, Status, TpRung
 from wolf.state import StateStore
@@ -65,6 +65,19 @@ def normalize_ladder(
 
     Rungs on the wrong side of entry (i.e. not in profit territory) are dropped.
     If no valid ladder is supplied, falls back to a single rung at ``tp``.
+
+    Allocations are repaired rather than trusted, so that whatever comes in,
+    the ladder that comes out closes exactly 100% of the position and a scaled
+    exit can never leak or double-count size. A rung may arrive without one (a
+    hand-posted API signal, a ladder stored before the field existed), and
+    dropping an invalid rung changes what the survivors should carry.
+
+    A ladder that specifies *no* allocations is split evenly rather than given
+    the configured front-loaded weights. Silence is not a preference: assuming
+    50/30/20 for an old two-rung ladder would retroactively re-grade outcomes
+    that were booked under an even split, quietly rewriting recorded history.
+    Detectors state their allocations explicitly, so only legacy rungs land
+    here.
     """
     rungs: list[TpRung] = []
     for raw in tps or []:
@@ -76,13 +89,27 @@ def normalize_ladder(
         if not price or not level:
             continue
         if (is_long and price > entry) or (not is_long and price < entry):
-            rungs.append(TpRung(level=level, price=price))
+            rungs.append(TpRung(
+                level=level,
+                price=price,
+                allocation=float(raw.get("allocation") or 0.0),
+                r_multiple=float(raw.get("r_multiple") or 0.0),
+            ))
     if not rungs and tp:
         if (is_long and tp > entry) or (not is_long and tp < entry):
             rungs.append(TpRung(level=1, price=float(tp)))
     rungs.sort(key=lambda r: r.price, reverse=not is_long)
-    for i, rung in enumerate(rungs, start=1):
-        rung.level = i
+
+    supplied = sum(r.allocation for r in rungs)
+    even = 1 / len(rungs) if rungs else 0.0
+    risk_per_unit = abs(entry - sl)
+    for i, rung in enumerate(rungs):
+        rung.level = i + 1
+        rung.allocation = round(
+            even if supplied <= 0 else rung.allocation / supplied, 6
+        )
+        if not rung.r_multiple and risk_per_unit > 0:
+            rung.r_multiple = round(abs(rung.price - entry) / risk_per_unit, 3)
     return rungs
 
 
@@ -142,10 +169,14 @@ def _partial_pnl(
 ) -> float:
     """Blended PnL% of a scaled exit.
 
-    Models an equal position slice per ladder rung: each *hit* rung's slice is
-    booked at its target price, and every remaining slice is closed at
-    ``stop_price`` (breakeven once TP1 has moved the stop). Used to score a
-    TP1-banked stop-out as the partial win it actually is.
+    Each *hit* rung's slice is booked at its target price and every remaining
+    slice is closed at ``stop_price`` (breakeven once TP1 has moved the stop),
+    which is what scores a TP1-banked stop-out as the partial win it is.
+
+    Slices are weighted by each rung's ``allocation``, so a front-loaded ladder
+    banks what it actually closes at the near rung instead of assuming every
+    rung carries the same size. ``normalize_ladder`` guarantees the weights sum
+    to 1; the even-split fallback here only covers a ladder built by hand.
     """
     n = len(ladder)
     if n == 0 or entry <= 0:
@@ -155,9 +186,16 @@ def _partial_pnl(
         move = (px - entry) if is_long else (entry - px)
         return move / entry * 100
 
+    weights = [r.allocation for r in ladder]
+    if sum(weights) <= 0:
+        weights = [1 / n] * n
+    total_w = sum(weights) or 1.0
+
     hit = set(tps_hit)
-    total = sum(pct(r.price if r.level in hit else stop_price) for r in ladder)
-    return total / n
+    return sum(
+        (w / total_w) * pct(r.price if r.level in hit else stop_price)
+        for r, w in zip(ladder, weights)
+    )
 
 
 class EvalResult:
@@ -196,10 +234,12 @@ class Tracker:
         notify: Optional[NotifyFn] = None,
         account=None,
         learning=None,
+        ladder: Optional[LadderSettings] = None,
     ) -> None:
         self._store = store
         self._client = client
         self._settings = settings
+        self._ladder = ladder or LadderSettings()
         self._notify = notify or (lambda *_: None)
         self._account = account  # optional PaperAccount for the Trade Report
         self._learning = learning  # optional LearningEngine fed on resolution
@@ -360,9 +400,28 @@ class Tracker:
             elif res.activated_time is not None and c_time < res.activated_time:
                 continue  # candle predates activation — no position existed yet
 
-            # Stop-loss is checked first (conservative).
-            sl_hit = (is_long and c.low <= eff_sl) or (not is_long and c.high >= eff_sl)
-            if sl_hit:
+            # A candle reports its high and its low but not the order they
+            # traded in. On a bar wide enough to reach both a take-profit and
+            # the stop, that order decides the outcome, so it has to be assumed.
+            #
+            # With ``intrabar_tp_first`` the order is inferred from the bar's own
+            # direction: a bar closing down printed its high first, one closing
+            # up printed its low first. Whichever extreme came first is the side
+            # that acts first.
+            #
+            # Inferring beats fixing the order either way. Always taking the stop
+            # first writes off a TP1 that plainly filled before the reversal.
+            # Always taking the profit first is worse still: the bar that *fills*
+            # TP1 routinely dips to entry beforehand, so it would be closed out
+            # by the breakeven stop it had just created.
+            high_first = c.close < c.open
+            tp_side_first = high_first if is_long else not high_first
+            stop_acts_first = not (self._ladder.intrabar_tp_first and tp_side_first)
+
+            def _stopped_out() -> bool:
+                return (is_long and c.low <= eff_sl) or (not is_long and c.high >= eff_sl)
+
+            def _close_at_stop() -> None:
                 banked = first_lvl is not None and first_lvl in res.tps_hit
                 if banked and self._settings.tp1_banks_win:
                     # TP1 is already locked in and the stop now sits at breakeven,
@@ -379,11 +438,13 @@ class Tracker:
                         entry * (1 + realized / 100) if is_long
                         else entry * (1 - realized / 100)
                     )
-                    res.exit_time = c_time
-                    break
-                res.terminal = Status.SL_HIT
-                res.exit_price = eff_sl
+                else:
+                    res.terminal = Status.SL_HIT
+                    res.exit_price = eff_sl
                 res.exit_time = c_time
+
+            if stop_acts_first and _stopped_out():
+                _close_at_stop()
                 break
 
             for rung in ladder:
@@ -400,6 +461,13 @@ class Tracker:
                 res.terminal = Status.TP_HIT
                 res.exit_price = ladder[-1].price
                 res.exit_time = c_time
+                break
+
+            # The profit side acted first on this bar, so the stop is re-checked
+            # against where it stands *now* — a TP1 filled here protects the
+            # remainder at breakeven instead of booking a full-R loss.
+            if not stop_acts_first and _stopped_out():
+                _close_at_stop()
                 break
 
         if res.terminal is None:

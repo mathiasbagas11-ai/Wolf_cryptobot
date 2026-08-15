@@ -19,7 +19,13 @@ from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf import structure as struct
-from wolf.detectors.base import Detector, SignalCandidate
+from wolf.config import LadderSettings
+from wolf.detectors.base import (
+    DEFAULT_LADDER,
+    Detector,
+    SignalCandidate,
+    ladder_from_risk,
+)
 from wolf.models import Candle
 
 
@@ -33,17 +39,17 @@ class MomentumBreakoutDetector(Detector):
         rsi_short: float = 40.0,
         min_volume_ratio: float = 2.0,
         atr_sl_mult: float = 1.5,
-        atr_tp_mults: tuple[float, ...] = (2.5, 4.0),
         score_threshold: int = 80,
         breakout_lookback: int = 50,
+        ladder: LadderSettings = DEFAULT_LADDER,
     ) -> None:
         self.rsi_long = rsi_long
         self.rsi_short = rsi_short
         self.min_volume_ratio = min_volume_ratio
         self.atr_sl_mult = atr_sl_mult
-        self.atr_tp_mults = atr_tp_mults
         self.score_threshold = score_threshold
         self.breakout_lookback = breakout_lookback
+        self.ladder = ladder
 
     def evaluate(
         self, symbol: str, candles: Sequence[Candle], context=None, features=None
@@ -165,12 +171,11 @@ class MomentumBreakoutDetector(Detector):
         # MOMENTUM_NOW: enter at the breakout candle close — the confirmation bar.
         # Waiting for a retest to the broken level often means the breakout failed.
         entry = price
-        if direction == "LONG":
-            sl = entry - atr * self.atr_sl_mult
-            tps = [{"level": i + 1, "price": entry + atr * m} for i, m in enumerate(self.atr_tp_mults)]
-        else:
-            sl = entry + atr * self.atr_sl_mult
-            tps = [{"level": i + 1, "price": entry - atr * m} for i, m in enumerate(self.atr_tp_mults)]
+        is_long = direction == "LONG"
+        sl = entry - atr * self.atr_sl_mult if is_long else entry + atr * self.atr_sl_mult
+        tps = ladder_from_risk(entry, abs(atr * self.atr_sl_mult), is_long, self.ladder)
+        if not tps:
+            return None
 
         return SignalCandidate(
             symbol=symbol,
