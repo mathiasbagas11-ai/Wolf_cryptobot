@@ -172,3 +172,43 @@ def test_empty_history_does_not_explode(store, fake_client, tracker_settings):
     assert diag["overall"]["verdict"] == INCONCLUSIVE
     assert diag["sample"]["traded"] == 0
     assert render_digest(diag).startswith("WOLF-DIAG v1")
+
+
+def _cost_outcome(strategy: str, r: float, risk_pct: float) -> dict:
+    """A resolved outcome with an explicit R and stop distance."""
+    entry = 100.0
+    return {
+        "symbol": "XUSDT", "signal_type": strategy, "direction": "LONG",
+        "strategy": strategy, "entry_price": entry, "sl": entry * (1 - risk_pct / 100),
+        "tp": entry * 1.05, "status": "TP_HIT" if r > 0 else "SL_HIT",
+        "pnl_pct": r * risk_pct, "r_multiple": r, "activated": True,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "exit_time": "2026-01-01T06:00:00+00:00",
+        "resolved_at": "2026-01-01T06:00:00+00:00",
+    }
+
+
+def test_cost_is_charged_per_strategy_not_portfolio_wide(store, fake_client):
+    """A tight-stop strategy pays far more in R than a wide-stop one.
+
+    Charging every strategy the portfolio median inverts their ranking: TIGHT
+    looks like the winner on gross R, but a 20bps round trip is 1.67R of its
+    own risk unit against 0.25R of WIDE's.
+    """
+    from wolf.config import TrackerSettings
+    from wolf.diagnose import diagnose
+    from wolf.tracker import Tracker
+
+    rows = [_cost_outcome("TIGHT", 0.62, 0.12) for _ in range(10)]
+    rows += [_cost_outcome("WIDE", 0.30, 0.80) for _ in range(10)]
+    store.write("signal_outcomes", rows)
+
+    diag = diagnose(Tracker(store, fake_client, TrackerSettings()), round_trip_bps=20.0)
+    tight = diag["by_strategy"]["TIGHT"]
+    wide = diag["by_strategy"]["WIDE"]
+
+    assert tight["mean_r"] > wide["mean_r"]        # TIGHT wins on gross R
+    assert round(tight["cost_r"], 2) == 1.67       # ...and pays 1.67R to trade
+    assert round(wide["cost_r"], 2) == 0.25
+    assert tight["net_r"] < wide["net_r"]          # the ranking flips net of cost
+    assert tight["net_r"] < 0 < wide["net_r"]

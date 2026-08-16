@@ -198,11 +198,21 @@ def diagnose(
     traded = [o for o in outcomes if o.status != Status.INVALIDATED.value]
     graded = [o for o in traded if Status(o.status).is_graded]
 
-    risks = [r for r in (_risk_pct(o) for o in traded) if r > 0]
-    median_1r = statistics.median(risks) if risks else 0.0
-    # Cost expressed in the strategies' own risk unit: with 1R often well under
-    # 1%, a 20bps round trip is a material fraction of the target.
-    cost_r = (round_trip_bps / 100.0) / median_1r if median_1r else 0.0
+    def _cost_r(rows: list) -> tuple[float, float]:
+        """Return ``(median 1R %, cost in R)`` for one population.
+
+        Cost has to be computed from *that* population's own risk unit. A
+        strategy stopping 0.12% from entry pays 1.67R in fees on a 20bps round
+        trip, while one stopping 0.80% away pays 0.25R — charging both the
+        portfolio median inverts their ranking outright, which is exactly what
+        it did: the strategy reported as the only net-positive one was in fact
+        paying fourteen times its own risk unit more than the report showed.
+        """
+        risks = [r for r in (_risk_pct(o) for o in rows) if r > 0]
+        median = statistics.median(risks) if risks else 0.0
+        return median, ((round_trip_bps / 100.0) / median if median else 0.0)
+
+    median_1r, cost_r = _cost_r(traded)
 
     overall = _summarise([r_multiple_of(o) for o in traded], cost_r)
 
@@ -210,7 +220,9 @@ def diagnose(
     for name in sorted({o.strategy for o in traded}):
         rows = [o for o in traded if o.strategy == name]
         graded_rows = [o for o in rows if Status(o.status).is_graded]
-        summary = _summarise([r_multiple_of(o) for o in rows], cost_r)
+        strat_1r, strat_cost_r = _cost_r(rows)
+        summary = _summarise([r_multiple_of(o) for o in rows], strat_cost_r)
+        summary["cost_r"] = round(strat_cost_r, 3)
 
         wins = sum(1 for o in graded_rows if Status(o.status).is_win)
         wr = (wins / len(graded_rows) * 100) if graded_rows else 0.0
@@ -228,13 +240,12 @@ def diagnose(
             if sd > 0:
                 wr_z = round((wins - len(graded_rows) * p) / sd, 2)
 
-        strat_risks = [r for r in (_risk_pct(o) for o in rows) if r > 0]
         summary.update({
             "graded": len(graded_rows),
             "win_rate": round(wr, 1),
             "no_edge_win_rate": round(no_edge, 1) if no_edge is not None else None,
             "win_rate_z": wr_z,
-            "median_1r_pct": round(statistics.median(strat_risks), 3) if strat_risks else 0.0,
+            "median_1r_pct": round(strat_1r, 3),
         })
         by_strategy[name] = summary
 
@@ -320,7 +331,7 @@ def render_digest(diag: dict) -> str:
         lines.append(
             f"{'':<9} meanR={b['mean_r']:+.3f} sd={b['sd_r']:.2f} t={b['t']:+.2f} "
             f"ci95=[{b['ci95'][0]:+.3f},{b['ci95'][1]:+.3f}] 1R={b['median_1r_pct']:.2f}% "
-            f"netR={b['net_r']:+.3f} => {b['verdict']}"
+            f"cost={b.get('cost_r', 0):.2f}R netR={b['net_r']:+.3f} => {b['verdict']}"
         )
     if diag["status_counts"]:
         lines.append(

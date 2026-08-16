@@ -69,6 +69,8 @@ class Screener:
         risk: Optional[RiskSettings] = None,
         universe_provider=None,
         min_rr: float = 1.5,
+        round_trip_bps: float = 20.0,
+        max_cost_r: float = 0.5,
         learning=None,
         macro_provider=None,
     ) -> None:
@@ -88,6 +90,8 @@ class Screener:
         self._risk = risk or RiskSettings()
         self._universe_provider = universe_provider
         self._min_rr = min_rr
+        self._round_trip_bps = round_trip_bps
+        self._max_cost_r = max_cost_r
         self._learning = learning
 
     @property
@@ -343,6 +347,33 @@ class Screener:
 
         return False
 
+    def _too_expensive(self, candidate: SignalCandidate) -> bool:
+        """Reject a setup whose stop is too tight to survive its own costs.
+
+        Reward:risk says nothing about whether a trade is *affordable*. A stop
+        0.12% from entry is a perfectly good 1:3 on paper, but a 20bps round
+        trip is 1.67R of that risk unit — the position is a guaranteed loser
+        before price moves at all, and no win rate can rescue it.
+
+        This is the gate the R:R check cannot be: both are ratios, but this one
+        compares the risk unit to a fixed cost in percent, so it bites exactly
+        where volatility is too low for the stop the detector chose.
+        """
+        entry, sl = candidate.entry_price, candidate.sl
+        if entry <= 0:
+            return False
+        risk_pct = abs(entry - sl) / entry * 100
+        if risk_pct <= 0:
+            return False
+        cost_r = (self._round_trip_bps / 100.0) / risk_pct
+        if cost_r > self._max_cost_r:
+            log.debug(
+                "Skip %s %s: 1R is %.3f%% so costs eat %.2fR (limit %.2f)",
+                candidate.symbol, candidate.direction, risk_pct, cost_r, self._max_cost_r,
+            )
+            return True
+        return False
+
     def _apply_bounce_guard(self, candidate: SignalCandidate, ctx: MarketContext) -> bool:
         """Risk-scale a SHORT facing bounce/squeeze risk. Returns True to drop.
 
@@ -463,6 +494,8 @@ class Screener:
             rr = abs(candidate.tp - candidate.entry_price) / max(abs(candidate.entry_price - candidate.sl), 1e-9)
             if rr < self._min_rr:
                 log.debug("Skip %s %s: R:R %.2f < %.1f", candidate.symbol, candidate.direction, rr, self._min_rr)
+                continue
+            if self._too_expensive(candidate):
                 continue
             tf_candles = self._fetch_tf_candles(symbol) if self._validator is not None else {}
             self._apply_validator(candidate, context, candles, tf_candles)

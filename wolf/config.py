@@ -566,6 +566,14 @@ class Settings:
     # can be a third of the risk unit.
     round_trip_cost_bps: float = 20.0
 
+    # Refuse a signal whose stop sits so close that the round trip eats more
+    # than this fraction of 1R. A stop 0.12% from entry pays 1.67R in fees at
+    # 20bps — the trade is a guaranteed loser before it starts, however good
+    # the setup or the reward:risk ratio looks. Measured, not theoretical: a
+    # 24h sample had the two tightest-stop strategies at cost 1.05R and 1.67R
+    # while the widest ran 0.25R, and only the wide ones survived costs.
+    max_cost_r: float = 0.5
+
     # API server
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -771,6 +779,7 @@ class Settings:
             tracker_interval_min=_env_int("TRACKER_INTERVAL_MIN", 5),
             stats_report_hours=_env_int("STATS_REPORT_HOURS", 24),
             round_trip_cost_bps=_env_float("ROUND_TRIP_COST_BPS", 20.0),
+            max_cost_r=_env_float("MAX_COST_R", 0.5),
             api_host=_env_str("API_HOST", "0.0.0.0"),
             api_port=_env_int("API_PORT", 8000),
             api_key=_env_str("API_KEY"),

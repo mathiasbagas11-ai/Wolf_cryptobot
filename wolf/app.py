@@ -269,6 +269,8 @@ def build_application(settings: Settings | None = None) -> Application:
         risk=settings.risk,
         universe_provider=universe_provider,
         min_rr=settings.min_signal_rr,
+        round_trip_bps=settings.round_trip_cost_bps,
+        max_cost_r=settings.max_cost_r,
         learning=learning,
     )
     backtest = BacktestEngine(

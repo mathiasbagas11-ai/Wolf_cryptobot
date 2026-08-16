@@ -647,3 +647,51 @@ def screener_for_long_agreement(fake_client, store, tracker_settings):
         universe=["SOLUSDT"],
     )
     return screener.scan_symbol("SOLUSDT")
+
+
+# ── cost-aware stop gate ─────────────────────────────────────────────────
+def _candidate(entry: float, sl: float, tp: float):
+    from wolf.detectors.base import SignalCandidate
+
+    return SignalCandidate(
+        symbol="BTCUSDT", signal_type="SCREENER", direction="LONG",
+        entry_price=entry, tp=tp, sl=sl, score=90, strategy="MOMENTUM",
+    )
+
+
+def _screener(store, fake_client, **kw):
+    from wolf.config import TrackerSettings
+    from wolf.screener import Screener
+    from wolf.tracker import Tracker
+
+    return Screener(fake_client, Tracker(store, fake_client, TrackerSettings()), [], **kw)
+
+
+def test_rejects_a_stop_too_tight_to_survive_costs(store, fake_client):
+    """A 1:3 on paper is still a guaranteed loser if fees exceed its risk unit.
+
+    Entry 100 / stop 99.88 is 0.12% of price, so a 20bps round trip costs 1.67R
+    — the trade loses before price moves. R:R cannot catch this: it is a ratio,
+    and this compares the risk unit to a cost in percent.
+    """
+    sc = _screener(store, fake_client, round_trip_bps=20.0, max_cost_r=0.5)
+    assert sc._too_expensive(_candidate(100.0, 99.88, 100.36)) is True
+
+
+def test_accepts_a_stop_wide_enough_to_absorb_costs(store, fake_client):
+    # 0.80% stop -> costs are 0.25R, comfortably inside the limit.
+    sc = _screener(store, fake_client, round_trip_bps=20.0, max_cost_r=0.5)
+    assert sc._too_expensive(_candidate(100.0, 99.20, 102.40)) is False
+
+
+def test_cost_gate_scales_with_the_configured_fee(store, fake_client):
+    """A cheaper venue makes the same setup affordable."""
+    tight = _candidate(100.0, 99.70, 100.90)          # 0.30% stop
+    assert _screener(store, fake_client, round_trip_bps=20.0)._too_expensive(tight) is True
+    assert _screener(store, fake_client, round_trip_bps=5.0)._too_expensive(tight) is False
+
+
+def test_cost_gate_ignores_degenerate_geometry(store, fake_client):
+    sc = _screener(store, fake_client)
+    assert sc._too_expensive(_candidate(0.0, 0.0, 0.0)) is False
+    assert sc._too_expensive(_candidate(100.0, 100.0, 103.0)) is False
