@@ -61,6 +61,45 @@ def _env_csv(name: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _resolve_state_dir() -> str:
+    """Where signal history lives, preferring a mounted volume.
+
+    An explicit ``STATE_DIR`` always wins. Otherwise, when the platform reports
+    an attached volume (Railway exports ``RAILWAY_VOLUME_MOUNT_PATH``), state
+    goes there instead of into the container filesystem — which is discarded on
+    every redeploy, silently resetting the outcome history the auto-pause and
+    learning gates are supposed to be judging.
+
+    Getting this wrong is invisible: the bot starts fine, reports zero
+    outcomes, and simply never accumulates the sample it needs.
+    """
+    explicit = os.environ.get("STATE_DIR", "").strip()
+    if explicit:
+        return explicit
+    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+    if mount:
+        return os.path.join(mount, "state_data")
+    return "state_data"
+
+
+def state_is_persistent(state_dir: str) -> bool:
+    """Whether ``state_dir`` looks like it survives a redeploy.
+
+    A relative path always resolves inside the container. An absolute path is
+    only durable if it sits under the mounted volume — an absolute path
+    elsewhere in the container filesystem is just as ephemeral, which is the
+    case a bare "is it absolute?" check quietly passes.
+    """
+    if not os.path.isabs(state_dir):
+        return False
+    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+    if mount:
+        return os.path.abspath(state_dir).startswith(os.path.abspath(mount))
+    # No platform hint: an absolute path is the operator's explicit choice, so
+    # take it at face value rather than crying wolf on a real bind mount.
+    return True
+
+
 def _env_float_csv(name: str, default: tuple[float, ...]) -> tuple[float, ...]:
     """Parse ``"0.5,0.3,0.2"`` into floats; any bad entry keeps the default."""
     parts = _env_csv(name)
@@ -770,7 +809,7 @@ class Settings:
         )
         exchanges = _env_csv("EXCHANGES") or ("binance", "okx", "bybit", "gate")
         return cls(
-            state_dir=_env_str("STATE_DIR", "state_data"),
+            state_dir=_resolve_state_dir(),
             paper_start_balance=_env_float("PAPER_START_BALANCE", 1000.0),
             paper_risk_pct=_env_float("PAPER_RISK_PCT", 1.0),
             http_timeout=_env_float("HTTP_TIMEOUT", 10.0),

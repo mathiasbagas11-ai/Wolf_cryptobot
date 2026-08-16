@@ -215,7 +215,8 @@ class TelegramNotifier:
             f"🪙 Universe: {info.get('universe', 0)} pairs\n"
             f"⏱ Scan every {info.get('scan_min', '?')}m · Track every {info.get('track_min', '?')}m\n"
             f"🛡 Risk gates: {info.get('risk_gates', '—')}\n"
-            f"🧠 AI debate: {info.get('ai_mode', 'OFF')}\n"
+            f"🧠 AI debate: {esc(str(info.get('ai_mode', 'OFF')))}\n"
+            f"💾 State: {esc(str(info.get('state', '—')))}\n"
             f"{self._stamp()}"
         )
         self.send(text, self._settings.route_system())

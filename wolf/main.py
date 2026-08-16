@@ -12,8 +12,8 @@ import logging
 import uvicorn
 
 from wolf.api import create_app
-from wolf.app import build_application
-from wolf.config import Settings
+from wolf.app import ai_status, build_application
+from wolf.config import Settings, state_is_persistent
 from wolf.logging_setup import setup_logging
 from wolf.notify.poller import TelegramPoller
 from wolf.scheduler import build_scheduler
@@ -33,6 +33,34 @@ def _risk_gates_label(risk) -> str:
         f"autopause<{risk.autopause_min_expectancy_r:+.2f}R/{risk.autopause_min_trades}({ap_mode})"
     )
     return " · ".join(parts)
+
+
+def _ai_mode_label(status: dict) -> str:
+    """AI layer status as it actually is, not as it is configured.
+
+    ``enabled`` is intent; ``available`` is whether a verdict can be produced.
+    When they disagree every signal comes back ABSTAIN, which reads in the
+    stats exactly like an AI that looked and had no opinion — so the startup
+    card has to say which roles are dead, by name.
+    """
+    if not status.get("enabled"):
+        return "OFF"
+    if status.get("available"):
+        return "MONITOR"
+    degraded = ", ".join(status.get("degraded_roles") or []) or "arbiter"
+    return f"⚠️ ENABLED BUT UNAVAILABLE — no key/model for: {degraded}"
+
+
+def _state_label(application) -> str:
+    """Where history lives and whether it survives the next redeploy."""
+    store = application.store
+    outcomes = len(store.read("signal_outcomes", default=[]) or [])
+    if state_is_persistent(application.settings.state_dir):
+        return f"{store.base_dir} · {outcomes} outcomes (volume)"
+    return (
+        f"⚠️ {store.base_dir} · {outcomes} outcomes — EPHEMERAL, "
+        "wiped on every redeploy. Attach a volume."
+    )
 
 
 def main() -> None:
@@ -75,8 +103,12 @@ def main() -> None:
         "scan_min": settings.screener_interval_min,
         "track_min": settings.tracker_interval_min,
         "ai": settings.ai.enabled,
-        "ai_mode": "MONITOR" if settings.ai.enabled else "OFF",
+        # Reality, not intent: an enabled layer whose arbiter has no usable
+        # client abstains on every signal while the card still reads MONITOR.
+        # That is how a run of 29/29 ABSTAIN went unnoticed.
+        "ai_mode": _ai_mode_label(ai_status(application)),
         "risk_gates": _risk_gates_label(settings.risk),
+        "state": _state_label(application),
     })
 
     # Run an initial tracking pass so restarts resolve overdue signals promptly.
