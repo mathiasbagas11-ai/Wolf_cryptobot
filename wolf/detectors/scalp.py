@@ -30,6 +30,7 @@ from wolf.models import Candle
 
 class ScalpDetector(Detector):
     name = "SCALP"
+    timeframe = "15m"
     min_candles = 40
 
     def __init__(
@@ -168,6 +169,7 @@ class ScalpDetector(Detector):
             strategy=self.name,
             reasons=reasons,
             confluence_level="HIGH" if score >= 80 else "MEDIUM",
+            timeframe=self.timeframe,
             entry_mode="MOMENTUM_NOW",
             tps=ladder,
         )

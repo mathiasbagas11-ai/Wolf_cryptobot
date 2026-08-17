@@ -35,6 +35,7 @@ from wolf.models import Candle
 
 class PrePumpDetector(Detector):
     name = "PREPUMP"
+    timeframe = "1h"
     min_candles = 60
 
     def __init__(
@@ -223,6 +224,7 @@ class PrePumpDetector(Detector):
             strategy=self.name,
             reasons=reasons,
             confluence_level="HIGH" if score >= 85 else "MEDIUM",
+            timeframe=self.timeframe,
             entry_mode="MOMENTUM_NOW",
             tps=ladder,
         )

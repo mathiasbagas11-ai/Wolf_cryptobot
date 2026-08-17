@@ -384,23 +384,32 @@ class TrackerSettings:
     """Signal-tracking behaviour knobs."""
 
     # Per signal-type timeout (hours) before a pending signal expires.
-    timeout_screener_h: int = 24
-    timeout_prepump_h: int = 12
-    timeout_predump_h: int = 12
-    timeout_scalp_h: int = 2
-    timeout_swing_h: int = 24
-    timeout_trap_h: int = 4  # liquidity-trap reversals resolve fast
-    timeout_news_h: int = 4  # news-driven signals expire quickly
+    # A timeout has to be read against the timeframe the setup was found on:
+    # the targets are ATR multiples of that series, so the time it plausibly
+    # needs scales with it. Roughly 40 bars of the detector's own interval —
+    # long enough to reach the 3R rung, short enough that a dead trade frees
+    # its slot. Capping a 4h swing at 24h (six bars) is what turned every
+    # signal into a scalp no matter which detector produced it.
+    timeout_screener_h: int = 48   # MOMENTUM — 1h candles
+    timeout_prepump_h: int = 48    # 1h candles
+    timeout_predump_h: int = 48    # 1h candles
+    timeout_scalp_h: int = 10      # 15m candles
+    timeout_swing_h: int = 168     # 4h candles — a real swing runs for days
+    timeout_trap_h: int = 4        # 15m — liquidity-trap reversals resolve fast
+    timeout_news_h: int = 4        # news-driven signals expire quickly
     # Per-strategy dedup windows (minutes).  Tighter for fast setups (SCALP
     # expires in 2 h so there is no point blocking a fresh sweep for 30 min),
     # wider for slow setups (SWING holds 24 h, so 60 min avoids noise re-entries).
     # ``dedup_minutes`` is kept as the legacy fallback for unknown strategy types.
     dedup_minutes: int = 30       # legacy / fallback
     dedup_scalp_min: int = 10
-    dedup_prepump_min: int = 20
-    dedup_predump_min: int = 20
-    dedup_screener_min: int = 30
-    dedup_swing_min: int = 60
+    # Dedup windows follow the same logic: roughly one bar of the detector's
+    # own timeframe, so the same setup is not re-emitted several times inside
+    # a single candle it has not finished forming.
+    dedup_prepump_min: int = 60      # 1h candles
+    dedup_predump_min: int = 60      # 1h candles
+    dedup_screener_min: int = 60     # 1h candles
+    dedup_swing_min: int = 240       # 4h candles
 
     # Keep at most this many resolved outcomes on disk. At ~65 outcomes/day the
     # old 500 cap silently discarded the oldest records after roughly a week,
@@ -737,17 +746,25 @@ class Settings:
             candle_limit=_env_int("BACKTEST_CANDLE_LIMIT", 250),
             warm_start=_env_bool("BACKTEST_WARM_START", True),
         )
-        dedup_default = _env_int("TRACKER_DEDUP_MINUTES", 30)
+        # Defaults mirror the dataclass, which ties each window to the
+        # timeframe its detector reads — see TrackerSettings.
+        _t = TrackerSettings()
+        dedup_default = _env_int("TRACKER_DEDUP_MINUTES", _t.dedup_minutes)
         tracker = TrackerSettings(
             dedup_minutes=dedup_default,
-            dedup_scalp_min=_env_int("TRACKER_DEDUP_SCALP_MIN", 10),
-            dedup_prepump_min=_env_int("TRACKER_DEDUP_PREPUMP_MIN", 20),
-            dedup_predump_min=_env_int("TRACKER_DEDUP_PREDUMP_MIN", 20),
-            dedup_screener_min=_env_int("TRACKER_DEDUP_SCREENER_MIN", dedup_default),
-            dedup_swing_min=_env_int("TRACKER_DEDUP_SWING_MIN", 60),
-            max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", 5000),
-            tp1_banks_win=_env_bool("TRACKER_TP1_BANKS_WIN", True),
-            expiry_flat_r=_env_float("TRACKER_EXPIRY_FLAT_R", 0.25),
+            dedup_scalp_min=_env_int("TRACKER_DEDUP_SCALP_MIN", _t.dedup_scalp_min),
+            dedup_prepump_min=_env_int("TRACKER_DEDUP_PREPUMP_MIN", _t.dedup_prepump_min),
+            dedup_predump_min=_env_int("TRACKER_DEDUP_PREDUMP_MIN", _t.dedup_predump_min),
+            dedup_screener_min=_env_int("TRACKER_DEDUP_SCREENER_MIN", _t.dedup_screener_min),
+            dedup_swing_min=_env_int("TRACKER_DEDUP_SWING_MIN", _t.dedup_swing_min),
+            timeout_screener_h=_env_int("TRACKER_TIMEOUT_SCREENER_H", _t.timeout_screener_h),
+            timeout_prepump_h=_env_int("TRACKER_TIMEOUT_PREPUMP_H", _t.timeout_prepump_h),
+            timeout_predump_h=_env_int("TRACKER_TIMEOUT_PREDUMP_H", _t.timeout_predump_h),
+            timeout_scalp_h=_env_int("TRACKER_TIMEOUT_SCALP_H", _t.timeout_scalp_h),
+            timeout_swing_h=_env_int("TRACKER_TIMEOUT_SWING_H", _t.timeout_swing_h),
+            max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", _t.max_outcomes),
+            tp1_banks_win=_env_bool("TRACKER_TP1_BANKS_WIN", _t.tp1_banks_win),
+            expiry_flat_r=_env_float("TRACKER_EXPIRY_FLAT_R", _t.expiry_flat_r),
         )
         ladder = LadderSettings(
             rr_target=_env_float("RISK_RR_TARGET", 3.0),

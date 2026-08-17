@@ -129,14 +129,62 @@ class Screener:
             log.exception("Feature pre-computation failed")
             return None
 
+    def required_timeframes(self) -> list[str]:
+        """Every interval the configured detectors read, deduplicated."""
+        seen: list[str] = []
+        for d in self._detectors:
+            tf = getattr(d, "timeframe", self._interval)
+            if tf not in seen:
+                seen.append(tf)
+        return seen or [self._interval]
+
+    def _fetch_series(self, symbol: str) -> dict:
+        """Fetch one candle series per timeframe the detectors need.
+
+        A detector's timeframe decides the size of everything downstream: the
+        stop is an ATR multiple, so a 15m setup risks a fraction of a percent
+        and resolves within hours, while the identical logic on 4h candles
+        risks several percent and takes days. Running every detector on one
+        interval is what made every signal a scalp regardless of its name.
+        """
+        series: dict[str, list] = {}
+        for tf in self.required_timeframes():
+            try:
+                candles = self._client.get_klines(symbol, tf, self._candle_limit)
+            except Exception:
+                log.exception("Kline fetch failed for %s %s", symbol, tf)
+                continue
+            if candles:
+                series[tf] = candles
+        return series
+
     def _best_candidate(
-        self, symbol: str, candles, context, features: Optional[CandleFeatures] = None
+        self, symbol: str, series, context, features: Optional[CandleFeatures] = None
     ) -> Optional[SignalCandidate]:
-        """Evaluate all detectors; apply conflict check and confluence bonus."""
+        """Evaluate all detectors; apply conflict check and confluence bonus.
+
+        ``series`` maps timeframe -> candles. A bare list is accepted too and
+        treated as the screener's own interval, so single-timeframe callers
+        (``scan_symbol``, tests) keep working unchanged.
+        """
+        if not isinstance(series, dict):
+            series = {self._interval: series}
+        # Features are cached per timeframe: they are derived from the candles,
+        # so one cache per series, not one per symbol.
+        feature_cache: dict[str, Optional[CandleFeatures]] = {}
+        if features is not None:
+            feature_cache[self._interval] = features
+
         all_candidates: list[SignalCandidate] = []
         for detector in self._detectors:
+            tf = getattr(detector, "timeframe", self._interval)
+            candles = series.get(tf)
+            if not candles:
+                continue
+            if tf not in feature_cache:
+                feature_cache[tf] = self._build_features(candles)
             try:
-                candidate = detector.evaluate(symbol, candles, context, features)
+                candidate = detector.evaluate(symbol, candles, context, feature_cache[tf])
             except (ValueError, KeyError, TypeError, IndexError):
                 log.exception("Detector %s crashed on %s", detector.name, symbol)
                 continue
@@ -175,11 +223,10 @@ class Screener:
 
     def scan_symbol(self, symbol: str) -> Optional[SignalCandidate]:
         """Return the highest-scoring candidate for ``symbol`` this cycle."""
-        candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
-        if not candles:
+        series = self._fetch_series(symbol)
+        if not series:
             return None
-        features = self._build_features(candles)
-        return self._best_candidate(symbol, candles, self._build_context(symbol), features)
+        return self._best_candidate(symbol, series, self._build_context(symbol))
 
     def _fetch_tf_candles(self, symbol: str) -> dict:
         """Fetch higher-TF candles for AI multi-timeframe context."""
@@ -475,12 +522,12 @@ class Screener:
         weak = self._weak_strategies()
         active_by_strategy, active_by_direction = self._active_counts()
         for symbol in self.current_universe():
-            candles = self._client.get_klines(symbol, self._interval, self._candle_limit)
-            if not candles:
+            series = self._fetch_series(symbol)
+            candles = series.get(self._interval) or next(iter(series.values()), [])
+            if not series:
                 continue
-            features = self._build_features(candles)
             context = self._build_context(symbol)
-            candidate = self._best_candidate(symbol, candles, context, features)
+            candidate = self._best_candidate(symbol, series, context)
             if not candidate:
                 continue
             if not self._apply_learning(candidate):
@@ -510,6 +557,7 @@ class Screener:
                 confluence_level=candidate.confluence_level,
                 reasons=candidate.reasons,
                 strategy=candidate.strategy,
+                timeframe=candidate.timeframe,
                 entry_mode=candidate.entry_mode,
                 tps=candidate.tps,
                 ai_verdict=candidate.ai_verdict,

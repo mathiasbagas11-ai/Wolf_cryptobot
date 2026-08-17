@@ -44,6 +44,7 @@ from wolf.models import Candle
 
 class LiquidityTrapDetector(Detector):
     name = "TRAP"
+    timeframe = "15m"
     min_candles = 60
 
     def __init__(
@@ -165,6 +166,7 @@ class LiquidityTrapDetector(Detector):
             strategy=self.name,
             reasons=reasons,
             confluence_level="HIGH",  # TRAP only ever fires at high conviction
+            timeframe=self.timeframe,
             entry_mode="MOMENTUM_NOW",
             tps=ladder,
         )

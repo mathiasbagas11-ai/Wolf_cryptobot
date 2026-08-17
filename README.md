@@ -364,6 +364,39 @@ hint, not a verdict.
 
 ---
 
+## Timeframes — why a signal is short or long
+
+Every distance in a setup is an ATR multiple of the series it was found on, so
+the candle interval — not the ladder — decides whether a signal is a scalp or a
+swing. Running every detector on 15m is what made every signal short-lived
+regardless of its name:
+
+| Interval | 1R (stop) | TP1 / TP2 / TP3 | Fees as R | Held for |
+|---|---|---|---|---|
+| 15m | ~0.33% | 0.3% / 0.7% / 1.0% | 0.61R | hours |
+| 1h | ~0.68% | 0.7% / 1.4% / 2.0% | 0.30R | 1-2 days |
+| 4h | ~1.42% | 1.4% / 2.8% / 4.3% | 0.14R | days |
+
+Each detector therefore declares its own `timeframe`, and the screener fetches
+one candle series per interval:
+
+| Detector | Interval | Timeout | Character |
+|---|---|---|---|
+| `SCALP` / `TRAP` | 15m | 10h / 4h | intraday reversals — fast by design |
+| `MOMENTUM` / `PREPUMP` / `PREDUMP` | 1h | 48h | 1-2 day moves |
+| `SWING` | 4h | 7 days | a real swing, held for days |
+
+Timeouts and dedup windows scale with the interval (~40 bars and ~1 bar of the
+detector's own series). Capping a 4h swing at 24h is six bars — not enough for
+the third rung to be reachable, which quietly turned it into a scalp with a
+swing's name on it. The wider stop is also what makes the trade affordable:
+fees fall from 0.61R on 15m to 0.14R on 4h.
+
+Every signal card states its interval and expected hold, so a 4h entry is not
+mistaken for something to close the same afternoon.
+
+---
+
 ## Risk geometry — 1:3
 
 One setting decides the ratio for every strategy. Detectors choose only where

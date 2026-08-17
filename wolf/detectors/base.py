@@ -48,6 +48,9 @@ class SignalCandidate:
     confluence_level: str = ""
     entry_mode: str = "RETEST_WAIT"
     tps: Optional[list[dict]] = None
+    #: Interval the setup was read on — carried through so the signal card can
+    #: say how long the trade is meant to be held.
+    timeframe: str = "15m"
     # Populated by Screener after the AI debate runs (monitor mode).
     ai_verdict: str = ""
     ai_confidence: int = 0
@@ -72,6 +75,15 @@ class Detector(ABC):
 
     #: Minimum number of candles required to evaluate.
     min_candles: int = 30
+
+    #: Candle interval this detector reads. It sets the whole character of the
+    #: signal, because every distance in the setup is derived from ATR on this
+    #: series: a 15m ATR is a fraction of a percent, so a "1:3" trade off it
+    #: targets well under 1% and resolves in minutes. The same logic on 4h
+    #: candles produces a stop and targets an order of magnitude wider, which
+    #: is what a position held for days actually needs. Timeouts follow from
+    #: this too — see TrackerSettings.
+    timeframe: str = "15m"
 
     @abstractmethod
     def evaluate(

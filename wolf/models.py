@@ -183,6 +183,9 @@ class Signal:
     confluence_level: str = ""
     reasons: list[str] = field(default_factory=list)
     strategy: str = "CONFIRMED"
+    #: Candle interval the setup was read on. Determines how wide the targets
+    #: are and how long the trade is meant to be held.
+    timeframe: str = "15m"
     entry_mode: str = EntryMode.RETEST_WAIT.value
     tp_ladder: list[dict] = field(default_factory=list)
     timeout_hours: int = 24

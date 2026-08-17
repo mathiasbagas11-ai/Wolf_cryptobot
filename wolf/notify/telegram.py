@@ -32,6 +32,25 @@ log = logging.getLogger("wolf.telegram")
 HIGH_CONVICTION_TYPES = frozenset({"TRAP"})
 
 
+#: How long a setup on each interval is meant to be held. Stated on the card
+#: because the same "1:3" reads completely differently on 15m and 4h: the
+#: targets are ATR multiples of that series, so a 4h signal is a multi-day
+#: position while a 15m one is done within the session.
+_HORIZON = {
+    "15m": "intraday",
+    "30m": "intraday",
+    "1h": "1-2 days",
+    "4h": "swing, days",
+    "1d": "position, weeks",
+}
+
+
+def _horizon(s: Signal) -> str:
+    tf = (s.timeframe or "15m").lower()
+    label = _HORIZON.get(tf)
+    return f"{tf} · {label}" if label else tf
+
+
 def _pct(price: float, entry: float, is_long: bool) -> float:
     if not entry:
         return 0.0
@@ -361,7 +380,7 @@ class TelegramNotifier:
             + "\n".join(tp_lines) + "\n"
             f"🛑 SL     <code>{fmt_price(s.sl)}</code>  ({sl_pct:+.2f}%)\n"
             f"📊 Score {s.score}/100 · {esc(s.confluence_level or '—')} · R:R {rr:.1f}\n"
-            f"⚡ {esc(s.strategy)} · {esc(s.entry_mode)}\n{DIVIDER}\n"
+            f"⚡ {esc(s.strategy)} · {esc(s.entry_mode)} · {esc(_horizon(s))}\n{DIVIDER}\n"
             f"{self._plan_block(s)}"
             f"{self._risk_block(s)}"
             f"{self._ai_block(s)}"

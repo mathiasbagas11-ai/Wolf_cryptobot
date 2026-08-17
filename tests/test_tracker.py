@@ -353,9 +353,10 @@ def test_retest_never_touched_invalidates(store, fake_client, tracker_settings):
     tracker.record_signal(
         "ADAUSDT", "SCALP", "LONG", 90, tp=100, sl=85, entry_mode="RETEST_WAIT"
     )
-    # Backdate creation beyond the SCALP timeout (2h) so it expires.
+    # Backdate past the SCALP timeout so it expires. SCALP reads 15m candles,
+    # so its timeout is the shortest of the set.
     pending = store.read("pending_signals")
-    pending[0]["created_at"] = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+    pending[0]["created_at"] = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
     store.write("pending_signals", pending)
 
     now_ms = int(time.time() * 1000)
@@ -606,7 +607,7 @@ def test_expiry_inside_dead_band_carries_no_verdict(store, fake_client, tracker_
     tracker = Tracker(store, fake_client, tracker_settings)
     tracker.record_signal("SOLUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
                           entry_mode="MOMENTUM_NOW")
-    _age_pending(store, 30)  # past the 24h SCREENER timeout
+    _age_pending(store, 60)  # past the SCREENER timeout (1h candles -> 48h)
     now_ms = int(time.time() * 1000)
     fake_client.klines["SOLUSDT"] = _candles_after(now_ms - 31 * 3600_000, [(100, 101, 99, 100)])
     fake_client.prices["SOLUSDT"] = 100.1  # +0.1% on 5% risk = 0.02R, pure noise
@@ -623,7 +624,7 @@ def test_expiry_beyond_dead_band_still_grades(store, fake_client, tracker_settin
     tracker = Tracker(store, fake_client, tracker_settings)
     tracker.record_signal("BNBUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
                           entry_mode="MOMENTUM_NOW")
-    _age_pending(store, 30)
+    _age_pending(store, 60)
     now_ms = int(time.time() * 1000)
     fake_client.klines["BNBUSDT"] = _candles_after(now_ms - 31 * 3600_000, [(100, 101, 99, 100)])
     fake_client.prices["BNBUSDT"] = 102.0  # +2% on 5% risk = 0.4R

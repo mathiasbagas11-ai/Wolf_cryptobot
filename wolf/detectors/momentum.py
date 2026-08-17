@@ -32,6 +32,7 @@ from wolf.models import Candle
 
 class MomentumBreakoutDetector(Detector):
     name = "MOMENTUM"
+    timeframe = "1h"
     min_candles = 60
 
     def __init__(
@@ -203,6 +204,7 @@ class MomentumBreakoutDetector(Detector):
             strategy=self.name,
             reasons=reasons,
             confluence_level="HIGH" if score >= 85 else "MEDIUM",
+            timeframe=self.timeframe,
             entry_mode="MOMENTUM_NOW",
             tps=tps,
         )

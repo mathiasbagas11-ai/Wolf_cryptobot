@@ -695,3 +695,95 @@ def test_cost_gate_ignores_degenerate_geometry(store, fake_client):
     sc = _screener(store, fake_client)
     assert sc._too_expensive(_candidate(0.0, 0.0, 0.0)) is False
     assert sc._too_expensive(_candidate(100.0, 100.0, 103.0)) is False
+
+
+# ── per-detector timeframes ──────────────────────────────────────────────
+class _TFDetector(Detector):
+    """Records which candle series it was handed."""
+
+    min_candles = 1
+
+    def __init__(self, name: str, timeframe: str) -> None:
+        self._det_name = name
+        self.timeframe = timeframe
+        self.seen: list = []
+
+    @property
+    def name(self) -> str:  # type: ignore[override]
+        return self._det_name
+
+    def evaluate(self, symbol, candles, context=None, features=None):
+        self.seen = list(candles)
+        entry = candles[-1].close
+        return SignalCandidate(
+            symbol=symbol, signal_type=self._det_name, direction="LONG",
+            entry_price=entry, tp=entry * 1.09, sl=entry * 0.97,
+            score=90, strategy=self._det_name, timeframe=self.timeframe,
+        )
+
+
+def _tf_candles(tf: str, price: float) -> list[Candle]:
+    return [
+        Candle(time=i * 900_000, open=price, high=price + 1, low=price - 1,
+               close=price, volume=100.0)
+        for i in range(60)
+    ]
+
+
+class _TFClient:
+    """Serves a distinct series per interval so mix-ups are visible."""
+
+    def __init__(self) -> None:
+        self.requested: list[tuple[str, str]] = []
+        self.prices = {"15m": 100.0, "1h": 200.0, "4h": 400.0}
+
+    def get_klines(self, symbol, interval="15m", limit=100):
+        self.requested.append((symbol, interval))
+        return _tf_candles(interval, self.prices[interval])
+
+    def get_price(self, symbol):
+        return None
+
+
+def test_required_timeframes_dedupes_across_detectors():
+    sc = Screener(
+        _TFClient(), _FakeTracker({}),
+        [_TFDetector("A", "1h"), _TFDetector("B", "1h"), _TFDetector("C", "4h")],
+        universe=[],
+    )
+    assert sc.required_timeframes() == ["1h", "4h"]
+
+
+def test_each_detector_reads_its_own_timeframe(store, tracker_settings):
+    """The bug this prevents: a 4h swing scored off 15m candles.
+
+    Every distance in a setup is an ATR multiple of the series it was found on,
+    so handing a detector the wrong interval silently turns a multi-day swing
+    into a scalp with a swing's name on it.
+    """
+    client = _TFClient()
+    fast, slow = _TFDetector("FAST", "15m"), _TFDetector("SLOW", "4h")
+    sc = Screener(client, Tracker(store, client, tracker_settings), [fast, slow],
+                  universe=["BTCUSDT"], notifier=None)
+    sc.run_cycle()
+
+    assert {tf for _sym, tf in client.requested} == {"15m", "4h"}
+    assert fast.seen[-1].close == 100.0     # 15m series
+    assert slow.seen[-1].close == 400.0     # 4h series
+
+
+def test_signal_carries_the_timeframe_it_was_found_on(store, tracker_settings):
+    client = _TFClient()
+    tracker = Tracker(store, client, tracker_settings)
+    sc = Screener(client, tracker, [_TFDetector("SWING", "4h")],
+                  universe=["BTCUSDT"], notifier=None)
+    recorded = sc.run_cycle()
+    assert recorded and recorded[0].timeframe == "4h"
+
+
+def test_single_series_callers_still_work(store, fake_client, tracker_settings):
+    """A bare candle list keeps working — used by scan_symbol and older tests."""
+    det = _TFDetector("FAST", "15m")
+    sc = Screener(fake_client, Tracker(store, fake_client, tracker_settings), [det],
+                  universe=["BTCUSDT"])
+    assert sc._best_candidate("BTCUSDT", _tf_candles("15m", 50.0), None) is not None
