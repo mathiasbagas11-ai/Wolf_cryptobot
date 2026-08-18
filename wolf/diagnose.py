@@ -134,6 +134,44 @@ def _concurrency(outcomes: Iterable[Signal]) -> dict:
     }
 
 
+def _ladder_economics(traded: list) -> dict:
+    """How far the ladder actually runs, and what that demands of the win rate.
+
+    A reward:risk ratio describes the *last* rung. What decides whether the
+    system makes money is the average R of a winner, and with a front-loaded
+    scale-out plus a breakeven stop those are very different numbers: banking
+    50% at 1R and scratching the rest returns +0.5R, not the ladder's 1.7R
+    ceiling. Quoting the ceiling understates the required win rate by half.
+
+    So the breakeven win rate here is derived from realised wins and losses
+    rather than from the configured geometry. It answers "what would this have
+    needed", which is the only version that can be checked against the win rate
+    actually achieved.
+    """
+    wins = [r_multiple_of(o) for o in traded if r_multiple_of(o) > 0]
+    losses = [-r_multiple_of(o) for o in traded if r_multiple_of(o) < 0]
+    avg_win = statistics.fmean(wins) if wins else 0.0
+    avg_loss = statistics.fmean(losses) if losses else 0.0
+
+    # How deep into the ladder the winners got. A runner that never pays means
+    # the far rungs are decoration and the geometry should be re-cut.
+    filled: dict[int, int] = {}
+    for o in traded:
+        for level in (o.tps_hit or []):
+            filled[level] = filled.get(level, 0) + 1
+    n = len(traded)
+
+    breakeven_wr = (avg_loss / (avg_win + avg_loss) * 100) if (avg_win + avg_loss) else 0.0
+    return {
+        "avg_win_r": round(avg_win, 3),
+        "avg_loss_r": round(avg_loss, 3),
+        "breakeven_win_rate": round(breakeven_wr, 1),
+        "rung_fill_rate": {
+            f"tp{lvl}": round(filled.get(lvl, 0) / n * 100, 1) for lvl in (1, 2, 3)
+        } if n else {},
+    }
+
+
 def _summarise(rs: list[float], cost_r: float) -> dict:
     """Mean, spread and verdict for one population of R-multiples."""
     n = len(rs)
@@ -291,6 +329,7 @@ def diagnose(
             "cost_r": round(cost_r, 3),
         },
         "overall": overall,
+        "ladder": _ladder_economics(traded),
         "by_strategy": by_strategy,
         "status_counts": status_counts,
         "ai_verdicts": ai_verdicts,
@@ -332,6 +371,14 @@ def render_digest(diag: dict) -> str:
             f"{'':<9} meanR={b['mean_r']:+.3f} sd={b['sd_r']:.2f} t={b['t']:+.2f} "
             f"ci95=[{b['ci95'][0]:+.3f},{b['ci95'][1]:+.3f}] 1R={b['median_1r_pct']:.2f}% "
             f"cost={b.get('cost_r', 0):.2f}R netR={b['net_r']:+.3f} => {b['verdict']}"
+        )
+    lad = diag.get("ladder") or {}
+    if lad.get("avg_win_r") or lad.get("avg_loss_r"):
+        fill = lad.get("rung_fill_rate") or {}
+        lines.append(
+            f"ladder   avgWin={lad['avg_win_r']:+.2f}R avgLoss=-{lad['avg_loss_r']:.2f}R "
+            f"=> needs WR>{lad['breakeven_win_rate']:.1f}%  "
+            + " ".join(f"{k}={v:.0f}%" for k, v in fill.items())
         )
     if diag["status_counts"]:
         lines.append(

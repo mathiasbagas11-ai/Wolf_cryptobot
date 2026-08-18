@@ -338,17 +338,25 @@ class TelegramNotifier:
             return ""
         return f"🛡 Risk: {esc(' · '.join(flags))} (monitor)\n"
 
-    def _breakeven_note(self, win_rate: float) -> str:
-        """Show the win rate this ladder needs, next to the one achieved.
+    def _breakeven_note(self, stats: dict) -> str:
+        """Show the win rate actually needed, next to the one achieved.
 
-        A win rate means nothing without the geometry it was earned at. At the
-        default 1:3 ladder a full run banks ~1.7R after scaling out, so ~37% is
-        breakeven — below that the edge is negative no matter how good the
-        individual signals looked, and above it a "losing" 40% is profitable.
+        Derived from realised wins and losses when there are any, and only from
+        the configured geometry as a cold-start fallback. The two answers are
+        far apart: the ladder's ceiling assumes every winner runs to the last
+        rung, while a front-loaded scale-out plus a breakeven stop means the
+        typical winner banks about 0.5R. Quoting the ceiling (~37%) against a
+        reality that needs ~65% is the kind of comfortable arithmetic that makes
+        a losing system look nearly fine.
         """
-        needed = self._ladder.breakeven_win_rate
+        win_rate = stats.get("win_rate", 0)
+        needed = stats.get("breakeven_win_rate") or 0.0
+        source = "realised"
+        if not needed:
+            needed = self._ladder.breakeven_win_rate
+            source = "geometry"
         mark = "✅" if win_rate >= needed else "⚠️"
-        return f" ({mark} vs {needed:.0f}% needed)"
+        return f" ({mark} vs {needed:.0f}% needed, {source})"
 
     def _signal_card(self, s: Signal) -> str:
         is_long = s.is_long
@@ -471,7 +479,7 @@ class TelegramNotifier:
             f"📊 <b>{esc(title)}</b>\n{DIVIDER}",
             f"✅ Wins {stats.get('wins', 0)} · 🛑 Losses {stats.get('losses', 0)} "
             f"· 📈 Win rate {stats.get('win_rate', 0)}%"
-            + self._breakeven_note(stats.get("win_rate", 0))
+            + self._breakeven_note(stats)
             + ("" if stats.get("conclusive", True) else "  ⚠️ small sample"),
             # Expectancy leads in R: targets are ATR multiples, so a percentage
             # average is dominated by whichever volatile symbols happened to trade.

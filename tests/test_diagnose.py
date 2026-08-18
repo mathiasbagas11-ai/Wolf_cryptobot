@@ -212,3 +212,24 @@ def test_cost_is_charged_per_strategy_not_portfolio_wide(store, fake_client):
     assert round(wide["cost_r"], 2) == 0.25
     assert tight["net_r"] < wide["net_r"]          # the ranking flips net of cost
     assert tight["net_r"] < 0 < wide["net_r"]
+
+
+def test_breakeven_win_rate_uses_realised_wins_not_the_ladder_ceiling(store, fake_client):
+    """The ceiling flatters the requirement by roughly half.
+
+    A 1:3 ladder that scales out 50% at 1R and trails to breakeven has a 1.7R
+    ceiling — but a winner that only reaches TP1 banks +0.5R. Against -1R
+    losses that needs a ~67% win rate, not the ~37% the ceiling implies.
+    """
+    from wolf.config import TrackerSettings
+    from wolf.diagnose import diagnose
+    from wolf.tracker import Tracker
+
+    rows = [_cost_outcome("SWING", 0.5, 1.0) for _ in range(8)]     # TP1-only wins
+    rows += [_cost_outcome("SWING", -1.0, 1.0) for _ in range(11)]  # full stops
+    store.write("signal_outcomes", rows)
+
+    lad = diagnose(Tracker(store, fake_client, TrackerSettings()))["ladder"]
+    assert lad["avg_win_r"] == 0.5
+    assert lad["avg_loss_r"] == 1.0
+    assert round(lad["breakeven_win_rate"]) == 67     # 1.0 / 1.5

@@ -781,6 +781,20 @@ class Tracker:
         traded = [o for o in outcomes if o.status != Status.INVALIDATED.value]
         avg_r = (sum(r_multiple_of(o) for o in traded) / len(traded)) if traded else 0.0
 
+        # The win rate this ladder actually needed, from realised wins and
+        # losses rather than from the configured geometry. They are not the
+        # same number: a front-loaded scale-out plus a breakeven stop means the
+        # typical winner banks ~0.5R, not the ladder's 1.7R ceiling, and the
+        # ceiling version understates the requirement by roughly half.
+        win_rs = [r for r in (r_multiple_of(o) for o in traded) if r > 0]
+        loss_rs = [-r for r in (r_multiple_of(o) for o in traded) if r < 0]
+        avg_win_r = (sum(win_rs) / len(win_rs)) if win_rs else 0.0
+        avg_loss_r = (sum(loss_rs) / len(loss_rs)) if loss_rs else 0.0
+        need_wr = (
+            avg_loss_r / (avg_win_r + avg_loss_r) * 100
+            if (avg_win_r + avg_loss_r) else 0.0
+        )
+
         return {
             "window_hours": window_hours,
             "total_resolved": len(outcomes),
@@ -793,6 +807,9 @@ class Tracker:
             "win_rate": round(win_rate, 1),
             "avg_pnl_pct": round(avg_pnl, 3),
             "avg_r": round(avg_r, 3),
+            "avg_win_r": round(avg_win_r, 3),
+            "avg_loss_r": round(avg_loss_r, 3),
+            "breakeven_win_rate": round(need_wr, 1),
             "conclusive": total >= MIN_GRADED_FOR_VERDICT,
             "active": len(active_sigs),
             "by_strategy": by_strategy,
