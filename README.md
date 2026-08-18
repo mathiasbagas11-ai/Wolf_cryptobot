@@ -596,9 +596,18 @@ absolute `state_dir` alongside `outcomes_stored`.
 
 To make history survive deploys on Railway:
 
-1. Add a Volume to the service and mount it at `/data`.
-2. Set `STATE_DIR=/data/state`.
-3. Redeploy, then confirm `GET /health` shows `"state_dir": "/data/state"`.
+1. **Service → Settings → Volumes → Add Volume**, mount path `/data`. (Volumes
+   are not under the Variables tab; the command palette `Cmd/Ctrl+K` → *Add
+   Volume* works too.)
+2. **Delete the `STATE_DIR` variable.** Railway exports
+   `RAILWAY_VOLUME_MOUNT_PATH` once a volume is attached, and an unset
+   `STATE_DIR` adopts it automatically. This step is the one that is easy to
+   miss: an explicit `STATE_DIR` always wins, so a leftover `state_data` keeps
+   the bot writing into the container even with the volume mounted. Setting
+   `STATE_DIR=/data/state_data` by hand works too.
+3. Redeploy. The startup card reports where state landed and whether it is
+   durable — `(volume)` versus a loud `EPHEMERAL` warning — and `GET /health`
+   shows the resolved `state_dir` alongside `outcomes_stored`.
 
 Note that step 3 is itself a deploy, so **export first** and restore afterwards:
 
