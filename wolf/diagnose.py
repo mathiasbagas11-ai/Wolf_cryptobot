@@ -34,6 +34,7 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
+from wolf.config import state_is_persistent
 from wolf.models import Signal, Status
 from wolf.tracker import Tracker, _parse_iso, _risk_pct, r_multiple_of
 
@@ -301,7 +302,10 @@ def diagnose(
     )
 
     flags = []
-    if state_dir and not state_dir.startswith("/"):
+    # Same durability test the startup card uses. The old check here only asked
+    # whether the path was absolute, which passes /app/state_data — absolute and
+    # still inside the container, so it is wiped exactly like a relative path.
+    if state_dir and not state_is_persistent(state_dir):
         flags.append("STATE_NOT_PERSISTED")
     if traded and abstain_rate >= 0.99:
         flags.append("AI_NEVER_DECIDES")
@@ -335,6 +339,8 @@ def diagnose(
         "ai_verdicts": ai_verdicts,
         "concurrency": _concurrency(traded),
         "flags": flags,
+        "state_dir": state_dir,
+        "state_persistent": state_is_persistent(state_dir) if state_dir else None,
         "thresholds": {
             "min_conclusive_trades": MIN_CONCLUSIVE_TRADES,
             "conclusive_t": CONCLUSIVE_T,
@@ -372,6 +378,9 @@ def render_digest(diag: dict) -> str:
             f"ci95=[{b['ci95'][0]:+.3f},{b['ci95'][1]:+.3f}] 1R={b['median_1r_pct']:.2f}% "
             f"cost={b.get('cost_r', 0):.2f}R netR={b['net_r']:+.3f} => {b['verdict']}"
         )
+    if diag.get("state_dir"):
+        mark = "ok" if diag.get("state_persistent") else "EPHEMERAL"
+        lines.append(f"state    {diag['state_dir']} [{mark}]")
     lad = diag.get("ladder") or {}
     if lad.get("avg_win_r") or lad.get("avg_loss_r"):
         fill = lad.get("rung_fill_rate") or {}

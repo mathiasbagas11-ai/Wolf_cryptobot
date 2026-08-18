@@ -95,3 +95,47 @@ def test_ai_label_reports_reality_not_intent():
 def test_ai_label_names_a_role_even_when_the_list_is_empty():
     broken = _ai_mode_label({"enabled": True, "available": False, "degraded_roles": []})
     assert "UNAVAILABLE" in broken and "arbiter" in broken
+
+
+# ── the diagnostic's own persistence flag ────────────────────────────────
+def _diag(state_dir: str, tmp_path):
+    from wolf.config import TrackerSettings
+    from wolf.diagnose import diagnose
+    from wolf.tracker import Tracker
+
+    class _Client:
+        def get_klines(self, *a, **k):
+            return []
+
+        def get_price(self, *a, **k):
+            return None
+
+    store = StateStore(str(tmp_path))
+    return diagnose(Tracker(store, _Client(), TrackerSettings()), state_dir=state_dir)
+
+
+def test_diagnostic_flags_a_relative_state_dir(tmp_path):
+    with mock.patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("RAILWAY_VOLUME_MOUNT_PATH", None)
+        diag = _diag("state_data", tmp_path)
+    assert "STATE_NOT_PERSISTED" in diag["flags"]
+    assert diag["state_dir"] == "state_data"     # says where, not just that
+
+
+def test_diagnostic_flags_an_absolute_path_outside_the_volume(tmp_path):
+    """The case the old startswith('/') check waved through.
+
+    /app/state_data is absolute and still inside the container, so it is wiped
+    on every redeploy exactly like a relative path — but it read as durable.
+    """
+    with mock.patch.dict(os.environ, {"RAILWAY_VOLUME_MOUNT_PATH": "/data"}):
+        diag = _diag("/app/state_data", tmp_path)
+    assert "STATE_NOT_PERSISTED" in diag["flags"]
+    assert diag["state_persistent"] is False
+
+
+def test_diagnostic_is_quiet_when_state_sits_on_the_volume(tmp_path):
+    with mock.patch.dict(os.environ, {"RAILWAY_VOLUME_MOUNT_PATH": "/data"}):
+        diag = _diag("/data/state_data", tmp_path)
+    assert "STATE_NOT_PERSISTED" not in diag["flags"]
+    assert diag["state_persistent"] is True
