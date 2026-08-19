@@ -76,10 +76,22 @@ def _resolve_state_dir() -> str:
     explicit = os.environ.get("STATE_DIR", "").strip()
     if explicit:
         return explicit
-    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+    mount = volume_mount()
     if mount:
         return os.path.join(mount, "state_data")
     return "state_data"
+
+
+def volume_mount() -> str:
+    """The platform's volume mount path, or "" when none is exported.
+
+    Kept as its own function so diagnostics can report what was actually seen.
+    Auto-detection depends on the platform exporting this, and when it does not
+    the failure is silent: state quietly lands in the container and everything
+    else looks healthy. Reporting the raw value turns that into something
+    readable instead of a guess about which half of the setup went wrong.
+    """
+    return os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
 
 
 def state_is_persistent(state_dir: str) -> bool:
@@ -92,7 +104,7 @@ def state_is_persistent(state_dir: str) -> bool:
     """
     if not os.path.isabs(state_dir):
         return False
-    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+    mount = volume_mount()
     if mount:
         return os.path.abspath(state_dir).startswith(os.path.abspath(mount))
     # No platform hint: an absolute path is the operator's explicit choice, so

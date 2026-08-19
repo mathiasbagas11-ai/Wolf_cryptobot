@@ -34,7 +34,7 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
-from wolf.config import state_is_persistent
+from wolf.config import state_is_persistent, volume_mount
 from wolf.models import Signal, Status
 from wolf.tracker import Tracker, _parse_iso, _risk_pct, r_multiple_of
 
@@ -341,6 +341,7 @@ def diagnose(
         "flags": flags,
         "state_dir": state_dir,
         "state_persistent": state_is_persistent(state_dir) if state_dir else None,
+        "volume_mount": volume_mount(),
         "thresholds": {
             "min_conclusive_trades": MIN_CONCLUSIVE_TRADES,
             "conclusive_t": CONCLUSIVE_T,
@@ -380,7 +381,8 @@ def render_digest(diag: dict) -> str:
         )
     if diag.get("state_dir"):
         mark = "ok" if diag.get("state_persistent") else "EPHEMERAL"
-        lines.append(f"state    {diag['state_dir']} [{mark}]")
+        mount = diag.get("volume_mount") or "none detected"
+        lines.append(f"state    {diag['state_dir']} [{mark}] volume_mount={mount}")
     lad = diag.get("ladder") or {}
     if lad.get("avg_win_r") or lad.get("avg_loss_r"):
         fill = lad.get("rung_fill_rate") or {}
