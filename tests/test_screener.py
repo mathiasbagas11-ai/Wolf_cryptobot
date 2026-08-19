@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from wolf.config import RiskSettings
 from wolf.detectors import MomentumBreakoutDetector
 from wolf.detectors.base import Detector, SignalCandidate
@@ -787,3 +789,66 @@ def test_single_series_callers_still_work(store, fake_client, tracker_settings):
     sc = Screener(fake_client, Tracker(store, fake_client, tracker_settings), [det],
                   universe=["BTCUSDT"])
     assert sc._best_candidate("BTCUSDT", _tf_candles("15m", 50.0), None) is not None
+
+
+# ── forming-candle guard ─────────────────────────────────────────────────
+def _bars(interval_ms: int, n: int, last_open_ms: int) -> list[Candle]:
+    """``n`` bars ending with one opening at ``last_open_ms``."""
+    return [
+        Candle(time=last_open_ms - (n - 1 - i) * interval_ms,
+               open=100, high=101, low=99, close=100, volume=100.0)
+        for i in range(n)
+    ]
+
+
+def test_drops_the_bar_that_has_not_closed_yet():
+    """A 4h bar 10 minutes old can still become its own opposite."""
+    from wolf.screener import drop_forming
+
+    four_h = 14_400_000
+    now = 1_700_000_000_000
+    bars = _bars(four_h, 5, last_open_ms=now - 600_000)   # opened 10 min ago
+    kept = drop_forming(bars, "4h", now_ms=now)
+    assert len(kept) == 4
+    assert kept[-1].time == bars[-2].time
+
+
+def test_keeps_a_bar_that_has_closed():
+    from wolf.screener import drop_forming
+
+    four_h = 14_400_000
+    now = 1_700_000_000_000
+    bars = _bars(four_h, 5, last_open_ms=now - four_h)    # closed exactly now
+    assert len(drop_forming(bars, "4h", now_ms=now)) == 5
+
+
+def test_unknown_interval_is_left_alone():
+    """Dropping a real bar on a guess would be its own bug."""
+    from wolf.screener import drop_forming
+
+    bars = _bars(900_000, 3, last_open_ms=1_700_000_000_000)
+    assert len(drop_forming(bars, "7m", now_ms=1_700_000_000_000)) == 3
+    assert drop_forming([], "4h") == []
+
+
+def test_detectors_never_see_the_forming_bar(store, tracker_settings):
+    """End to end: the series handed to a detector ends on a closed bar."""
+    four_h = 14_400_000
+    now = int(time.time() * 1000)
+    forming_open = now - 600_000            # a 4h bar opened 10 minutes ago
+
+    class _Client:
+        def get_klines(self, symbol, interval="15m", limit=100):
+            return _bars(four_h, 60, last_open_ms=forming_open)
+
+        def get_price(self, symbol):
+            return None
+
+    det = _TFDetector("SWING", "4h")
+    client = _Client()
+    sc = Screener(client, Tracker(store, client, tracker_settings), [det],
+                  universe=["BTCUSDT"], notifier=None)
+    sc.run_cycle()
+    assert det.seen, "detector was never called"
+    assert det.seen[-1].time + four_h <= now      # last bar handed over is closed
+    assert det.seen[-1].time != forming_open

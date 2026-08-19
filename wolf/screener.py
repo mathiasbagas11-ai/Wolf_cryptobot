@@ -20,6 +20,7 @@ Improvements over the original:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional, Sequence
 
 from wolf.config import RiskSettings
@@ -49,6 +50,42 @@ DEFAULT_UNIVERSE: tuple[str, ...] = (
     "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "TONUSDT",
     "SUIUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "INJUSDT",
 )
+
+
+#: Bar length per interval, used to tell a closed candle from a forming one.
+_INTERVAL_MS: dict[str, int] = {
+    "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+    "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
+    "6h": 21_600_000, "12h": 43_200_000, "1d": 86_400_000,
+}
+
+
+def drop_forming(candles: list, interval: str, now_ms: Optional[int] = None) -> list:
+    """Drop the trailing candle if it has not closed yet.
+
+    Exchanges return the in-progress bar as the last element, and every
+    detector reads ``candles[-1]``. On 15m with a 10-minute scan that was a
+    small inaccuracy; once detectors moved to 1h and 4h it became the dominant
+    one, because a 4h bar is on average two hours from being decided and gets
+    re-evaluated about two dozen times before it settles.
+
+    Everything the detectors judge is a property of a *finished* bar — the
+    close relative to a level, the wick that makes a rejection candle, the
+    body direction. Reading them off a bar that is still forming means acting
+    on a shape that can still become its own opposite. MOMENTUM's comment
+    already said it enters on "the confirmation bar"; this is what makes that
+    true.
+
+    Unknown intervals are left untouched: dropping a real bar on a guess would
+    be its own bug.
+    """
+    if not candles:
+        return candles
+    span = _INTERVAL_MS.get(interval)
+    if span is None:
+        return candles
+    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    return candles[:-1] if candles[-1].time + span > now else candles
 
 
 class Screener:
@@ -154,6 +191,7 @@ class Screener:
             except Exception:
                 log.exception("Kline fetch failed for %s %s", symbol, tf)
                 continue
+            candles = drop_forming(candles, tf)
             if candles:
                 series[tf] = candles
         return series
