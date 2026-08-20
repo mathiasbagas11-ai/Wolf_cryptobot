@@ -27,6 +27,7 @@ from wolf.config import RiskSettings
 from wolf.detectors.base import Detector, SignalCandidate
 from wolf.exchange import BinanceClient
 from wolf.indicator_cache import CandleFeatures
+from wolf.models import INTERVAL_MS
 from wolf.notify import TelegramNotifier
 from wolf.regime import BEARISH, BULLISH, NEUTRAL, UNKNOWN
 from wolf.regime_composite import MarketContext
@@ -53,13 +54,6 @@ DEFAULT_UNIVERSE: tuple[str, ...] = (
 
 
 #: Bar length per interval, used to tell a closed candle from a forming one.
-_INTERVAL_MS: dict[str, int] = {
-    "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
-    "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
-    "6h": 21_600_000, "12h": 43_200_000, "1d": 86_400_000,
-}
-
-
 def drop_forming(candles: list, interval: str, now_ms: Optional[int] = None) -> list:
     """Drop the trailing candle if it has not closed yet.
 
@@ -81,7 +75,7 @@ def drop_forming(candles: list, interval: str, now_ms: Optional[int] = None) -> 
     """
     if not candles:
         return candles
-    span = _INTERVAL_MS.get(interval)
+    span = INTERVAL_MS.get(interval)
     if span is None:
         return candles
     now = now_ms if now_ms is not None else int(time.time() * 1000)

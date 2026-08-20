@@ -33,6 +33,17 @@ class SignalType(str, Enum):
     NEWS = "NEWS"
 
 
+# Bar length of every interval the bot asks the exchange for. Lives here
+# because both the screener (dropping the bar still forming) and the tracker
+# (finding the bar an entry price was printed on) need it, and the tracker
+# cannot import the screener.
+INTERVAL_MS: dict[str, int] = {
+    "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+    "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
+    "6h": 21_600_000, "12h": 43_200_000, "1d": 86_400_000,
+}
+
+
 class EntryMode(str, Enum):
     MOMENTUM_NOW = "MOMENTUM_NOW"   # treated as active the moment it's sent
     RETEST_WAIT = "RETEST_WAIT"     # active only once price touches the entry zone
@@ -251,7 +262,32 @@ class Signal:
         self.reasons = list(self.reasons)[:3]
         if self.entry_mode.upper() == EntryMode.MOMENTUM_NOW.value and not self.activated:
             self.activated = True
-            self.activated_at = self.activated_at or self.created_at
+            self.activated_at = self.activated_at or self.priced_at or self.created_at
+
+    @property
+    def priced_at(self) -> Optional[str]:
+        """When the entry price was printed, for an entry taken at market.
+
+        Detectors read ``closes[-1]`` — the close of the last *closed* bar of
+        their own timeframe — so a 1h signal assembled at 10:07 quotes the
+        10:00 price. The position is live from 10:00, not from 10:07: the
+        seven minutes in between already moved against or in favour of that
+        quote, and grading from 10:07 would hand them over for free while
+        hiding them from the stop.
+
+        ``None`` when the timeframe is unknown, leaving ``created_at`` in play.
+        """
+        span = INTERVAL_MS.get(self.timeframe or "")
+        if not span or not self.created_at:
+            return None
+        try:
+            created = datetime.fromisoformat(self.created_at)
+        except (TypeError, ValueError):
+            return None
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        floored = (int(created.timestamp() * 1000) // span) * span
+        return datetime.fromtimestamp(floored / 1000, tz=timezone.utc).isoformat()
 
     @property
     def is_long(self) -> bool:

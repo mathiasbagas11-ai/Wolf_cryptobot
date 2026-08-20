@@ -699,3 +699,68 @@ def test_stats_reports_spread_of_r_not_just_the_average(store, fake_client, trac
     assert b["avg_r"] == 0.0            # (-1 -1 +2) / 3
     assert b["sd_r"] > 1.0              # ...but wildly spread, so it means nothing
     assert b["se_r"] == round(b["sd_r"] / 3 ** 0.5, 3)
+
+
+# ── replay window vs. the bar the entry price came from ──────────────────────
+def _hourly_momentum(store, fake_client, minutes_past_the_hour: int):
+    """A 1h MOMENTUM_NOW signal raised part-way through the hour.
+
+    Its entry price is the close of the bar that ended on the hour, so the
+    minutes since then are already behind the quote by the time it is sent.
+    """
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "BTCUSDT", "MOMENTUM", "LONG", 100, tp=115, sl=95,
+        entry_mode="MOMENTUM_NOW", timeframe="1h", tps=LADDER_1_3,
+    )
+    created = datetime.fromisoformat(sig.created_at).replace(
+        minute=minutes_past_the_hour, second=0, microsecond=0
+    )
+    sig.created_at = created.isoformat()
+    stub._save_pending([sig])
+    return int(created.replace(minute=0).timestamp() * 1000)
+
+
+def test_replay_covers_the_gap_between_entry_price_and_signal_time(store, fake_client):
+    """The move that happens before the alert lands is not a free head start.
+
+    Entry is priced off the 10:00 close but the alert goes out at 10:07, and
+    the replay used to begin at 10:15 — so a 10:00-10:15 spike down through
+    the stop was invisible while the recovery above it was banked. The bar the
+    entry price came from has to be part of the replay.
+    """
+    hour_ms = _hourly_momentum(store, fake_client, minutes_past_the_hour=7)
+    fake_client.klines["BTCUSDT"] = [
+        Candle(time=hour_ms, open=100, high=101, low=94, close=100, volume=100.0),
+        Candle(time=hour_ms + 900_000, open=100, high=106, low=100, close=105, volume=100.0),
+    ]
+    r = Tracker(store, fake_client, TrackerSettings()).check_pending()[0]
+    assert r.status == Status.SL_HIT.value   # the 94 low is seen, not skipped
+    assert r.pnl_pct == -5.0
+
+
+def test_pending_entries_are_not_replayed_before_they_existed(store, fake_client):
+    """A retest level must not be activated by price that predates the signal.
+
+    Widening the window is only sound for an immediate entry, whose price is a
+    stale quote. A RETEST_WAIT entry is a level the market has yet to come
+    back to, so pre-signal bars stay out of the replay.
+    """
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "ETHUSDT", "MOMENTUM", "LONG", 100, tp=115, sl=95,
+        entry_mode="RETEST_WAIT", timeframe="1h", tps=LADDER_1_3,
+    )
+    created = datetime.fromisoformat(sig.created_at).replace(
+        minute=7, second=0, microsecond=0
+    )
+    sig.created_at = created.isoformat()
+    stub._save_pending([sig])
+    hour_ms = int(created.replace(minute=0).timestamp() * 1000)
+    fake_client.klines["ETHUSDT"] = [
+        # Touches the entry, then the stop — but all of it before 10:07.
+        Candle(time=hour_ms, open=100, high=101, low=94, close=96, volume=100.0),
+    ]
+    tracker = Tracker(store, fake_client, TrackerSettings())
+    assert tracker.check_pending() == []
+    assert tracker.active_signals()[0].status == Status.PENDING.value

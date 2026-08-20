@@ -146,18 +146,45 @@ def r_multiple_of(sig: Signal) -> float:
     return round(sig.pnl_pct / risk, 3)
 
 
+def _replay_start_ms(sig: Signal, created_ts: int) -> int:
+    """First candle open time the replay may include, inclusive.
+
+    A MOMENTUM_NOW entry is priced at ``closes[-1]`` — the close of the last
+    *closed* bar of the detector's own timeframe. On a 1h detector scanned at
+    10:07 that price was printed at 10:00, yet the replay only picked up 15m
+    bars opening after 10:07, so it started at 10:15. The fifteen minutes in
+    between were credited to the entry and hidden from the stop, on exactly
+    the kind of fast move that makes a momentum detector fire: the position
+    banked the run-up for free and could not be stopped out during it.
+
+    Replaying from the bar the entry price came from closes that window. Only
+    immediate entries get it — a RETEST_WAIT entry is a *level*, not a stale
+    quote, and must never be activated by price action that predates it.
+    """
+    # Everything else keeps the old rule: strictly after the signal existed.
+    if sig.entry_mode.upper() != EntryMode.MOMENTUM_NOW.value:
+        return created_ts + 1
+    priced_at = sig.priced_at
+    if not priced_at:
+        return created_ts + 1
+    return int(_parse_iso(priced_at).timestamp() * 1000)
+
+
 def _activation_time(sig: Signal, created_at: datetime) -> datetime:
     """When the position actually went live.
 
-    Falls back to ``created_at`` for MOMENTUM_NOW entries (live on arrival) and
-    for records written before ``activated_at`` was persisted.
+    For a MOMENTUM_NOW entry that is the moment its price was printed — the
+    close of the bar :func:`_replay_start_ms` picks out, not the later moment
+    the alert was assembled. Anything else falls back to ``created_at``, as do
+    records written before ``activated_at`` was persisted.
     """
     if sig.activated_at:
         try:
             return _parse_iso(sig.activated_at)
         except (ValueError, TypeError):
             pass
-    return created_at
+    start_ms = _replay_start_ms(sig, int(created_at.timestamp() * 1000))
+    return min(created_at, datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc))
 
 
 def _partial_pnl(
@@ -564,7 +591,8 @@ class Tracker:
                         sig.symbol, interval="15m", limit=int(max(age_hours + 1, 4) * 4) + 10
                     )
                     created_ts = int(created_at.timestamp() * 1000)
-                    future = [c for c in candles if c.time > created_ts]
+                    start_ts = _replay_start_ms(sig, created_ts)
+                    future = [c for c in candles if c.time >= start_ts]
                     res = self._evaluate(sig, future, created_at, now)
                 except (KeyError, ValueError, TypeError) as exc:
                     log.warning("Eval failed for %s: %s — keeping pending", sig.symbol, exc)
@@ -646,7 +674,12 @@ class Tracker:
     def _resolve(self, sig: Signal, res: EvalResult, created_at: datetime, now: datetime) -> None:
         exit_price = res.exit_price
         exit_time = res.exit_time or now
-        hold_hours = (exit_time - created_at).total_seconds() / 3600
+        # Measured from when the position went live, not from when the alert
+        # was assembled — an immediate entry is priced off an earlier bar
+        # close, so those two differ and the exit can legitimately land
+        # before ``created_at``.
+        opened_at = min(res.activated_time or created_at, created_at)
+        hold_hours = max((exit_time - opened_at).total_seconds() / 3600, 0.0)
         if res.realized_pnl_pct is not None:
             # Scaled-exit (TP1-banked) partial win: book the blended realized PnL
             # rather than the single-exit geometry off the breakeven stop.
