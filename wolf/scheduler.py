@@ -19,6 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from wolf.app import Application, ai_status
 from wolf.diagnose import diagnose, render_digest
+from wolf.reports import build_coordination_alerts
 
 log = logging.getLogger("wolf.scheduler")
 
@@ -150,7 +151,7 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
                        o.valuation_interval_min,
                        lambda: app.valuation_collector.collect(_valuation_universe(app)))
     _add_collector_job(scheduler, app.whale_collector, "whale_hl_collect",
-                       o.whale_interval_min, lambda: app.whale_collector.scan())
+                       o.whale_interval_min, lambda: _scan_whales(app))
     _add_collector_job(scheduler, app.premium_collector, "coinbase_premium_collect",
                        o.premium_interval_min, lambda: app.premium_collector.collect())
     _add_collector_job(scheduler, app.macro_collector, "flow_macro_collect",
@@ -178,6 +179,25 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
                 next_run_time=_soon(),
             )
     return scheduler
+
+
+def _scan_whales(app: Application) -> None:
+    """One whale scan, then alert the whale room about any coordinated entry.
+
+    Two outputs from one scan, and they are deliberately different in kind: the
+    snapshot feeds the signal gate and the periodic digest, while the alert is
+    an event — it fires when several wallets pile in, and stays silent
+    otherwise. The collector's per-coin cooldown means a build-up unfolding
+    across scans is announced once, not every ten minutes.
+
+    A Telegram failure must not cost the snapshot, which the gates depend on,
+    so the scan is completed and persisted before anything is sent.
+    """
+    doc = app.whale_collector.scan()
+    if not app.notifier.enabled or not app.settings.onchain.whale_alert_enabled:
+        return
+    for alert in build_coordination_alerts(doc, tz=app.settings.timezone):
+        app.notifier.notify_whale(alert)
 
 
 def _post_news(app: Application) -> None:

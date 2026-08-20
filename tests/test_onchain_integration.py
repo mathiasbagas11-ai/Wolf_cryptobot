@@ -123,7 +123,7 @@ def test_collected_snapshots_reach_the_digest(store):
 
     text = _plain(FlowIntelReporter(store, _Universe(), tz="UTC").build())
 
-    assert "$SOL LONG — 3 wallet" in text
+    assert "$SOL LONG — 3L / 0S" in text
     assert "+0.120%" in text
     assert "1/ MARKET MACRO" in text
 
@@ -137,7 +137,7 @@ def test_both_consumers_see_the_same_whale_reading(store):
     text = _plain(FlowIntelReporter(store, _Universe(), tz="UTC").build())
 
     assert ctx.whale_coordination == "LONG"
-    assert f"$SOL LONG — {ctx.whale_wallet_count} wallet" in text
+    assert f"$SOL LONG — {ctx.whale_long_count}L / {ctx.whale_short_count}S" in text
 
 
 def test_whale_gate_acts_on_collected_data(store, fake_client, tracker):

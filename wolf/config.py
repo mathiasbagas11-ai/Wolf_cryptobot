@@ -557,6 +557,10 @@ class OnChainSettings:
     whale_min_position_usd: float = 30_000.0
     whale_min_wallets: int = 3         # coordination threshold for an alert
     whale_cooldown_min: int = 60       # per-coin quiet period after alerting
+    # Post detected coordination to the 👁 Whale Report topic as an event.
+    # Separate from the Flow Intelligence digest on purpose: this fires when
+    # wallets pile in, that one reports positioning on a timer.
+    whale_alert_enabled: bool = True
 
     # Coinbase premium (BTC only).
     premium_enabled: bool = False
@@ -802,6 +806,7 @@ class Settings:
             whale_min_position_usd=_env_float("WHALE_HL_MIN_POSITION_USD", 30_000.0),
             whale_min_wallets=_env_int("WHALE_HL_MIN_WALLETS", 3),
             whale_cooldown_min=_env_int("WHALE_HL_COOLDOWN_MIN", 60),
+            whale_alert_enabled=_env_bool("WHALE_HL_ALERT_ENABLED", True),
             premium_enabled=_env_bool("COINBASE_PREMIUM_ENABLED", False),
             premium_interval_min=_env_int("COINBASE_PREMIUM_INTERVAL_MIN", 10),
             macro_enabled=_env_bool("FLOW_MACRO_ENABLED", False),

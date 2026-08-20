@@ -58,6 +58,7 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/onchain/` | Collectors: valuation, whale coordination, Coinbase premium, macro |
 | `wolf/reports/flow.py` | Flow Intelligence digest (reads collector snapshots) → own topic |
 | `wolf/reports/deepdive.py` | On-demand single-token bull-vs-bear card |
+| `wolf/reports/whale_alert.py` | Whale-coordination event alert → Whale Report topic |
 | `wolf/tracker.py` | Signal lifecycle engine + stats — the core |
 | `wolf/notify/telegram.py` | Telegram notifier + message builders |
 | `wolf/screener.py` | Thin orchestration (replaces the old 11k-line hub) |
@@ -349,13 +350,23 @@ COLLECTOR (scheduled job) → StateStore ─┬→ Flow Intelligence digest
   carry it; the cache cuts that to ~15, and an HTTP 429 opens a backoff window
   rather than retrying into a longer ban.
 * **Whale (Hyperliquid)** — one **global** scan per run reads the leaderboard's
-  top ~30 wallets and every position they hold, producing a per-coin bias. It is
-  not a per-symbol lookup: doing it inside the context would re-fetch an
-  identical leaderboard once per scanned symbol. An alert needs
-  `WHALE_HL_MIN_WALLETS` (default 3) *distinct* wallets opening or materially
-  adding in the same direction on the same coin within one window — coordination,
-  not single-whale noise — and a 60-minute per-coin cooldown stops a build-up
-  from re-alerting every scan.
+  top ~30 wallets and every position they hold. It is not a per-symbol lookup:
+  doing it inside the context would re-fetch an identical leaderboard once per
+  scanned symbol.
+
+  The snapshot holds **two different facts**, and keeping them apart matters:
+  * `bias` — where every tracked wallet is *sitting*. Persists for as long as
+    they hold. This is what the veto gate and the digest's positioning section
+    read.
+  * `coins` — who *opened or added* during the last scan window. An event:
+    it needs `WHALE_HL_MIN_WALLETS` (default 3) distinct wallets moving the same
+    way on the same coin, and it empties on the next scan. This is what fires
+    the whale-room alert, with a 60-minute per-coin cooldown so a build-up
+    unfolding across scans is announced once rather than every ten minutes.
+
+  Reading `coins` where `bias` belongs is a live trap: ten minutes after a
+  coordinated entry the event list is empty while the same whales are still
+  holding, so anything keyed to it goes quietly blind.
 * **Coinbase premium** — Coinbase BTC/USD vs Binance BTC/USDT, the
   US-institutional demand gauge. **BTC only**: for every other symbol the field
   is `None` and changes nothing. A deliberate first cut — the premium is often
@@ -370,13 +381,28 @@ degrades to candle-only behaviour it already handles. Gating a live signal on a
 stale whale read is strictly worse than gating it on nothing. An undated or
 corrupt snapshot counts as stale too.
 
-**Whale veto gate.** `WHALE_VETO_MIN_WALLETS` (default 5) or more wallets
-coordinated *against* a signal's direction drops it. The bar is higher than the
-alert threshold on purpose: three wallets is worth reporting, overriding a
-technical setup takes five. It runs in the screener — not in a detector, which
-stays a pure function of candles plus context — and immediately **before** the AI
-debate, because the gate is a free dict lookup and the debate is three LLM calls,
-so a vetoed signal never costs a token.
+**Whale veto gate.** A signal is dropped when whale *positioning* leans
+`WHALE_VETO_MIN_WALLETS` (default 5) **net** against its direction — six longs
+against one short is a net of five, while six against five is a net of one,
+which is a market having a disagreement rather than whales agreeing with each
+other. Because it reads standing positions, the veto holds as long as the whales
+hold, not just during the scan that spotted them.
+
+The bar is higher than the alert threshold on purpose: three wallets is worth
+reporting, overriding a technical setup takes five. It runs in the screener — not
+in a detector, which stays a pure function of candles plus context — and
+immediately **before** the AI debate, because the gate is a free dict lookup and
+the debate is three LLM calls, so a vetoed signal never costs a token.
+
+### Two whale outputs, two topics
+
+| Topic | What lands there | Rhythm |
+|---|---|---|
+| 👁 Whale Report | Large trades (existing) **+ coordination alerts** (`WHALE_HL_ALERT_ENABLED`) | Event — fires when wallets pile in |
+| 🧠 Flow Intelligence | Section 5: standing positioning per coin | Periodic — every `FLOW_INTERVAL_MIN` |
+
+Turning the alert off does not stop the scan: the snapshot still feeds the veto
+gate and the digest. Only the message is optional.
 
 Each is a small module that never touches the signal pipeline and degrades to
 nothing if its data is unavailable.

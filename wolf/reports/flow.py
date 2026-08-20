@@ -164,11 +164,47 @@ def build_watchlist(
     return [row for _, row in ranked[:limit]]
 
 
+def rank_whale_positioning(bias: dict) -> list[dict]:
+    """Per-coin whale positioning, dominant side first, ranked by notional.
+
+    Coins where longs and shorts are level are dropped: a balanced book is two
+    groups of whales disagreeing, which says nothing directional.
+    """
+    rows: list[dict] = []
+    for coin, row in (bias or {}).items():
+        if not isinstance(row, dict):
+            continue
+        longs, shorts = _i(row.get("long_count")), _i(row.get("short_count"))
+        if longs == shorts:
+            continue
+        direction = "LONG" if longs > shorts else "SHORT"
+        notional = _f(row.get("long_notional" if longs > shorts else "short_notional"))
+        rows.append({
+            "coin": str(coin), "direction": direction, "notional": notional,
+            "long_count": longs, "short_count": shorts,
+            "net": abs(longs - shorts),
+        })
+    return sorted(rows, key=lambda r: r["notional"], reverse=True)
+
+
+def describe_whale_moves(coins: dict, *, limit: int = 3) -> str:
+    """One-line summary of coordinated entries detected in the last scan window."""
+    if not coins:
+        return ""
+    ordered = sorted(coins.items(), key=lambda kv: _f(kv[1].get("notional_usd")), reverse=True)
+    parts = [
+        f"${coin} {str(row.get('direction', '')).upper()} "
+        f"({int(_f(row.get('wallet_count')))} wallet)"
+        for coin, row in ordered[:limit]
+    ]
+    return " · ".join(parts)
+
+
 def decide_verdict(
     global_doc: Optional[dict],
     stablecoin: Optional[dict],
     premium: Optional[dict],
-    whale_coins: dict,
+    whale_bias: dict,
 ) -> str:
     """Read the four macro inputs into one direction-of-capital verdict.
 
@@ -201,8 +237,11 @@ def decide_verdict(
     elif premium and premium.get("signal") == "DISTRIBUTION":
         off += 1
 
-    longs = sum(1 for c in whale_coins.values() if str(c.get("direction")).upper() == "LONG")
-    shorts = sum(1 for c in whale_coins.values() if str(c.get("direction")).upper() == "SHORT")
+    # Positioning, not this window's entries: the verdict describes the backdrop,
+    # and the backdrop is where the whales are sitting.
+    positioned = rank_whale_positioning(whale_bias)
+    longs = sum(1 for r in positioned if r["direction"] == "LONG")
+    shorts = sum(1 for r in positioned if r["direction"] == "SHORT")
     if longs > shorts:
         on += 1
     elif shorts > longs:
@@ -273,7 +312,9 @@ class FlowIntelReporter:
         markets = macro.get("markets") or []
         whale_coins = whale.get("coins") or {}
 
-        if not any((global_doc, stablecoin, chains, markets, whale_coins, premium.get("available"))):
+        whale_bias = whale.get("bias") or {}
+        if not any((global_doc, stablecoin, chains, markets, whale_coins, whale_bias,
+                    premium.get("available"))):
             log.debug("Flow Intelligence: no collector data yet, skipping")
             return None
 
@@ -283,11 +324,12 @@ class FlowIntelReporter:
         lines += self._dry_powder_section(stablecoin, macro_age)
         lines += self._rotation_section(chains, macro_age)
         lines += self._institutional_section(premium)
-        lines += self._whale_section(whale_coins, whale.get("ts"))
+        lines += self._whale_section(whale.get("bias") or {}, whale_coins, whale.get("ts"))
         lines += self._watchlist_section(markets, macro_age)
 
-        verdict = decide_verdict(global_doc, stablecoin, premium if premium.get("available") else None,
-                                 whale_coins)
+        verdict = decide_verdict(global_doc, stablecoin,
+                                 premium if premium.get("available") else None,
+                                 whale_bias)
         lines.append(f"\n<b>📌 KESIMPULAN: {esc(verdict)}</b>")
         lines.append(esc(_VERDICT_TEXT[verdict]))
         # Says plainly what this report is not, so its absence of entries reads
@@ -366,17 +408,32 @@ class FlowIntelReporter:
         lines.append(f"🏦 Coinbase premium (BTC) {pct:+.3f}% — {esc(label)}")
         return lines
 
-    def _whale_section(self, coins: dict, ts) -> list[str]:
+    def _whale_section(self, bias: dict, coins: dict, ts) -> list[str]:
+        """Where the tracked wallets are sitting, then who moved this window.
+
+        Two different facts, so two different lines. The section previously
+        rendered only ``coins`` — the wallets that opened or added during the
+        last scan — under a heading that says POSITIONING. Ten minutes after a
+        coordinated entry that list empties, so the section announced "no whale
+        coordination" while six whales sat long on the coin. A heading has to
+        describe the data underneath it.
+        """
         lines = [f"\n<b>5/ WHALE POSITIONING</b>{esc(stale_note(ts))}"]
-        if not coins:
-            return lines + ["• Belum ada koordinasi whale terdeteksi window ini."]
-        ordered = sorted(coins.items(), key=lambda kv: _f(kv[1].get("notional_usd")), reverse=True)
-        for coin, row in ordered[: self._max_whale_coins]:
-            direction = str(row.get("direction", "")).upper()
-            emoji = "🟢" if direction == "LONG" else "🔴"
-            lines.append(f"{emoji} <b>${esc(coin)}</b> {esc(direction)} — "
-                         f"{int(_f(row.get('wallet_count')))} wallet · "
-                         f"{fmt_usd(row.get('notional_usd'))}")
+        rows = rank_whale_positioning(bias)
+        if not rows:
+            lines.append("• Belum ada posisi whale terlacak di coin manapun.")
+        for row in rows[: self._max_whale_coins]:
+            emoji = "🟢" if row["direction"] == "LONG" else "🔴"
+            lines.append(
+                f"{emoji} <b>${esc(row['coin'])}</b> {esc(row['direction'])} — "
+                f"{row['long_count']}L / {row['short_count']}S · "
+                f"{fmt_usd(row['notional'])}"
+            )
+        # Events are additive context, never a substitute for the positioning
+        # above: an empty window means nobody moved, not that nobody is there.
+        moves = describe_whale_moves(coins)
+        if moves:
+            lines.append(f"🆕 Baru bergerak window ini: {esc(moves)}")
         return lines
 
     def _watchlist_section(self, markets: list, age: str) -> list[str]:
@@ -407,6 +464,13 @@ def fmt_big_usd(v) -> str:
     if abs(value) >= 1e12:
         return f"${value / 1e12:.2f}T"
     return fmt_usd(value)
+
+
+def _i(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _f(v) -> float:

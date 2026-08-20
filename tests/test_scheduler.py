@@ -137,3 +137,60 @@ def test_valuation_universe_survives_a_universe_failure():
 
     app.screener = SimpleNamespace(current_universe=_boom)
     assert _valuation_universe(app) == []
+
+
+# ── whale alerts ──────────────────────────────────────────────────────────
+def _whale_doc() -> dict:
+    return {"ts": "2026-08-20T04:00:00+00:00", "coins": {
+        "SOL": {"direction": "LONG", "wallet_count": 4, "notional_usd": 2_400_000,
+                "wallets": [{"addr": "0xabc123456789", "notional": 900_000, "is_new": True}]},
+    }}
+
+
+def _whale_app(*, doc=None, notifier_enabled=True, alert_enabled=True):
+    app = _app(notifier_enabled=notifier_enabled,
+               whale_collector=SimpleNamespace(scan=lambda: doc if doc is not None else _whale_doc()))
+    app.settings.onchain = _onchain(whale_alert_enabled=alert_enabled)
+    app.settings.timezone = "UTC"
+    app.sent = []
+    app.notifier.notify_whale = app.sent.append
+    return app
+
+
+def _run_whale_job(app) -> None:
+    {j.id: j for j in build_scheduler(app).get_jobs()}["whale_hl_collect"].func()
+
+
+def test_whale_job_alerts_the_whale_room_on_coordination():
+    app = _whale_app()
+    _run_whale_job(app)
+
+    assert len(app.sent) == 1
+    assert "WHALE COORDINATION" in app.sent[0] and "$SOL" in app.sent[0]
+
+
+def test_whale_job_stays_silent_without_coordination():
+    app = _whale_app(doc={"ts": "2026-08-20T04:00:00+00:00", "coins": {}})
+    _run_whale_job(app)
+    assert app.sent == []
+
+
+def test_whale_alert_can_be_disabled_without_stopping_the_scan():
+    """The snapshot feeds the signal gate; only the message is optional."""
+    scanned = []
+    app = _whale_app(alert_enabled=False)
+    app.whale_collector = SimpleNamespace(scan=lambda: (scanned.append(1), _whale_doc())[1])
+    _run_whale_job(app)
+
+    assert scanned == [1], "the scan still ran"
+    assert app.sent == []
+
+
+def test_whale_scan_runs_even_when_telegram_is_off():
+    scanned = []
+    app = _whale_app(notifier_enabled=False)
+    app.whale_collector = SimpleNamespace(scan=lambda: (scanned.append(1), _whale_doc())[1])
+    _run_whale_job(app)
+
+    assert scanned == [1]
+    assert app.sent == []

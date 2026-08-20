@@ -176,10 +176,13 @@ def _onchain_lines(context) -> list[str]:
 
     direction = getattr(context, "whale_coordination", None)
     if direction:
-        count = getattr(context, "whale_wallet_count", 0)
+        longs = getattr(context, "whale_long_count", 0)
+        shorts = getattr(context, "whale_short_count", 0)
+        net = getattr(context, "whale_wallet_count", 0)
         lines.append(
-            f"Whale positioning: {count} top wallet(s) opened/added {direction} "
-            f"on this coin in the last scan window (coordination, not one whale)."
+            f"Whale positioning: tracked top wallets are {longs} long / {shorts} short "
+            f"on this coin — a net {net} leaning {direction}. This is where they are "
+            f"sitting now, not who moved most recently."
         )
 
     premium = getattr(context, "coinbase_premium_pct", None)

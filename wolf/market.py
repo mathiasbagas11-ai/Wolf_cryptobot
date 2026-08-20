@@ -35,6 +35,9 @@ FUNDING_EXTREME_THRESH = -0.10
 FUNDING_OVERHEATED_THRESH = 0.05
 OI_RISING_THRESH = 2.0           # percent change over the window
 
+LONG = "LONG"
+SHORT = "SHORT"
+
 #: Default age past which a collected snapshot stops counting as current.
 #: Beyond this the field reads ``None`` and the bot degrades to candle-only
 #: behaviour, which it already handles. Gating a live signal on a stale whale
@@ -52,8 +55,16 @@ class MarketContext:
     # has not run yet, or last ran too long ago to trust.
     onchain_bias: Optional[str] = None      # SUPPORTS_LONG | SUPPORTS_SHORT | NEUTRAL
     onchain_brief: str = ""                 # human-readable facts for the AI debate
-    whale_coordination: Optional[str] = None    # "LONG" | "SHORT" | None
-    whale_wallet_count: int = 0
+
+    # Whale positioning — where the tracked wallets are *sitting*, not who moved
+    # in the last scan window. The distinction is load-bearing: a coordinated
+    # entry is a one-window event, but the position it opened persists for
+    # hours, and a gate that reads the event goes blind ten minutes later while
+    # the whales are still holding.
+    whale_coordination: Optional[str] = None    # dominant side: "LONG" | "SHORT" | None
+    whale_wallet_count: int = 0                 # NET dominance (long_count - short_count)
+    whale_long_count: int = 0                   # raw counts, for honest display
+    whale_short_count: int = 0
     coinbase_premium_pct: Optional[float] = None   # BTC only; None elsewhere
 
     @property
@@ -77,17 +88,24 @@ class MarketContext:
         return self.oi_change_pct is not None and self.oi_change_pct <= -OI_RISING_THRESH
 
     def whales_oppose(self, direction: str, min_wallets: int) -> bool:
-        """True when ``min_wallets`` or more whales are positioned the other way.
+        """True when whale positioning leans the other way by ``min_wallets`` net.
 
         Used by the screener's veto gate. Deliberately a question the *caller*
-        asks — the context states what the whales did, it does not decide what
-        that means for a trade.
+        asks — the context states where the whales are sitting, it does not
+        decide what that means for a trade.
         """
         if self.whale_coordination is None or not direction:
             return False
         if self.whale_wallet_count < min_wallets:
             return False
         return self.whale_coordination.upper() != direction.upper()
+
+
+def _int(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
 
 
 def parse_iso(ts: Any) -> Optional[datetime]:
@@ -153,7 +171,7 @@ class ContextProvider:
         premium = self._fresh("coinbase_premium")
 
         onchain_bias, onchain_brief = self._valuation_for(valuation, base)
-        whale_direction, whale_wallets = self._whale_for(whale, base)
+        whale_direction, whale_net, whale_long, whale_short = self._whale_for(whale, base)
 
         return MarketContext(
             funding_rate=funding,
@@ -161,7 +179,9 @@ class ContextProvider:
             onchain_bias=onchain_bias,
             onchain_brief=onchain_brief,
             whale_coordination=whale_direction,
-            whale_wallet_count=whale_wallets,
+            whale_wallet_count=whale_net,
+            whale_long_count=whale_long,
+            whale_short_count=whale_short,
             coinbase_premium_pct=self._premium_for(premium, base),
         )
 
@@ -198,17 +218,31 @@ class ContextProvider:
         return (str(bias) if bias else None), str(row.get("brief") or "")
 
     @staticmethod
-    def _whale_for(doc: Optional[dict], base: str) -> tuple[Optional[str], int]:
-        coins = doc.get("coins") if isinstance(doc, dict) else None
-        row = coins.get(base) if isinstance(coins, dict) else None
+    def _whale_for(doc: Optional[dict], base: str) -> tuple[Optional[str], int, int, int]:
+        """Read *positioning* for a coin: ``(direction, net, longs, shorts)``.
+
+        Reads the snapshot's ``bias`` table — every tracked wallet's current
+        book — and not ``coins``, which lists only the wallets that opened or
+        added during the last scan window. Reading ``coins`` here was a real
+        bug: coordination is detected once, so the field empties on the very
+        next scan and the gate went blind ten minutes later while the same
+        whales were still holding the position.
+
+        Dominance is measured as a **net**: six longs against one short is a net
+        of five, while six against five is a net of one. A near-even book is a
+        market having a disagreement, not whales agreeing with each other, and
+        it should not be able to veto anything.
+        """
+        bias = doc.get("bias") if isinstance(doc, dict) else None
+        row = bias.get(base) if isinstance(bias, dict) else None
         if not isinstance(row, dict):
-            return None, 0
-        direction = row.get("direction")
-        try:
-            count = int(row.get("wallet_count", 0))
-        except (TypeError, ValueError):
-            count = 0
-        return (str(direction).upper() if direction else None), count
+            return None, 0, 0, 0
+        longs = _int(row.get("long_count"))
+        shorts = _int(row.get("short_count"))
+        net = longs - shorts
+        if net == 0:
+            return None, 0, longs, shorts
+        return (LONG if net > 0 else SHORT), abs(net), longs, shorts
 
     @staticmethod
     def _premium_for(doc: Optional[dict], base: str) -> Optional[float]:

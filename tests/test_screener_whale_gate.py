@@ -142,12 +142,14 @@ def test_onchain_lines_include_every_available_dimension():
         onchain_bias="SUPPORTS_LONG",
         whale_coordination="LONG",
         whale_wallet_count=4,
+        whale_long_count=6,
+        whale_short_count=2,
         coinbase_premium_pct=0.12,
     )
     text = "\n".join(_onchain_lines(ctx))
 
     assert "VALUASI ON-CHAIN SOL" in text
-    assert "4 top wallet(s) opened/added LONG" in text
+    assert "6 long / 2 short" in text and "net 4 leaning LONG" in text
     assert "+0.120%" in text and "US institutions bidding" in text
 
 

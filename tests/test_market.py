@@ -100,7 +100,11 @@ def _seed(store: StateStore, *, valuation_age=1.0, whale_age=1.0, premium_age=1.
     })
     store.write("whale_hyperliquid", {
         "ts": _ts(whale_age),
+        # ``coins`` is the last window's entries; ``bias`` is where every tracked
+        # wallet is sitting. The context reads ``bias`` — see _whale_for.
         "coins": {"SOL": {"direction": "SHORT", "wallet_count": 5, "notional_usd": 2_400_000}},
+        "bias": {"SOL": {"long_count": 0, "short_count": 5,
+                         "long_notional": 0.0, "short_notional": 2_400_000.0}},
     })
     store.write("coinbase_premium", {"ts": _ts(premium_age), "premium_pct": 0.12})
 
@@ -202,7 +206,7 @@ def test_empty_store_degrades_cleanly(store):
 
 
 def test_corrupt_state_rows_do_not_raise(store):
-    store.write("whale_hyperliquid", {"ts": _ts(1.0), "coins": {"SOL": "not-a-dict"}})
+    store.write("whale_hyperliquid", {"ts": _ts(1.0), "bias": {"SOL": "not-a-dict"}})
     store.write("onchain_valuation", {"ts": _ts(1.0), "symbols": "nope"})
     ctx = _provider(store).build("SOLUSDT")
     assert ctx.whale_coordination is None
@@ -211,7 +215,7 @@ def test_corrupt_state_rows_do_not_raise(store):
 
 def test_non_numeric_wallet_count_falls_back_to_zero(store):
     store.write("whale_hyperliquid", {
-        "ts": _ts(1.0), "coins": {"SOL": {"direction": "LONG", "wallet_count": "many"}},
+        "ts": _ts(1.0), "bias": {"SOL": {"long_count": "many", "short_count": None}},
     })
     assert _provider(store).build("SOLUSDT").whale_wallet_count == 0
 
@@ -260,3 +264,58 @@ def test_whales_oppose_requires_opposite_direction_and_enough_wallets():
 def test_whales_oppose_is_false_without_data():
     assert not MarketContext().whales_oppose("LONG", min_wallets=3)
     assert not MarketContext(whale_coordination="SHORT", whale_wallet_count=5).whales_oppose("", 3)
+
+
+# ── positioning outlives the entry window ─────────────────────────────────
+def test_context_reads_positioning_not_the_last_window_of_entries(store):
+    """The bug this fixes: ``coins`` empties one scan after detection, and a
+    gate reading it went blind while the same whales were still holding."""
+    store.write("whale_hyperliquid", {
+        "ts": _ts(1.0),
+        "coins": {},                      # nobody moved in the last window
+        "bias": {"SOL": {"long_count": 6, "short_count": 0,
+                         "long_notional": 1_200_000.0, "short_notional": 0.0}},
+    })
+    ctx = _provider(store).build("SOLUSDT")
+
+    assert ctx.whale_coordination == "LONG"
+    assert ctx.whale_wallet_count == 6
+
+
+def test_wallet_count_is_net_dominance():
+    """Six against one is a lean; six against five is a market disagreeing."""
+    store_rows = [
+        ({"long_count": 6, "short_count": 1}, "LONG", 5),
+        ({"long_count": 6, "short_count": 5}, "LONG", 1),
+        ({"long_count": 1, "short_count": 7}, "SHORT", 6),
+    ]
+    for row, direction, net in store_rows:
+        got = ContextProvider._whale_for({"bias": {"SOL": row}}, "SOL")
+        assert got[0] == direction and got[1] == net
+
+
+def test_balanced_book_is_not_a_direction():
+    assert ContextProvider._whale_for(
+        {"bias": {"SOL": {"long_count": 4, "short_count": 4}}}, "SOL"
+    ) == (None, 0, 4, 4)
+
+
+def test_context_exposes_raw_counts_for_display(store):
+    store.write("whale_hyperliquid", {
+        "ts": _ts(1.0),
+        "bias": {"SOL": {"long_count": 6, "short_count": 2}},
+    })
+    ctx = _provider(store).build("SOLUSDT")
+
+    assert (ctx.whale_long_count, ctx.whale_short_count) == (6, 2)
+    assert ctx.whale_wallet_count == 4, "net, not raw"
+
+
+def test_near_balanced_book_cannot_veto(store):
+    store.write("whale_hyperliquid", {
+        "ts": _ts(1.0),
+        "bias": {"SOL": {"long_count": 6, "short_count": 5}},
+    })
+    ctx = _provider(store).build("SOLUSDT")
+
+    assert not ctx.whales_oppose("SHORT", min_wallets=5)

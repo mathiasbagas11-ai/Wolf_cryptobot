@@ -262,9 +262,13 @@ def test_second_scan_detects_coordination_and_persists_it(store):
     session.positions = {a: [_hl_position("SOL", 100, 24_000.0)] for a in session.addresses}
     doc = collector.scan()
 
-    assert doc["coins"]["SOL"] == {
-        "direction": "LONG", "wallet_count": 3, "notional_usd": 7_200_000,
-    }
+    row = doc["coins"]["SOL"]
+    assert row["direction"] == "LONG"
+    assert row["wallet_count"] == 3
+    assert row["notional_usd"] == 7_200_000
+    # Wallet detail is kept so the whale-room alert can name who moved.
+    assert len(row["wallets"]) == 3
+    assert all(w["is_new"] for w in row["wallets"])
     assert store.read(STATE_KEY)["coins"]["SOL"]["direction"] == "LONG"
 
 

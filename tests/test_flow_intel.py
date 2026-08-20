@@ -47,7 +47,11 @@ def _macro(ts_minutes: float = 1.0, **overrides) -> dict:
 def _whale(ts_minutes: float = 1.0) -> dict:
     return {
         "ts": _ts(ts_minutes),
+        # ``coins`` = who moved in the last scan window (an event).
+        # ``bias``  = where every tracked wallet is sitting (the positioning).
         "coins": {"SOL": {"direction": "LONG", "wallet_count": 4, "notional_usd": 2_400_000}},
+        "bias": {"SOL": {"long_count": 4, "short_count": 0,
+                         "long_notional": 2_400_000.0, "short_notional": 0.0}},
     }
 
 
@@ -72,6 +76,11 @@ def _seed(store, *, macro=None, whale=None, premium=None) -> None:
 
 def _report(store, **kw) -> str:
     return FlowIntelReporter(store, _StubUniverse(), tz="UTC", **kw).build()
+
+
+def _plain(store, **kw) -> str:
+    """Report with the Telegram markup stripped, so assertions read like the message."""
+    return re.sub(r"</?[bi]>", "", _report(store, **kw))
 
 
 # ── the hard rule: no entry calls anywhere in the output ──────────────────
@@ -125,9 +134,51 @@ def test_missing_sections_degrade_individually(store):
     assert "WHALE POSITIONING" in text and "$SOL" in text
 
 
-def test_no_whale_coordination_says_so_plainly(store):
-    _seed(store, whale={"ts": _ts(), "coins": {}})
-    assert "Belum ada koordinasi whale" in _report(store)
+def test_no_whale_data_at_all_says_so_plainly(store):
+    _seed(store, whale={"ts": _ts(), "coins": {}, "bias": {}})
+    assert "Belum ada posisi whale terlacak" in _report(store)
+
+
+def test_quiet_window_still_reports_standing_positions(store):
+    """The bug: ten minutes after a coordinated entry ``coins`` empties, and the
+    section announced "no coordination" while six whales sat long on the coin."""
+    _seed(store, whale={
+        "ts": _ts(),
+        "coins": {},                       # nobody moved this window
+        "bias": {"SOL": {"long_count": 6, "short_count": 0,
+                         "long_notional": 3_000_000.0, "short_notional": 0.0}},
+    })
+    text = _report(store)
+
+    assert "$SOL LONG — 6L / 0S" in _plain(store)
+    assert "Belum ada posisi whale" not in text
+    assert "Baru bergerak" not in text, "no entries this window, so no event line"
+
+
+def test_section_five_separates_positioning_from_this_window(store):
+    _seed(store)
+    text = _report(store)
+
+    assert "$SOL LONG — 4L / 0S" in _plain(store)          # positioning
+    assert "Baru bergerak window ini: $SOL LONG (4 wallet)" in text   # event
+
+
+def test_positioning_shows_both_sides_of_a_split_book(store):
+    _seed(store, whale={
+        "ts": _ts(), "coins": {},
+        "bias": {"SOL": {"long_count": 5, "short_count": 2,
+                         "long_notional": 5_000_000.0, "short_notional": 900_000.0}},
+    })
+    assert "$SOL LONG — 5L / 2S" in _plain(store)
+
+
+def test_balanced_book_is_not_listed_as_a_direction(store):
+    _seed(store, whale={
+        "ts": _ts(), "coins": {},
+        "bias": {"SOL": {"long_count": 3, "short_count": 3,
+                         "long_notional": 1e6, "short_notional": 1e6}},
+    })
+    assert "$SOL" not in _plain(store).split("6/ WATCHLIST")[0].split("5/ WHALE")[1]
 
 
 # ── staleness markers ─────────────────────────────────────────────────────

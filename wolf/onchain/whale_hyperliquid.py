@@ -310,6 +310,14 @@ class WhaleHyperliquidCollector:
                 "direction": e["direction"],
                 "wallet_count": e["wallet_count"],
                 "notional_usd": round(e["notional_usd"]),
+                # Kept so the whale-room alert can name who moved. Capped: the
+                # alert shows a handful, and an unbounded address list would
+                # grow the persisted document for no reader.
+                "wallets": [
+                    {"addr": w["addr"], "notional": round(w["notional"]),
+                     "is_new": w["is_new"]}
+                    for w in sorted(e["wallets"], key=lambda w: w["notional"], reverse=True)[:5]
+                ],
             }
             for e in events
         }
