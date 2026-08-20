@@ -375,11 +375,48 @@ COLLECTOR (scheduled job) → StateStore ─┬→ Flow Intelligence digest
 * **Macro** — CoinGecko global + token screen, DefiLlama stablecoin supply and
   per-chain DEX volume. Feeds sections 1–3 and 6 of the digest.
 
+The valuation read also appears under each watchlist entry, showing the bias
+plus only what the macro screen does not already print (MCap/TVL, 30-day TVL
+trend), so the two lines complement rather than repeat:
+
+```
+👀 $AAVE -1.4% 24h · turnover 15% mcap · mcap $4.00B · FDV/MC 1.1x · -45% dari ATH
+   🐻 fundamental mendukung SHORT · MCap/TVL 9.40 · TVL 30h -31%
+```
+
 **Staleness is the safety property.** A snapshot older than
 `ONCHAIN_STALENESS_MIN` (30m) reads as absent on the signal path, and the bot
 degrades to candle-only behaviour it already handles. Gating a live signal on a
 stale whale read is strictly worse than gating it on nothing. An undated or
 corrupt snapshot counts as stale too.
+
+### Measuring before gating
+
+Only the whale veto acts on any of this. Valuation and the Coinbase premium
+reach the AI debate, which is itself in monitor mode — it records a verdict and
+sends the signal anyway. So today those two change *what the reasoning says*,
+not *which signals fire*.
+
+That is deliberate, and it is the same measure-then-enable path the regime and
+AI flags already follow. Every signal records the on-chain context **as it stood
+when it fired** (`onchain_bias`, `whale_stance`, `whale_net_wallets`,
+`coinbase_premium_pct`), and the diagnostics digest buckets resolved outcomes by
+each:
+
+```
+whale:WITH             n=20 graded=20 wr=70.0 meanR=+0.960 t=+3.26 => ...
+whale:AGAINST          n=15 graded=15 wr=20.0 meanR=-0.440 t=-1.47 => ...
+onchain:SUPPORTS_LONG  n=14 graded=14 wr=100.0 meanR=+1.800 t=+0.00 => ...
+```
+
+`whale_stance` is stored **relative to the signal's own direction** (WITH /
+AGAINST), because "whales were LONG" means opposite things for a LONG and a
+SHORT and bucketing on the raw side averages the effect away. `NO_DATA` stays
+its own bucket: a collector that was off is not the same finding as one that
+looked and saw nothing. The lines appear only once a real bucket exists, so a
+deployment with the collectors off does not carry three rows of `NO_DATA`.
+
+Promote a dimension to a gate when its buckets say so — not before.
 
 **Whale veto gate.** A signal is dropped when whale *positioning* leans
 `WHALE_VETO_MIN_WALLETS` (default 5) **net** against its direction — six longs

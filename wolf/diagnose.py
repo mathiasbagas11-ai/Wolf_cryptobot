@@ -288,6 +288,34 @@ def diagnose(
         })
         by_strategy[name] = summary
 
+    # On-chain dimensions: is any of the collected data actually predictive?
+    #
+    # Same statistics as by_strategy, because the question is the same one — does
+    # this population's mean R differ from zero by enough to act on. Today only
+    # the whale gate acts on any of it; these buckets are what should decide
+    # whether the others earn a gate too, or whether the whale threshold is set
+    # anywhere near right.
+    #
+    # NO_DATA stays its own bucket: a collector that was off is not a finding,
+    # and folding it into NEUTRAL would dilute whatever real effect exists.
+    def _onchain_buckets(key: str) -> dict[str, dict]:
+        buckets: dict[str, dict] = {}
+        for label in sorted({(getattr(o, key, "") or "NO_DATA") for o in traded}):
+            rows = [o for o in traded if (getattr(o, key, "") or "NO_DATA") == label]
+            graded_rows = [o for o in rows if Status(o.status).is_graded]
+            _, bucket_cost_r = _cost_r(rows)
+            summary = _summarise([r_multiple_of(o) for o in rows], bucket_cost_r)
+            wins = sum(1 for o in graded_rows if Status(o.status).is_win)
+            summary.update({
+                "graded": len(graded_rows),
+                "win_rate": round(wins / len(graded_rows) * 100, 1) if graded_rows else 0.0,
+            })
+            buckets[label] = summary
+        return buckets
+
+    by_whale_stance = _onchain_buckets("whale_stance")
+    by_onchain_bias = _onchain_buckets("onchain_bias")
+
     status_counts: dict[str, int] = {}
     for o in outcomes:
         status_counts[o.status] = status_counts.get(o.status, 0) + 1
@@ -335,6 +363,8 @@ def diagnose(
         "overall": overall,
         "ladder": _ladder_economics(traded),
         "by_strategy": by_strategy,
+        "by_whale_stance": by_whale_stance,
+        "by_onchain_bias": by_onchain_bias,
         "status_counts": status_counts,
         "ai_verdicts": ai_verdicts,
         "concurrency": _concurrency(traded),
@@ -379,6 +409,22 @@ def render_digest(diag: dict) -> str:
             f"ci95=[{b['ci95'][0]:+.3f},{b['ci95'][1]:+.3f}] 1R={b['median_1r_pct']:.2f}% "
             f"cost={b.get('cost_r', 0):.2f}R netR={b['net_r']:+.3f} => {b['verdict']}"
         )
+    # On-chain evidence. Printed only once a bucket exists, so a deployment with
+    # the collectors off does not carry three lines of NO_DATA forever.
+    for label, buckets in (("whale", diag.get("by_whale_stance") or {}),
+                           ("onchain", diag.get("by_onchain_bias") or {})):
+        real = {k: v for k, v in buckets.items() if k != "NO_DATA"}
+        if not real:
+            continue
+        for name, b in buckets.items():
+            lines.append(
+                # Width fits the longest label the buckets can produce
+                # ("onchain:SUPPORTS_SHORT"), so the columns stay aligned.
+                f"{label + ':' + name:<22} n={b['n']} graded={b['graded']} "
+                f"wr={b['win_rate']:.1f} meanR={b['mean_r']:+.3f} t={b['t']:+.2f} "
+                f"=> {b['verdict']}"
+            )
+
     if diag.get("state_dir"):
         mark = "ok" if diag.get("state_persistent") else "EPHEMERAL"
         mount = diag.get("volume_mount") or "none detected"

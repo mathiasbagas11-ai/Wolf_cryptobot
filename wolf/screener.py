@@ -88,6 +88,24 @@ def drop_forming(candles: list, interval: str, now_ms: Optional[int] = None) -> 
     return candles[:-1] if candles[-1].time + span > now else candles
 
 
+def _onchain_annotations(context, direction: str) -> dict:
+    """Snapshot the on-chain dimensions onto a signal, as they were at entry.
+
+    Taken at record time on purpose: re-reading the collectors when the trade
+    resolves would answer a different question. What matters is whether what was
+    knowable *when the signal fired* predicted how it turned out.
+    """
+    if context is None:
+        return {}
+    return {
+        "onchain_bias": getattr(context, "onchain_bias", None) or "",
+        "whale_stance": (context.whale_stance(direction)
+                         if hasattr(context, "whale_stance") else ""),
+        "whale_net_wallets": getattr(context, "whale_wallet_count", 0),
+        "coinbase_premium_pct": getattr(context, "coinbase_premium_pct", None),
+    }
+
+
 class Screener:
     def __init__(
         self,
@@ -643,6 +661,11 @@ class Screener:
                 weak_strategy=candidate.weak_strategy,
                 bounce_flagged=candidate.bounce_flagged,
                 risk_scale=candidate.risk_scale,
+                # On-chain context as it stood when the signal fired. Recorded
+                # for later analysis, not acted on — the whale veto above is the
+                # only one of these with teeth today, and whether the others
+                # earn any is exactly what this sample is meant to answer.
+                **_onchain_annotations(context, candidate.direction),
             )
             if signal is None:
                 continue

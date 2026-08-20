@@ -40,6 +40,7 @@ from typing import Optional, Sequence
 from wolf.market import age_minutes
 from wolf.onchain.coinbase_premium import STATE_KEY as PREMIUM_KEY
 from wolf.onchain.macro import STATE_KEY as MACRO_KEY
+from wolf.onchain.valuation import STATE_KEY as VALUATION_KEY
 from wolf.onchain.whale_hyperliquid import STATE_KEY as WHALE_KEY
 from wolf.textfmt import DIVIDER, esc, fmt_usd, now
 
@@ -200,6 +201,37 @@ def describe_whale_moves(coins: dict, *, limit: int = 3) -> str:
     return " · ".join(parts)
 
 
+#: How a directionless valuation bias reads in the watchlist.
+_VALUATION_MARK = {
+    "SUPPORTS_LONG": "🐂 fundamental mendukung LONG",
+    "SUPPORTS_SHORT": "🐻 fundamental mendukung SHORT",
+    "NEUTRAL": "⚪ fundamental netral",
+}
+
+
+def valuation_note(row: Optional[dict]) -> str:
+    """One line of fundamentals for a watchlist coin, or "" when uncollected.
+
+    Shows the bias plus only the metrics the macro screen does not already
+    print, so the two lines complement rather than repeat each other: MCap/TVL
+    and the 30-day TVL trend are the valuation collector's own, while FDV/MC and
+    turnover are already on the line above.
+    """
+    if not isinstance(row, dict):
+        return ""
+    parts = [_VALUATION_MARK.get(str(row.get("bias", "")), "")]
+    metrics = row.get("metrics")
+    if isinstance(metrics, dict):
+        mcap_tvl = metrics.get("mcap_tvl")
+        if mcap_tvl is not None:
+            parts.append(f"MCap/TVL {_f(mcap_tvl):.2f}")
+        tvl_trend = metrics.get("tvl_chg_30d")
+        if tvl_trend is not None:
+            parts.append(f"TVL 30h {_f(tvl_trend):+.0f}%")
+    parts = [p for p in parts if p]
+    return " · ".join(parts)
+
+
 def decide_verdict(
     global_doc: Optional[dict],
     stablecoin: Optional[dict],
@@ -305,6 +337,7 @@ class FlowIntelReporter:
         macro = self._store.read(MACRO_KEY, default=None) or {}
         whale = self._store.read(WHALE_KEY, default=None) or {}
         premium = self._store.read(PREMIUM_KEY, default=None) or {}
+        valuation = self._store.read(VALUATION_KEY, default=None) or {}
 
         global_doc = macro.get("global")
         stablecoin = macro.get("stablecoin")
@@ -325,7 +358,8 @@ class FlowIntelReporter:
         lines += self._rotation_section(chains, macro_age)
         lines += self._institutional_section(premium)
         lines += self._whale_section(whale.get("bias") or {}, whale_coins, whale.get("ts"))
-        lines += self._watchlist_section(markets, macro_age)
+        lines += self._watchlist_section(markets, macro_age,
+                                         valuation.get("symbols") or {})
 
         verdict = decide_verdict(global_doc, stablecoin,
                                  premium if premium.get("available") else None,
@@ -436,7 +470,8 @@ class FlowIntelReporter:
             lines.append(f"🆕 Baru bergerak window ini: {esc(moves)}")
         return lines
 
-    def _watchlist_section(self, markets: list, age: str) -> list[str]:
+    def _watchlist_section(self, markets: list, age: str,
+                           valuations: Optional[dict] = None) -> list[str]:
         lines = [f"\n<b>6/ WATCHLIST</b>{esc(age)}"]
         watchlist = build_watchlist(markets, self.tradeable_bases(), limit=self._max_watchlist)
         if not watchlist:
@@ -450,6 +485,12 @@ class FlowIntelReporter:
                 facts.append(f"{row['ath_change_pct']:.0f}% dari ATH")
             lines.append(f"👀 <b>${esc(row['symbol'])}</b> {row['change_24h']:+.1f}% 24h · "
                          f"{esc(' · '.join(facts))}")
+            # The valuation collector's read on the same coin, when it has one.
+            # Without this the fundamental layer was collected, fed to the AI,
+            # and never once shown to the person reading the report.
+            note = valuation_note((valuations or {}).get(row["symbol"]))
+            if note:
+                lines.append(f"   {esc(note)}")
         return lines
 
 

@@ -87,6 +87,22 @@ class MarketContext:
     def oi_falling(self) -> bool:
         return self.oi_change_pct is not None and self.oi_change_pct <= -OI_RISING_THRESH
 
+    def whale_stance(self, direction: str) -> str:
+        """Whale positioning *relative to a trade direction*: WITH/AGAINST/NEUTRAL.
+
+        Recorded on every signal so outcomes can later be bucketed. Stored
+        relative rather than absolute because "whales were LONG" means opposite
+        things for a LONG and a SHORT signal — bucketing on the raw side would
+        mix the two and average the effect away.
+
+        Empty string means no usable data (collector off, never run, or stale),
+        which is deliberately distinct from NEUTRAL ("we looked, they were
+        level"): one is ignorance, the other is a finding.
+        """
+        if self.whale_coordination is None or not direction:
+            return ""
+        return "WITH" if self.whale_coordination.upper() == direction.upper() else "AGAINST"
+
     def whales_oppose(self, direction: str, min_wallets: int) -> bool:
         """True when whale positioning leans the other way by ``min_wallets`` net.
 

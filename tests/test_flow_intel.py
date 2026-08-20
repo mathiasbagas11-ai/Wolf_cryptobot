@@ -428,3 +428,65 @@ def test_trillion_market_caps_render_as_trillions(store):
 
     _seed(store)
     assert "$3.10T" in _report(store)
+
+
+# ── valuation surfaced in the watchlist ───────────────────────────────────
+def _valuation(bias: str = "SUPPORTS_LONG", **metrics) -> dict:
+    base = {"mcap_tvl": 0.82, "tvl_chg_30d": 22.0}
+    base.update(metrics)
+    return {"ts": _ts(), "symbols": {"SOL": {"bias": bias, "brief": "…", "metrics": base}}}
+
+
+def test_watchlist_shows_the_valuation_read(store):
+    """Without this the fundamental layer was collected, fed to the AI, and
+    never once shown to the person reading the report."""
+    _seed(store)
+    store.write("onchain_valuation", _valuation())
+
+    text = _plain(store)
+
+    assert "fundamental mendukung LONG" in text
+    assert "MCap/TVL 0.82" in text
+    assert "TVL 30h +22%" in text
+
+
+def test_valuation_line_marks_each_bias():
+    from wolf.reports.flow import valuation_note
+
+    assert "🐂" in valuation_note({"bias": "SUPPORTS_LONG"})
+    assert "🐻" in valuation_note({"bias": "SUPPORTS_SHORT"})
+    assert "⚪" in valuation_note({"bias": "NEUTRAL"})
+
+
+def test_valuation_line_omits_metrics_it_does_not_have():
+    from wolf.reports.flow import valuation_note
+
+    note = valuation_note({"bias": "NEUTRAL", "metrics": {"mcap_tvl": None, "tvl_chg_30d": None}})
+    assert note == "⚪ fundamental netral"
+    assert "MCap/TVL" not in note
+
+
+def test_valuation_line_absent_for_uncollected_coins():
+    from wolf.reports.flow import valuation_note
+
+    assert valuation_note(None) == ""
+    assert valuation_note("junk") == ""
+
+
+def test_report_works_without_the_valuation_collector(store):
+    """Valuation is optional: its absence costs one line, not the report."""
+    _seed(store)
+    text = _report(store)
+
+    assert "6/ WATCHLIST" in text
+    assert "$SOL" in text
+    assert "fundamental" not in text
+
+
+def test_valuation_line_carries_no_entry_call(store):
+    _seed(store)
+    store.write("onchain_valuation", _valuation())
+
+    text = _plain(store).lower()
+    for banned in ("entry", "target", "stop loss", " sl ", " tp "):
+        assert banned not in text
