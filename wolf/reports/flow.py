@@ -1,367 +1,521 @@
-"""Flow-intelligence report → 🗞 News topic.
+"""Flow Intelligence digest → its own Telegram topic.
 
-Mimics the on-chain "flow intelligence" thread style (BTC flow → stablecoin dry
-powder → chain rotation → token picks/skips → conclusion) using only free data
-(CoinGecko + DefiLlama). The deterministic :func:`~wolf.flow.brief.build_brief`
-does the analysis; this reporter *renders* it — preferring an LLM narrator
-(DeepSeek writes the prose) and falling back to a rule-based template when no AI
-client is configured, so the report always works.
+Six sections, in the order capital actually moves: what the whole market did,
+how much dry powder is sitting on the sidelines, which chain it is rotating
+into, whether US institutions are bidding, where whales are positioned, and only
+then which coins are worth a look.
 
-The numbers always come from the brief; the LLM only phrases them, and its
-output is HTML-escaped before sending.
+**This reporter never fetches.** It reads snapshots the :mod:`wolf.onchain`
+collectors persisted and renders them. The previous version fetched inside
+``build()`` and threw the numbers away with the returned string, which meant a
+second consumer of the same source had to fetch again and could reach a
+different conclusion. One fetch, two consumers, no disagreement.
+
+Four rules this report is held to, each of them a bug the previous one shipped:
+
+* **No entry calls.** This answers "which coin is worth looking at", never "at
+  what price do I get in". Entries, stops and targets come from the detectors
+  and ``build_targets()``, which read price structure. The old report printed
+  "entry zone: sekarang (pullback sehat)" derived from nothing but the 24h
+  change — a price recommendation with no price analysis behind it.
+* **Pegged and tokenized assets are filtered out.** Stablecoins and tokenized
+  stocks screen beautifully on FDV/MC ≈ 1.0x because full circulation is
+  trivially true for anything pegged. That is how $CRVUSD and $SNDKB became
+  "token picks".
+* **Watchlist entries must be tradeable here.** A screener hit whose
+  ``get_klines()`` returns an empty list is not a finding, so the watchlist is
+  intersected with the exchange universe.
+* **Labels must match their numbers, and the verdict must match the body.** No
+  "numpuk 🔥" on a 0.0% change, and no execution advice above a NEUTRAL read.
+
+Stale snapshots are still shown — a 45-minute-old whale read is information —
+but always carrying their age, so nothing is mistaken for live.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Optional
+from typing import Optional, Sequence
 
-from wolf.ai.base import LLMClient, NullLLMClient
-from wolf.flow.brief import (
-    FlowBrief,
-    Pick,
-    TokenView,
-    build_brief,
-    build_token_view,
-)
-from wolf.flow.coingecko import CoinGeckoClient, TokenMetrics
-from wolf.flow.defillama import DefiLlamaClient
-from wolf.flow.hyperliquid import HyperliquidPerps
-from wolf.flow.sentiment import SentimentClient
-from wolf.textfmt import DIVIDER, esc, fmt_price, fmt_usd, now
+from wolf.market import age_minutes
+from wolf.onchain.coinbase_premium import STATE_KEY as PREMIUM_KEY
+from wolf.onchain.macro import STATE_KEY as MACRO_KEY
+from wolf.onchain.valuation import STATE_KEY as VALUATION_KEY
+from wolf.onchain.whale_hyperliquid import STATE_KEY as WHALE_KEY
+from wolf.textfmt import DIVIDER, esc, fmt_usd, now
 
 log = logging.getLogger("wolf.reports")
 
-_NARRATOR_SYSTEM = (
-    "Lu analis crypto on-chain. Tulis ulang DATA flow intelligence di bawah jadi "
-    "thread gaya Telegram berbahasa Indonesia gaul-tapi-tajam, PERSIS gaya ini:\n"
-    "- Struktur: 1/ BTC & MARKET (sebut Fear & Greed + Coinbase premium = demand "
-    "institusi US; fear + premium positif = sinyal contrarian), 2/ STABLECOIN "
-    "(dry powder), 3/ CHAIN ROTATION, "
-    "4/ TOKEN PICKS (ranked #1/#2/#3 — tiap pick sebut Mcap, Price 24h, % dari ATH, "
-    "Liquidity percentile, Funding signal, FDV/MC, Quant score, thesis singkat & "
-    "entry zone), 5/ WATCHLIST, 6/ SKIP (+ alasannya), 7/ KESIMPULAN + STRATEGI.\n"
-    "- Pakai emoji (🟢🔥📈✅❌⚠️🥇🥈🥉👀), kalimat pendek nan tegas, sebut angkanya.\n"
-    "- Funding BULLISH = shorts crowded (bahan bakar squeeze); BEARISH = longs overheated.\n"
-    "- WAJIB cuma pakai angka dari DATA. JANGAN ngarang metrik (mis. whale wallet / "
-    "netflow) yang nggak ada di DATA.\n"
-    "- Tutup dengan 'NFA — DYOR'.\n"
-    "- Output teks polos saja: TANPA tag HTML/markdown."
+#: Age past which a section is annotated with how old it is.
+STALE_AFTER_MIN = 15.0
+
+#: Bases that are pegged, wrapped or tokenized claims on something else. They
+#: are excluded from the watchlist because the screen's headline metric —
+#: FDV/MC near 1.0 — is trivially true for all of them and says nothing.
+PEGGED_BASES: frozenset[str] = frozenset({
+    "USDT", "USDC", "DAI", "FDUSD", "TUSD", "USDE", "USDS", "PYUSD", "BUSD",
+    "USDD", "USDP", "GUSD", "LUSD", "CRVUSD", "FRAX", "SUSD", "USD0", "USDY",
+    "USDX", "EURC", "EURS", "EURI", "AEUR", "EUR", "GBP", "XAUT", "PAXG",
+    "WBTC", "WETH", "WBETH", "WEETH", "STETH", "WSTETH", "CBBTC", "CBETH",
+    "TBTC", "RETH", "SFRXETH", "METH", "SOLVBTC", "BSOL", "JITOSOL", "MSOL",
+})
+
+#: Substrings that mark a *name* as a pegged or tokenized instrument even when
+#: its ticker is not in the list above — new stablecoins and tokenized equities
+#: appear constantly and a static ticker list cannot keep up.
+PEGGED_NAME_HINTS: tuple[str, ...] = (
+    "usd", "stablecoin", "tokenized", "wrapped", "staked", "tether",
+    "euro", "gold", "xstock", "backed ",
 )
 
-_DEEPDIVE_SYSTEM = (
-    "Lu analis crypto yang JUJUR (bukan shiller). Dari DATA satu token di bawah, "
-    "tulis deep-dive gaya thread Telegram Indonesia, struktur ini:\n"
-    "- Pembuka 1-2 kalimat: kenapa token ini menarik / kontroversial.\n"
-    "- 'Sisi BULLISH:' bullet kelebihannya.\n"
-    "- 'Sisi BEARISH (gw ga mau cuma shill):' bullet risikonya — JANGAN disoftenkan.\n"
-    "- 'Kondisi sekarang:' harga, mcap, % dari ATH, funding, OI.\n"
-    "- 'Cara gw main:' playbook (conviction vs momentum, sizing/DCA, leverage, horizon).\n"
-    "- Pakai emoji (🟢🔴✅❌⚠️🎯💰📉📊), sebut angkanya.\n"
-    "- WAJIB cuma pakai angka dari DATA. JANGAN ngarang netflow/whale yang nggak ada.\n"
-    "- Tutup 'NFA — DYOR'. Output teks polos: TANPA tag HTML/markdown."
-)
+#: Majors have their own reporting; they are not "finds".
+EXCLUDED_FROM_WATCHLIST: frozenset[str] = frozenset({"BTC", "ETH"})
+
+# Verdict labels. Deliberately descriptive of capital direction only — none of
+# them implies an action.
+RISK_ON = "RISK-ON"
+RISK_OFF = "RISK-OFF"
+ROTATION = "ROTATION"
+NEUTRAL = "NEUTRAL"
+
+_VERDICT_TEXT = {
+    RISK_ON: "Modal masuk ke risk asset — kondisi mendukung setup LONG dari layer teknikal.",
+    RISK_OFF: "Modal keluar dari risk asset — setup LONG jalan lebih berat.",
+    ROTATION: "Modal berputar antar sektor, bukan masuk-keluar — arah pasar belum satu suara.",
+    NEUTRAL: "Belum ada arah modal yang jelas. Tidak ada yang perlu dikejar dari report ini.",
+}
 
 
-class FlowReporter:
+def is_pegged(symbol: str, name: str = "") -> bool:
+    """Whether a token is a pegged, wrapped or tokenized claim on something else.
+
+    Checked by ticker first, then by name, because the ticker list cannot keep
+    up with how fast new stablecoins and tokenized equities are minted.
+    """
+    if symbol.upper() in PEGGED_BASES:
+        return True
+    lowered = name.lower()
+    return any(hint in lowered for hint in PEGGED_NAME_HINTS)
+
+
+def stale_note(ts, *, threshold_min: float = STALE_AFTER_MIN) -> str:
+    """``" (data 45m lalu)"`` for an aged snapshot, empty while it is current."""
+    age = age_minutes(ts)
+    if age is None:
+        return " (umur data tidak diketahui)"
+    if age < threshold_min:
+        return ""
+    if age < 90:
+        return f" (data {age:.0f}m lalu)"
+    return f" (data {age / 60:.1f}j lalu)"
+
+
+def flow_change_label(pct: float, *, deadband: float = 0.05) -> str:
+    """Describe a percentage change without overstating it.
+
+    The deadband exists because the previous report labelled a 0.0% change
+    "numpuk 🔥": the direction was read off ``>= 0``, so *no movement at all*
+    rendered as an inflow.
+    """
+    if abs(pct) < deadband:
+        return "flat — belum ada perubahan berarti"
+    return "numpuk 🔥" if pct > 0 else "nyusut 📉"
+
+
+def build_watchlist(
+    markets: Sequence[dict],
+    tradeable_bases: Optional[set[str]] = None,
+    *,
+    limit: int = 5,
+    min_market_cap: float = 20_000_000.0,
+) -> list[dict]:
+    """Rank screen candidates, after filtering out what cannot be acted on.
+
+    Two filters, both of them fixes: pegged/tokenized assets never qualify, and
+    (when a universe is supplied) a candidate must exist on an exchange Wolf can
+    actually pull candles from. Deliberately returns names and numbers only —
+    no entry, no target, no stop.
+    """
+    ranked: list[tuple[float, dict]] = []
+    for row in markets:
+        symbol = str(row.get("symbol", "")).upper()
+        name = str(row.get("name", ""))
+        if not symbol or symbol in EXCLUDED_FROM_WATCHLIST:
+            continue
+        if is_pegged(symbol, name):
+            continue
+        if tradeable_bases is not None and symbol not in tradeable_bases:
+            continue
+        mcap = _f(row.get("market_cap"))
+        if mcap < min_market_cap:
+            continue
+        volume = _f(row.get("volume_24h"))
+        turnover = volume / mcap if mcap else 0.0
+        fdv = _f(row.get("fdv"))
+        ranked.append((turnover, {
+            "symbol": symbol,
+            "name": name,
+            "change_24h": _f(row.get("change_24h")),
+            "market_cap": mcap,
+            "turnover": turnover,
+            "fdv_mc": (fdv / mcap) if (fdv and mcap) else None,
+            "ath_change_pct": _f(row.get("ath_change_pct")),
+        }))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    return [row for _, row in ranked[:limit]]
+
+
+def rank_whale_positioning(bias: dict) -> list[dict]:
+    """Per-coin whale positioning, dominant side first, ranked by notional.
+
+    Coins where longs and shorts are level are dropped: a balanced book is two
+    groups of whales disagreeing, which says nothing directional.
+    """
+    rows: list[dict] = []
+    for coin, row in (bias or {}).items():
+        if not isinstance(row, dict):
+            continue
+        longs, shorts = _i(row.get("long_count")), _i(row.get("short_count"))
+        if longs == shorts:
+            continue
+        direction = "LONG" if longs > shorts else "SHORT"
+        notional = _f(row.get("long_notional" if longs > shorts else "short_notional"))
+        rows.append({
+            "coin": str(coin), "direction": direction, "notional": notional,
+            "long_count": longs, "short_count": shorts,
+            "net": abs(longs - shorts),
+        })
+    return sorted(rows, key=lambda r: r["notional"], reverse=True)
+
+
+def describe_whale_moves(coins: dict, *, limit: int = 3) -> str:
+    """One-line summary of coordinated entries detected in the last scan window."""
+    if not coins:
+        return ""
+    ordered = sorted(coins.items(), key=lambda kv: _f(kv[1].get("notional_usd")), reverse=True)
+    parts = [
+        f"${coin} {str(row.get('direction', '')).upper()} "
+        f"({int(_f(row.get('wallet_count')))} wallet)"
+        for coin, row in ordered[:limit]
+    ]
+    return " · ".join(parts)
+
+
+#: How a directionless valuation bias reads in the watchlist.
+_VALUATION_MARK = {
+    "SUPPORTS_LONG": "🐂 fundamental mendukung LONG",
+    "SUPPORTS_SHORT": "🐻 fundamental mendukung SHORT",
+    "NEUTRAL": "⚪ fundamental netral",
+}
+
+
+def valuation_note(row: Optional[dict]) -> str:
+    """One line of fundamentals for a watchlist coin, or "" when uncollected.
+
+    Shows the bias plus only the metrics the macro screen does not already
+    print, so the two lines complement rather than repeat each other: MCap/TVL
+    and the 30-day TVL trend are the valuation collector's own, while FDV/MC and
+    turnover are already on the line above.
+    """
+    if not isinstance(row, dict):
+        return ""
+    parts = [_VALUATION_MARK.get(str(row.get("bias", "")), "")]
+    metrics = row.get("metrics")
+    if isinstance(metrics, dict):
+        mcap_tvl = metrics.get("mcap_tvl")
+        if mcap_tvl is not None:
+            parts.append(f"MCap/TVL {_f(mcap_tvl):.2f}")
+        tvl_trend = metrics.get("tvl_chg_30d")
+        if tvl_trend is not None:
+            parts.append(f"TVL 30h {_f(tvl_trend):+.0f}%")
+    parts = [p for p in parts if p]
+    return " · ".join(parts)
+
+
+def decide_verdict(
+    global_doc: Optional[dict],
+    stablecoin: Optional[dict],
+    premium: Optional[dict],
+    whale_bias: dict,
+) -> str:
+    """Read the four macro inputs into one direction-of-capital verdict.
+
+    Scores risk-on and risk-off evidence and requires a clear margin. A tie with
+    evidence on both sides is ROTATION (capital moving sideways between
+    sectors); no evidence at all is NEUTRAL. Nothing here recommends an action —
+    the verdict describes the backdrop the technical layer operates in.
+    """
+    on = 0
+    off = 0
+
+    if global_doc:
+        change = _f(global_doc.get("market_cap_change_24h"))
+        if change >= 1.0:
+            on += 1
+        elif change <= -1.0:
+            off += 1
+
+    if stablecoin:
+        # Growing stablecoin supply is sidelined cash building up (fuel);
+        # shrinking supply is redemptions, i.e. cash leaving crypto entirely.
+        change_7d = _f(stablecoin.get("change_7d_pct"))
+        if change_7d >= 0.5:
+            on += 1
+        elif change_7d <= -0.5:
+            off += 1
+
+    if premium and premium.get("signal") == "ACCUMULATION":
+        on += 1
+    elif premium and premium.get("signal") == "DISTRIBUTION":
+        off += 1
+
+    # Positioning, not this window's entries: the verdict describes the backdrop,
+    # and the backdrop is where the whales are sitting.
+    positioned = rank_whale_positioning(whale_bias)
+    longs = sum(1 for r in positioned if r["direction"] == "LONG")
+    shorts = sum(1 for r in positioned if r["direction"] == "SHORT")
+    if longs > shorts:
+        on += 1
+    elif shorts > longs:
+        off += 1
+
+    if on == 0 and off == 0:
+        return NEUTRAL
+    if on - off >= 2:
+        return RISK_ON
+    if off - on >= 2:
+        return RISK_OFF
+    if on == off:
+        return ROTATION
+    return RISK_ON if on > off else RISK_OFF
+
+
+class FlowIntelReporter:
+    """Renders the Flow Intelligence digest from persisted collector snapshots."""
+
     def __init__(
         self,
-        coingecko: Optional[CoinGeckoClient] = None,
-        defillama: Optional[DefiLlamaClient] = None,
-        sentiment: Optional[SentimentClient] = None,
-        hyperliquid: Optional[HyperliquidPerps] = None,
-        narrator: Optional[LLMClient] = None,
-        market_client=None,
+        store,
+        universe_provider=None,
         anomaly=None,
         *,
-        markets_limit: int = 60,
-        max_picks: int = 3,
-        max_skips: int = 4,
-        max_watch: int = 2,
-        quote: str = "USDT",
+        max_watchlist: int = 5,
+        max_chains: int = 3,
+        max_whale_coins: int = 5,
         tz: str = "UTC",
     ) -> None:
-        self._cg = coingecko or CoinGeckoClient()
-        self._llama = defillama or DefiLlamaClient()
-        self._sentiment = sentiment or SentimentClient()
-        self._hl = hyperliquid or HyperliquidPerps()
-        self._narrator = narrator or NullLLMClient()
-        self._market = market_client   # exchange client → funding fallback (optional)
+        self._store = store
+        self._universe_provider = universe_provider
         self._anomaly = anomaly        # AnomalyScanner → appends its section (optional)
-        self._markets_limit = markets_limit
-        self._max_picks = max_picks
-        self._max_skips = max_skips
-        self._max_watch = max_watch
-        self._quote = quote
+        self._max_watchlist = max_watchlist
+        self._max_chains = max_chains
+        self._max_whale_coins = max_whale_coins
         self._tz = tz
 
-    # ── orchestration ──────────────────────────────────────────────────
-    def gather(self) -> FlowBrief:
-        markets = self._cg.top_markets(limit=self._markets_limit)
-        global_metrics = self._cg.global_data()
-        chains = self._llama.chain_activity()
-        stablecoin = self._llama.stablecoin_supply()
-        fear_greed = self._sentiment.fear_greed()
-        coinbase_premium = self._sentiment.coinbase_premium()
-        brief = build_brief(
-            markets, global_metrics, chains, stablecoin,
-            fear_greed=fear_greed, coinbase_premium=coinbase_premium,
-            max_picks=self._max_picks, max_skips=self._max_skips, max_watch=self._max_watch,
-        )
-        self._enrich_funding(brief.picks + brief.watchlist)
-        return brief
+    # ── universe ──────────────────────────────────────────────────────
+    def tradeable_bases(self) -> Optional[set[str]]:
+        """Base symbols Wolf can actually fetch candles for.
 
-    def _enrich_funding(self, picks: list[Pick]) -> None:
-        """Fill funding + open interest per pick: Hyperliquid first (one snapshot,
-        wide coverage + OI), then the exchange perp as a funding fallback."""
-        for p in picks:
-            try:
-                p.funding_rate = self._hl.funding_rate(p.symbol)
-                p.open_interest_usd = self._hl.open_interest_usd(p.symbol)
-            except Exception:
-                log.debug("hyperliquid lookup failed for %s", p.symbol)
-            if p.funding_rate is None and self._market is not None:
-                try:
-                    p.funding_rate = self._market.get_funding_rate(f"{p.symbol}{self._quote}")
-                except Exception:  # funding is optional — never break the report
-                    log.debug("funding lookup failed for %s", p.symbol)
-
-    def build(self) -> Optional[str]:
-        brief = self.gather()
-        if not brief.has_content:
-            log.debug("Flow report: no data, skipping")
+        ``None`` when no universe is wired, which disables the filter rather
+        than silently emptying the watchlist.
+        """
+        if self._universe_provider is None:
             return None
-        body = self._narrate(brief) or self._template(brief)
-        anomaly = self._anomaly_section(brief.stance)
+        try:
+            symbols = self._universe_provider.symbols()
+        except (AttributeError, ValueError, TypeError, KeyError):
+            log.warning("Universe lookup failed — watchlist CEX filter disabled", exc_info=True)
+            return None
+        from wolf.exchange.sources import split_quote
+
+        bases = {split_quote(str(s).upper())[0] for s in symbols or []}
+        return bases or None
+
+    # ── rendering ─────────────────────────────────────────────────────
+    def build(self) -> Optional[str]:
+        """Render the digest, or ``None`` when no collector has produced data."""
+        macro = self._store.read(MACRO_KEY, default=None) or {}
+        whale = self._store.read(WHALE_KEY, default=None) or {}
+        premium = self._store.read(PREMIUM_KEY, default=None) or {}
+        valuation = self._store.read(VALUATION_KEY, default=None) or {}
+
+        global_doc = macro.get("global")
+        stablecoin = macro.get("stablecoin")
+        chains = macro.get("chains") or []
+        markets = macro.get("markets") or []
+        whale_coins = whale.get("coins") or {}
+
+        whale_bias = whale.get("bias") or {}
+        if not any((global_doc, stablecoin, chains, markets, whale_coins, whale_bias,
+                    premium.get("available"))):
+            log.debug("Flow Intelligence: no collector data yet, skipping")
+            return None
+
+        macro_age = stale_note(macro.get("ts"))
+        lines = [f"🧠 <b>FLOW INTELLIGENCE</b>\n{DIVIDER}"]
+        lines += self._macro_section(global_doc, macro_age)
+        lines += self._dry_powder_section(stablecoin, macro_age)
+        lines += self._rotation_section(chains, macro_age)
+        lines += self._institutional_section(premium)
+        lines += self._whale_section(whale.get("bias") or {}, whale_coins, whale.get("ts"))
+        lines += self._watchlist_section(markets, macro_age,
+                                         valuation.get("symbols") or {})
+
+        verdict = decide_verdict(global_doc, stablecoin,
+                                 premium if premium.get("available") else None,
+                                 whale_bias)
+        lines.append(f"\n<b>📌 KESIMPULAN: {esc(verdict)}</b>")
+        lines.append(esc(_VERDICT_TEXT[verdict]))
+        # Says plainly what this report is not, so its absence of entries reads
+        # as a boundary rather than an omission.
+        # Worded to avoid the vocabulary of execution entirely — the report is
+        # tested for the absence of those words, and the disclaimer must not be
+        # the one line that reintroduces them.
+        lines.append("\n<i>Report ini soal ke mana modal bergerak, bukan harga eksekusi. "
+                     "Level trading tetap datang dari sinyal detector.</i>")
+
+        anomaly = self._anomaly_section(verdict)
         if anomaly:
-            body = f"{body}\n{DIVIDER}\n{anomaly}"
-        return f"{body}\n{DIVIDER}\n🕐 {now(self._tz)}"
+            lines.append(f"{DIVIDER}\n{anomaly}")
+        lines.append(f"{DIVIDER}\n🕐 {now(self._tz)}")
+        return "\n".join(lines)
 
-    def _anomaly_section(self, stance: str) -> str:
-        """Render the ANOMALY SCANNER section; never let it break the report.
+    def _anomaly_section(self, verdict: str) -> str:
+        """Render the anomaly scanner's section; never let it break the report.
 
-        A scan failure degrades to a one-line notice so the rest of the flow
-        message still goes out.
+        A scan failure degrades to a one-line notice so the rest of the digest
+        still goes out.
         """
         if self._anomaly is None:
             return ""
         from anomaly.formatter import simplify_verdict
         try:
-            return self._anomaly.build_section(simplify_verdict(stance))
-        except Exception as exc:  # anomaly scan must never fail the whole news
+            return self._anomaly.build_section(simplify_verdict(verdict))
+        except Exception:  # an anomaly scan must never cost the whole digest
             log.exception("Anomaly scan failed")
-            return f"⚠️ Anomaly scan gagal: {esc(str(exc))}"
+            return "⚠️ Anomaly scan gagal — bagian lain report tetap dikirim."
 
-    # ── single-token deep dive (bull vs bear) ──────────────────────────
-    def build_token(self, symbol: str) -> Optional[str]:
-        """Honest contrarian deep-dive for one token, ENA-thread style.
+    def _macro_section(self, global_doc: Optional[dict], age: str) -> list[str]:
+        lines = [f"<b>1/ MARKET MACRO</b>{esc(age)}"]
+        if not global_doc:
+            return lines + ["• Data macro belum tersedia."]
+        change = _f(global_doc.get("market_cap_change_24h"))
+        arrow = "🟢" if change > 0 else ("🔴" if change < 0 else "⚪")
+        lines.append(f"{arrow} Total mcap {fmt_big_usd(global_doc.get('total_market_cap'))} "
+                     f"({change:+.1f}% 24h)")
+        lines.append(f"₿ BTC dominance {_f(global_doc.get('btc_dominance')):.1f}% · "
+                     f"USDT.D {_f(global_doc.get('usdt_dominance')):.1f}%")
+        return lines
 
-        Pulls the token's CoinGecko metrics + Hyperliquid funding/OI, derives
-        bull and bear factors, then writes them up (LLM if available, else
-        template). Returns ``None`` if the token isn't found.
+    def _dry_powder_section(self, stablecoin: Optional[dict], age: str) -> list[str]:
+        lines = [f"\n<b>2/ DRY POWDER</b>{esc(age)}"]
+        if not stablecoin:
+            return lines + ["• Data stablecoin supply belum tersedia."]
+        change_7d = _f(stablecoin.get("change_7d_pct"))
+        lines.append(f"💵 Stablecoin supply {fmt_big_usd(stablecoin.get('total_usd'))} "
+                     f"({change_7d:+.1f}% / 7h) — {esc(flow_change_label(change_7d))}")
+        return lines
+
+    def _rotation_section(self, chains: list, age: str) -> list[str]:
+        lines = [f"\n<b>3/ CHAIN ROTATION</b>{esc(age)}"]
+        if not chains:
+            return lines + ["• Data DEX volume per chain belum tersedia."]
+        ordered = sorted(chains, key=lambda c: _f(c.get("dex_volume_24h")), reverse=True)
+        for chain in ordered[: self._max_chains]:
+            change = _f(chain.get("change_1d"))
+            mark = "🔥" if change > 0.05 else ("📉" if change < -0.05 else "⚪")
+            lines.append(f"{mark} {esc(chain.get('label') or chain.get('chain'))}: "
+                         f"DEX vol {fmt_usd(chain.get('dex_volume_24h'))} ({change:+.1f}%)")
+        return lines
+
+    def _institutional_section(self, premium: dict) -> list[str]:
+        lines = ["\n<b>4/ INSTITUTIONAL FLOW</b>" + esc(stale_note(premium.get("ts")))
+                 if premium else "\n<b>4/ INSTITUTIONAL FLOW</b>"]
+        if not premium or not premium.get("available"):
+            return lines + ["• Coinbase premium belum tersedia."]
+        pct = _f(premium.get("premium_pct"))
+        signal = str(premium.get("signal", "NEUTRAL"))
+        label = {
+            "ACCUMULATION": "institusi US lagi ngangkat bid",
+            "DISTRIBUTION": "institusi US lagi distribusi",
+        }.get(signal, "belum ada bias institusi yang jelas")
+        lines.append(f"🏦 Coinbase premium (BTC) {pct:+.3f}% — {esc(label)}")
+        return lines
+
+    def _whale_section(self, bias: dict, coins: dict, ts) -> list[str]:
+        """Where the tracked wallets are sitting, then who moved this window.
+
+        Two different facts, so two different lines. The section previously
+        rendered only ``coins`` — the wallets that opened or added during the
+        last scan — under a heading that says POSITIONING. Ten minutes after a
+        coordinated entry that list empties, so the section announced "no whale
+        coordination" while six whales sat long on the coin. A heading has to
+        describe the data underneath it.
         """
-        sym = symbol.upper().strip()
-        token = self._find_token(sym)
-        if token is None:
-            log.debug("Flow deep-dive: %s not found", sym)
-            return None
-        funding = self._hl.funding_rate(sym)
-        if funding is None and self._market is not None:
-            funding = self._market.get_funding_rate(f"{sym}{self._quote}")
-        oi = self._hl.open_interest_usd(sym)
-        view = build_token_view(token, funding=funding, open_interest_usd=oi)
-        body = self._narrate_token(view) or self._template_token(view)
-        return f"{body}\n{DIVIDER}\n🕐 {now(self._tz)}"
-
-    def _find_token(self, sym: str) -> Optional[TokenMetrics]:
-        for t in self._cg.top_markets(limit=max(self._markets_limit, 250)):
-            if t.symbol == sym:
-                return t
-        return None
-
-    def _narrate_token(self, view: TokenView) -> str:
-        if not self._narrator.available:
-            return ""
-        try:
-            text = self._narrator.complete(_DEEPDIVE_SYSTEM, _token_payload(view), max_tokens=1100)
-        except Exception:
-            log.exception("Deep-dive narrator failed — using template")
-            return ""
-        text = (text or "").strip()
-        return (f"🔬 <b>DEEP DIVE — ${esc(view.symbol)}</b>\n{DIVIDER}\n{esc(text)}"
-                if text else "")
-
-    def _template_token(self, v: TokenView) -> str:
-        lines = [f"🔬 <b>DEEP DIVE — ${esc(v.symbol)}</b> ({esc(v.name)})\n{DIVIDER}"]
-        lines.append(f"💰 Harga ${fmt_price(v.price)} ({v.change_24h:+.1f}%) · mcap {fmt_usd(v.market_cap)}")
-        if v.ath_change_pct <= -1:
-            lines.append(f"📉 {v.ath_change_pct:.0f}% dari ATH")
-        if v.open_interest_usd:
-            lines.append(f"📊 Open interest {fmt_usd(v.open_interest_usd)}")
-        lines.append(f"🎯 Conviction score {v.score}/100 · stance: {esc(v.stance)}")
-
-        lines.append("\n<b>✅ Sisi BULLISH</b>")
-        lines += [f"🟢 {esc(b)}" for b in v.bull] or ["🟢 —"]
-        lines.append("\n<b>❌ Sisi BEARISH (jujur, bukan shill)</b>")
-        lines += [f"🔴 {esc(b)}" for b in v.bear] or ["🔴 —"]
-
-        lines.append("\n<b>📌 Cara main</b>")
-        lines += [f"• {esc(s)}" for s in v.playbook]
-        lines.append("\n<i>NFA — DYOR. Data: CoinGecko + Hyperliquid</i>")
-        return "\n".join(lines)
-
-    # ── LLM narration (preferred) ──────────────────────────────────────
-    def _narrate(self, brief: FlowBrief) -> str:
-        if not self._narrator.available:
-            return ""
-        try:
-            text = self._narrator.complete(
-                _NARRATOR_SYSTEM, _brief_payload(brief), max_tokens=1200
+        lines = [f"\n<b>5/ WHALE POSITIONING</b>{esc(stale_note(ts))}"]
+        rows = rank_whale_positioning(bias)
+        if not rows:
+            lines.append("• Belum ada posisi whale terlacak di coin manapun.")
+        for row in rows[: self._max_whale_coins]:
+            emoji = "🟢" if row["direction"] == "LONG" else "🔴"
+            lines.append(
+                f"{emoji} <b>${esc(row['coin'])}</b> {esc(row['direction'])} — "
+                f"{row['long_count']}L / {row['short_count']}S · "
+                f"{fmt_usd(row['notional'])}"
             )
-        except Exception:  # narration must never break the scheduled job
-            log.exception("Flow narrator failed — using template")
-            return ""
-        text = (text or "").strip()
-        return f"🧠 <b>FLOW INTELLIGENCE</b>\n{DIVIDER}\n{esc(text)}" if text else ""
+        # Events are additive context, never a substitute for the positioning
+        # above: an empty window means nobody moved, not that nobody is there.
+        moves = describe_whale_moves(coins)
+        if moves:
+            lines.append(f"🆕 Baru bergerak window ini: {esc(moves)}")
+        return lines
 
-    # ── deterministic template (fallback) ──────────────────────────────
-    def _template(self, b: FlowBrief) -> str:
-        lines = [f"🧠 <b>FLOW INTELLIGENCE</b>\n{DIVIDER}"]
-
-        if b.btc is not None or b.fear_greed is not None or b.coinbase_premium is not None:
-            lines.append("<b>1/ BTC &amp; MARKET</b>")
-            if b.btc is not None:
-                arrow = "🟢" if b.btc.market_cap_change_24h >= 0 else "🔴"
-                lines.append(f"{arrow} Total mcap {b.btc.market_cap_change_24h:+.1f}% (24h) · "
-                             f"BTC dominance {b.btc.btc_dominance:.1f}%")
-            if b.fear_greed is not None:
-                fg = b.fear_greed
-                mood = "😱" if fg.is_fear else ("🤑" if fg.is_greed else "😐")
-                lines.append(f"{mood} Fear &amp; Greed {fg.value} ({esc(fg.classification)})")
-            if b.coinbase_premium is not None:
-                cb = b.coinbase_premium
-                tag = {"ACCUMULATION": "🏦 institusi US akumulasi",
-                       "DISTRIBUTION": "🔻 institusi US distribusi"}.get(cb.signal, "netral")
-                lines.append(f"🏦 Coinbase premium {cb.premium_pct:+.2f}% — {tag}")
-
-        if b.stablecoin is not None:
-            s = b.stablecoin
-            sign = "numpuk 🔥" if s.change_7d_pct >= 0 else "nyusut 📉"
-            lines.append("\n<b>2/ STABLECOIN — dry powder</b>")
-            lines.append(f"💵 Total supply {fmt_usd(s.total_usd)} ({s.change_7d_pct:+.1f}% / 7h) — {sign}")
-            # Macro read: supply growing = sidelined cash building (fuel for dips);
-            # supply shrinking = redemptions = cash leaving crypto (risk-off).
-            lines.append("Cash numpuk di sideline = amunisi buat beli dip." if s.change_7d_pct >= 0
-                         else "Supply ditebus keluar — cash kabur dari crypto (risk-off).")
-
-        if b.chains:
-            lines.append("\n<b>3/ CHAIN ROTATION — kemana modal mengalir</b>")
-            for c in b.chains[:3]:
-                hot = "🔥" if c.change_1d > 0 else "📉"
-                lines.append(f"{hot} {esc(c.label)}: DEX vol {fmt_usd(c.dex_volume_24h)} ({c.change_1d:+.1f}%)")
-
-        if b.picks:
-            lines.append("\n<b>4/ TOKEN PICKS</b>")
-            medals = ["🥇", "🥈", "🥉"]
-            for i, p in enumerate(b.picks):
-                medal = medals[i] if i < len(medals) else "•"
-                lines.append(f"{medal} <b>#{i + 1} — ${esc(p.symbol)}</b> ({esc(p.name)})")
-                lines.append(f"   💰 mcap {fmt_usd(p.market_cap)} · 💧 liquidity {p.liquidity_pctile:.0f} pctile")
-                ath = f" · 📉 {p.ath_change_pct:.0f}% dari ATH" if p.ath_change_pct <= -1 else ""
-                lines.append(f"   Price 24h {p.change_24h:+.1f}%{ath}")
-                lines.append(f"   🎯 Quant {p.quant_score}/100 · {esc(_quant_line(p))}")
-                lines.append(f"   ✅ {esc(p.entry_note)}")
-
-        if b.watchlist:
-            lines.append("\n<b>👀 WATCHLIST</b>")
-            for p in b.watchlist:
-                lines.append(f"👀 <b>${esc(p.symbol)}</b> — {p.change_24h:+.1f}% 24h · "
-                             f"liquidity {p.liquidity_pctile:.0f} pctile · Quant {p.quant_score}/100")
-
-        if b.skips:
-            lines.append("\n<b>❌ SKIP — dan kenapa</b>")
-            for sk in b.skips:
-                lines.append(f"❌ <b>${esc(sk.symbol)}</b> — {esc(sk.reason)}")
-
-        lines.append(f"\n<b>📌 KESIMPULAN: {esc(b.stance)}</b>")
-        lines.append(esc(b.conclusion))
-        lines.append("\n<i>NFA — DYOR. Data: CoinGecko + DefiLlama</i>")
-        return "\n".join(lines)
+    def _watchlist_section(self, markets: list, age: str,
+                           valuations: Optional[dict] = None) -> list[str]:
+        lines = [f"\n<b>6/ WATCHLIST</b>{esc(age)}"]
+        watchlist = build_watchlist(markets, self.tradeable_bases(), limit=self._max_watchlist)
+        if not watchlist:
+            return lines + ["• Belum ada kandidat yang lolos filter."]
+        for row in watchlist:
+            facts = [f"turnover {row['turnover'] * 100:.0f}% mcap",
+                     f"mcap {fmt_usd(row['market_cap'])}"]
+            if row["fdv_mc"] is not None:
+                facts.append(f"FDV/MC {row['fdv_mc']:.1f}x")
+            if row["ath_change_pct"] <= -1:
+                facts.append(f"{row['ath_change_pct']:.0f}% dari ATH")
+            lines.append(f"👀 <b>${esc(row['symbol'])}</b> {row['change_24h']:+.1f}% 24h · "
+                         f"{esc(' · '.join(facts))}")
+            # The valuation collector's read on the same coin, when it has one.
+            # Without this the fundamental layer was collected, fed to the AI,
+            # and never once shown to the person reading the report.
+            note = valuation_note((valuations or {}).get(row["symbol"]))
+            if note:
+                lines.append(f"   {esc(note)}")
+        return lines
 
 
-def _quant_line(p: Pick) -> str:
-    """Compact 'Funding X · FDV/MC Yx · turnover' quant summary for a pick."""
-    parts = []
-    sig = p.funding_signal
-    if sig is not None:
-        parts.append(f"Funding {sig}")
-    if p.fdv_mc is not None:
-        parts.append(f"FDV/MC {p.fdv_mc:.1f}x")
-    parts.append(f"turnover {(p.vol_mc or 0) * 100:.0f}% mcap")
-    if p.open_interest_usd:
-        parts.append(f"OI {fmt_usd(p.open_interest_usd)}")
-    return " · ".join(parts)
+def fmt_big_usd(v) -> str:
+    """Like :func:`~wolf.textfmt.fmt_usd` but with a trillions tier.
+
+    Total market cap is the digest's very first number and lives above $1T, where
+    the shared helper's largest unit renders it as "$3100.00B". Kept local rather
+    than widened in ``textfmt`` so the other reports' output is untouched.
+    """
+    value = _f(v)
+    if abs(value) >= 1e12:
+        return f"${value / 1e12:.2f}T"
+    return fmt_usd(value)
 
 
-def _pick_payload(p: Pick) -> dict:
-    return {
-        "symbol": p.symbol, "name": p.name, "price": p.price,
-        "change_24h_pct": round(p.change_24h, 2), "market_cap_usd": round(p.market_cap),
-        "fdv_mc": round(p.fdv_mc, 2) if p.fdv_mc else None,
-        "pct_from_ath": round(p.ath_change_pct, 1),
-        "liquidity_percentile": round(p.liquidity_pctile, 1),
-        "funding_rate_pct": round(p.funding_rate, 4) if p.funding_rate is not None else None,
-        "funding_signal": p.funding_signal,
-        "open_interest_usd": round(p.open_interest_usd) if p.open_interest_usd else None,
-        "quant_score": p.quant_score,
-        "entry_note": p.entry_note,
-        "reasons": p.reasons,
-    }
+def _i(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
 
 
-def _token_payload(v: TokenView) -> str:
-    data = {
-        "symbol": v.symbol, "name": v.name, "price": v.price,
-        "change_24h_pct": round(v.change_24h, 2), "market_cap_usd": round(v.market_cap),
-        "fdv_mc": round(v.fdv_mc, 2) if v.fdv_mc else None,
-        "pct_from_ath": round(v.ath_change_pct, 1),
-        "funding_rate_pct": round(v.funding_rate, 4) if v.funding_rate is not None else None,
-        "open_interest_usd": round(v.open_interest_usd) if v.open_interest_usd else None,
-        "conviction_score": v.score, "stance": v.stance,
-        "bull_factors": v.bull, "bear_factors": v.bear, "playbook": v.playbook,
-    }
-    return "DATA:\n" + json.dumps(data, ensure_ascii=False)
-
-
-def _brief_payload(b: FlowBrief) -> str:
-    """Compact JSON of the brief for the narrator (numbers it must stick to)."""
-    data = {
-        "btc_market": None if b.btc is None else {
-            "total_mcap_change_24h_pct": round(b.btc.market_cap_change_24h, 2),
-            "btc_dominance_pct": round(b.btc.btc_dominance, 2),
-        },
-        "fear_greed": None if b.fear_greed is None else {
-            "value": b.fear_greed.value, "classification": b.fear_greed.classification,
-        },
-        "coinbase_premium": None if b.coinbase_premium is None else {
-            "premium_pct": round(b.coinbase_premium.premium_pct, 3),
-            "signal": b.coinbase_premium.signal,
-        },
-        "stablecoin_dry_powder": None if b.stablecoin is None else {
-            "total_usd": round(b.stablecoin.total_usd),
-            "change_1d_pct": round(b.stablecoin.change_1d_pct, 2),
-            "change_7d_pct": round(b.stablecoin.change_7d_pct, 2),
-        },
-        "chain_rotation": [
-            {"chain": c.label, "dex_volume_24h_usd": round(c.dex_volume_24h),
-             "change_1d_pct": round(c.change_1d, 1)}
-            for c in b.chains[:5]
-        ],
-        "token_picks": [_pick_payload(p) for p in b.picks],
-        "watchlist": [_pick_payload(p) for p in b.watchlist],
-        "skip": [{"symbol": s.symbol, "reason": s.reason} for s in b.skips],
-        "stance": b.stance,
-        "conclusion": b.conclusion,
-    }
-    return "DATA:\n" + json.dumps(data, ensure_ascii=False)
+def _f(v) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0

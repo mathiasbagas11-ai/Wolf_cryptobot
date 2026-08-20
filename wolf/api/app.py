@@ -22,7 +22,7 @@ from typing import Any, Optional
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 
-from wolf.app import Application, ai_status, build_application, build_flow_reporter
+from wolf.app import Application, ai_status, build_application, build_deepdive
 from wolf.config import Settings
 from wolf.diagnose import diagnose, render_digest
 from wolf.logging_setup import setup_logging
@@ -108,23 +108,27 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         resolved = app_obj.tracker.check_pending()
         return {"resolved": len(resolved), "signals": [s.to_dict() for s in resolved]}
 
-    def _flow_reporter():
-        """Reuse the scheduled reporter, or build one on demand if flow is off."""
-        return app_obj.flow or build_flow_reporter(app_obj.settings, app_obj.client)
-
     @api.post("/flow", dependencies=[Depends(require_api_key)])
     def flow_report() -> dict:
-        """Build the flow-intelligence brief now and post it to the News topic."""
-        text = _flow_reporter().build()
+        """Render the Flow Intelligence digest now and post it to its topic.
+
+        503 when no collector has produced data yet: the reporter reads the
+        StateStore and cannot manufacture a digest out of nothing. Run the
+        collectors (or wait for their scheduled jobs) first.
+        """
+        if app_obj.flow is None:
+            raise HTTPException(status_code=503, detail="Flow reporting is disabled")
+        text = app_obj.flow.build()
         if not text:
-            raise HTTPException(status_code=503, detail="No flow data available")
+            raise HTTPException(status_code=503, detail="No collected flow data yet")
         app_obj.notifier.notify_flow(text)
         return {"posted": app_obj.notifier.enabled, "text": text}
 
     @api.post("/flow/{symbol}", dependencies=[Depends(require_api_key)])
     def flow_deep_dive(symbol: str) -> dict:
-        """Single-token contrarian deep-dive (bull vs bear) → News topic."""
-        text = _flow_reporter().build_token(symbol)
+        """Single-token honest deep-dive (bull vs bear), fetched on demand."""
+        reporter = app_obj.deepdive or build_deepdive(app_obj.settings, app_obj.client)
+        text = reporter.build_token(symbol)
         if not text:
             raise HTTPException(status_code=404, detail=f"Token '{symbol}' not found")
         app_obj.notifier.notify_flow(text)

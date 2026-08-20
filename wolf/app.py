@@ -32,12 +32,20 @@ from wolf.regime import RegimeProvider
 from wolf.universe import UniverseProvider
 from wolf.news import NewsService, NewsSynthesizer, build_news_source
 from wolf.news.signal import NewsSignalScanner
+from wolf.flow import CoinGeckoClient, DefiLlamaClient
 from wolf.notify import TelegramNotifier
+from wolf.onchain import (
+    CoinbasePremiumCollector,
+    MacroFlowCollector,
+    ValuationCollector,
+    WhaleHyperliquidCollector,
+)
 from wolf.reports import (
-    FlowReporter,
+    FlowIntelReporter,
     MajorsReporter,
     MarketPulse,
     MarketRadar,
+    TokenDeepDive,
     WhaleTracker,
 )
 from wolf.screener import Screener
@@ -66,7 +74,14 @@ class Application:
     radar: Optional[MarketRadar] = None
     pulse: Optional[MarketPulse] = None
     whale: Optional[WhaleTracker] = None
-    flow: Optional[FlowReporter] = None
+    flow: Optional[FlowIntelReporter] = None
+    deepdive: Optional[TokenDeepDive] = None
+    # On-chain collectors. Each is None when disabled; the scheduler only adds a
+    # job for the ones that exist, so a disabled collector costs nothing.
+    valuation_collector: Optional[ValuationCollector] = None
+    whale_collector: Optional[WhaleHyperliquidCollector] = None
+    premium_collector: Optional[CoinbasePremiumCollector] = None
+    macro_collector: Optional[MacroFlowCollector] = None
     anomaly: object = None            # anomaly.scanner.AnomalyScanner (optional)
 
     def warm_start_learning(self) -> None:
@@ -176,7 +191,12 @@ def build_application(settings: Settings | None = None) -> Application:
         store, client, settings.tracker, notify=notifier.on_event,
         account=account, learning=learning, ladder=settings.ladder,
     )
-    context_provider = ContextProvider(client)
+    # The context reads collector snapshots out of the store rather than
+    # fetching: building a per-symbol context stays free, and stale data is
+    # nulled out so a signal is never gated on a reading nobody refreshed.
+    context_provider = ContextProvider(
+        client, store, staleness_min=settings.onchain.staleness_min
+    )
 
     def _role_client(role, label: str = ""):
         llm = build_llm_client(
@@ -272,6 +292,8 @@ def build_application(settings: Settings | None = None) -> Application:
         round_trip_bps=settings.round_trip_cost_bps,
         max_cost_r=settings.max_cost_r,
         learning=learning,
+        whale_veto_enabled=settings.onchain.whale_veto_enabled,
+        whale_veto_min_wallets=settings.onchain.whale_veto_min_wallets,
     )
     backtest = BacktestEngine(
         client, detectors,
@@ -311,7 +333,12 @@ def build_application(settings: Settings | None = None) -> Application:
     whale = WhaleTracker(client, store, min_usd=r.whale_min_usd, tz=tz) if r.whale_enabled else None
 
     anomaly = build_anomaly_scanner(settings) if settings.anomaly.enabled else None
-    flow = build_flow_reporter(settings, client, anomaly=anomaly) if settings.flow.enabled else None
+    flow = (
+        build_flow_reporter(settings, store, universe_provider, anomaly=anomaly)
+        if settings.flow.enabled else None
+    )
+    deepdive = build_deepdive(settings, client)
+    collectors = build_onchain_collectors(settings, store)
 
     return Application(
         settings=settings,
@@ -332,8 +359,54 @@ def build_application(settings: Settings | None = None) -> Application:
         pulse=pulse,
         whale=whale,
         flow=flow,
+        deepdive=deepdive,
         anomaly=anomaly,
+        **collectors,
     )
+
+
+def build_onchain_collectors(settings: Settings, store: StateStore) -> dict:
+    """Construct the enabled on-chain collectors, keyed for :class:`Application`.
+
+    Every one is optional and independently switchable. With all of them off the
+    dict is empty, the scheduler adds no jobs, the context finds nothing in the
+    store, and the bot behaves exactly as it did before any of this existed —
+    which is the degradation path the whole feature is designed around.
+    """
+    o = settings.onchain
+    collectors: dict = {}
+
+    if o.valuation_enabled:
+        collectors["valuation_collector"] = ValuationCollector(
+            store,
+            timeout=settings.http_timeout,
+            cache_ttl=float(o.valuation_cache_ttl_sec),
+            rate_limit_backoff=float(o.valuation_rate_limit_backoff_sec),
+        )
+    if o.whale_enabled:
+        collectors["whale_collector"] = WhaleHyperliquidCollector(
+            store,
+            timeout=settings.http_timeout,
+            top_wallets=o.whale_top_wallets,
+            min_position_usd=o.whale_min_position_usd,
+            min_wallets=o.whale_min_wallets,
+            cooldown_min=float(o.whale_cooldown_min),
+        )
+    if o.premium_enabled:
+        collectors["premium_collector"] = CoinbasePremiumCollector(
+            store, timeout=settings.http_timeout
+        )
+    if o.macro_enabled:
+        collectors["macro_collector"] = MacroFlowCollector(
+            store,
+            coingecko=CoinGeckoClient(timeout=settings.http_timeout),
+            defillama=DefiLlamaClient(timeout=settings.http_timeout),
+            markets_limit=settings.flow.markets_limit,
+        )
+    if collectors:
+        log.info("On-chain collectors enabled: %s",
+                 ", ".join(sorted(k.replace("_collector", "") for k in collectors)))
+    return collectors
 
 
 def build_anomaly_scanner(settings: Settings):
@@ -362,34 +435,41 @@ def build_anomaly_scanner(settings: Settings):
     )
 
 
-def build_flow_reporter(settings: Settings, client: MarketDataClient,
-                        anomaly=None) -> FlowReporter:
-    """Construct the flow-intelligence reporter (used by the scheduler and the
-    on-demand REST endpoints, so a deep-dive works even when scheduling is off)."""
-    from wolf.flow import (
-        CoinGeckoClient,
-        DefiLlamaClient,
-        HyperliquidPerps,
-        SentimentClient,
+def build_flow_reporter(settings: Settings, store: StateStore,
+                        universe_provider=None, anomaly=None) -> FlowIntelReporter:
+    """Construct the Flow Intelligence reporter.
+
+    It takes the store and the universe, not HTTP clients: the digest reads what
+    the wolf.onchain collectors persisted rather than fetching its own copy, and
+    the universe is what keeps untradeable symbols out of the watchlist.
+    """
+    f = settings.flow
+    return FlowIntelReporter(
+        store,
+        universe_provider,
+        anomaly=anomaly,
+        max_watchlist=f.max_watch,
+        tz=settings.timezone,
     )
+
+
+def build_deepdive(settings: Settings, client: MarketDataClient) -> TokenDeepDive:
+    """Construct the on-demand single-token deep dive.
+
+    Always built: it serves the REST endpoint directly, so a deep dive works
+    even when the scheduled digest is disabled.
+    """
+    from wolf.flow import CoinGeckoClient, HyperliquidPerps
 
     f = settings.flow
     narrator = build_llm_client(
         f.narrator_provider, settings.api_key_for(f.narrator_provider), f.narrator_model
     )
-    return FlowReporter(
+    return TokenDeepDive(
         coingecko=CoinGeckoClient(timeout=settings.http_timeout),
-        defillama=DefiLlamaClient(timeout=settings.http_timeout),
-        sentiment=SentimentClient(timeout=settings.http_timeout),
         hyperliquid=HyperliquidPerps(timeout=settings.http_timeout),
         narrator=narrator,
         market_client=client,
-        anomaly=anomaly,
         markets_limit=f.markets_limit,
-        max_picks=f.max_picks,
-        max_skips=f.max_skips,
-        max_watch=f.max_watch,
         tz=settings.timezone,
     )
-
-

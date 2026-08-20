@@ -19,6 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from wolf.app import Application, ai_status
 from wolf.diagnose import diagnose, render_digest
+from wolf.reports import build_coordination_alerts
 
 log = logging.getLogger("wolf.scheduler")
 
@@ -140,10 +141,26 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
                     "whale", r.whale_interval_min,
                     lambda: app.notifier.notify_whale(app.whale.build()))
 
-    # Flow-intelligence brief (Nansen-style thread) → News topic. The anomaly
-    # scanner (when enabled) appends its PAPER-MODE section to this same message.
+    # On-chain collectors. Each writes a snapshot to the StateStore; the Flow
+    # Intelligence digest and the per-symbol signal context both read from
+    # there, so one fetch serves both and they cannot disagree. Collector jobs
+    # are independent of the notifier: they must keep running (and keep the
+    # signal gates fed) even when Telegram is off.
+    o = app.settings.onchain
+    _add_collector_job(scheduler, app.valuation_collector, "onchain_collect",
+                       o.valuation_interval_min,
+                       lambda: app.valuation_collector.collect(_valuation_universe(app)))
+    _add_collector_job(scheduler, app.whale_collector, "whale_hl_collect",
+                       o.whale_interval_min, lambda: _scan_whales(app))
+    _add_collector_job(scheduler, app.premium_collector, "coinbase_premium_collect",
+                       o.premium_interval_min, lambda: app.premium_collector.collect())
+    _add_collector_job(scheduler, app.macro_collector, "flow_macro_collect",
+                       o.macro_interval_min, lambda: app.macro_collector.collect())
+
+    # Flow Intelligence digest → its own topic. Pure rendering of what the
+    # collectors already wrote, so the cadence costs nothing but a message.
     if getattr(app, "flow", None) is not None:
-        _add_report_job(scheduler, app.notifier.enabled, "flow",
+        _add_report_job(scheduler, app.notifier.enabled, "flow_report",
                         app.settings.flow.interval_min,
                         lambda: app.notifier.notify_flow(app.flow.build()))
 
@@ -162,6 +179,25 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
                 next_run_time=_soon(),
             )
     return scheduler
+
+
+def _scan_whales(app: Application) -> None:
+    """One whale scan, then alert the whale room about any coordinated entry.
+
+    Two outputs from one scan, and they are deliberately different in kind: the
+    snapshot feeds the signal gate and the periodic digest, while the alert is
+    an event — it fires when several wallets pile in, and stays silent
+    otherwise. The collector's per-coin cooldown means a build-up unfolding
+    across scans is announced once, not every ten minutes.
+
+    A Telegram failure must not cost the snapshot, which the gates depend on,
+    so the scan is completed and persisted before anything is sent.
+    """
+    doc = app.whale_collector.scan()
+    if not app.notifier.enabled or not app.settings.onchain.whale_alert_enabled:
+        return
+    for alert in build_coordination_alerts(doc, tz=app.settings.timezone):
+        app.notifier.notify_whale(alert)
 
 
 def _post_news(app: Application) -> None:
@@ -213,3 +249,40 @@ def _add_report_job(scheduler, enabled: bool, job_id: str, minutes: int, fn) -> 
         coalesce=True,
         next_run_time=_soon(),
     )
+
+
+def _add_collector_job(scheduler, collector, job_id: str, minutes: int, fn) -> None:
+    """Schedule a collector, skipping it when that collector is disabled.
+
+    Same discipline as the report jobs — ``max_instances=1`` and ``coalesce``,
+    so a slow fetch can never overlap itself and leave two writers racing for
+    one StateStore key.
+    """
+    if collector is None:
+        return
+    scheduler.add_job(
+        _guarded(fn, job_id),
+        "interval",
+        minutes=minutes,
+        id=job_id,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=_soon(),
+    )
+
+
+def _valuation_universe(app: Application) -> list[str]:
+    """Symbols the valuation collector refreshes this run.
+
+    Capped, because the universe is dynamic and CoinGecko's key-less API is not:
+    an unbounded top-N list would spend the rate-limit window on the tail and
+    starve the majors that most signals are actually about. The scan universe is
+    already ordered with the core majors first, so the cap keeps what matters.
+    """
+    limit = app.settings.onchain.valuation_max_symbols
+    try:
+        symbols = app.screener.current_universe()
+    except Exception:  # a universe hiccup must not kill the collector job
+        log.warning("Universe lookup failed for valuation collect", exc_info=True)
+        return []
+    return list(symbols)[:limit]

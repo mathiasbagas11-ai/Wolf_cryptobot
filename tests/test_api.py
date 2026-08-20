@@ -57,10 +57,17 @@ def test_flow_endpoint_posts_report(client):
 
 
 def test_flow_deep_dive_endpoint(client):
+    """The deep dive is its own on-demand reporter, separate from the digest."""
     api, app_obj = client
-    app_obj.flow = _FakeFlow()
+    app_obj.deepdive = _FakeFlow()
     assert api.post("/flow/ena").json()["text"] == "DEEP DIVE ENA"
     assert api.post("/flow/nope").status_code == 404
+
+
+def test_flow_endpoint_503_when_reporting_is_disabled(client):
+    api, app_obj = client
+    app_obj.flow = None
+    assert api.post("/flow").status_code == 503
 
 
 def test_record_and_list_active(client):

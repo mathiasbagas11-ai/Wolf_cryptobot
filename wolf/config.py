@@ -512,17 +512,78 @@ class DebateRole:
 
 @dataclass(frozen=True)
 class FlowSettings:
-    """On-chain flow-intelligence report (Nansen-style thread → News topic)."""
+    """Flow Intelligence digest — reads collector snapshots, posts a digest.
+
+    ``interval_min`` is the *reporting* cadence only. How fresh the numbers are
+    is set by the collectors below (:class:`OnChainSettings`), which is the
+    point of the split: the digest can be re-rendered as often as you like
+    without costing a single extra API call.
+    """
 
     enabled: bool = False
-    interval_min: int = 240            # 4h — flows move slowly; avoid spam
-    markets_limit: int = 60           # CoinGecko coins to scan (by volume)
-    max_picks: int = 3
-    max_skips: int = 4
-    max_watch: int = 2
-    # LLM narrator: which provider phrases the brief. Empty/no key → template.
+    interval_min: int = 30            # digest cadence; rendering is free
+    markets_limit: int = 60           # CoinGecko coins the macro collector screens
+    max_watch: int = 5                # watchlist length
+    # LLM narrator for the on-demand single-token deep dive (POST /flow/{symbol}).
+    # The digest itself is deterministic — its numbers are never phrased by a model.
     narrator_provider: str = "deepseek"
     narrator_model: str = ""
+
+
+@dataclass(frozen=True)
+class OnChainSettings:
+    """On-chain / whale / institutional collectors.
+
+    Each is independently switchable, and each is optional: with all of them off
+    the bot behaves exactly as it did before they existed. Intervals are chosen
+    against what the free endpoints tolerate, not against how often the data
+    could theoretically change.
+    """
+
+    # Valuation (CoinGecko + DefiLlama). Hourly: fundamentals move slowly and
+    # the public CoinGecko API will not carry a 15-symbol universe any faster.
+    valuation_enabled: bool = False
+    valuation_interval_min: int = 60
+    valuation_cache_ttl_sec: int = 3600
+    valuation_rate_limit_backoff_sec: int = 900
+    valuation_max_symbols: int = 15    # cap per run, so a wide universe cannot
+                                       # spend the whole rate-limit window
+
+    # Hyperliquid whale scan. 10 minutes matches the screening cycle, so a
+    # signal is judged against positioning no older than one cycle.
+    whale_enabled: bool = False
+    whale_interval_min: int = 10
+    whale_top_wallets: int = 30
+    whale_min_position_usd: float = 30_000.0
+    whale_min_wallets: int = 3         # coordination threshold for an alert
+    whale_cooldown_min: int = 60       # per-coin quiet period after alerting
+    # Post detected coordination to the 👁 Whale Report topic as an event.
+    # Separate from the Flow Intelligence digest on purpose: this fires when
+    # wallets pile in, that one reports positioning on a timer.
+    whale_alert_enabled: bool = True
+
+    # Coinbase premium (BTC only).
+    premium_enabled: bool = False
+    premium_interval_min: int = 10
+
+    # Market-wide macro/dry-powder/rotation snapshot for the digest.
+    macro_enabled: bool = False
+    macro_interval_min: int = 60
+
+    # How old a snapshot may be before the signal path treats it as absent.
+    # Below this, gates and the AI debate see it; above, they degrade to
+    # candle-only, which the bot already handles.
+    staleness_min: int = 30
+
+    # Whale veto gate in the screener. Deliberately stricter than the alert
+    # threshold: 3 wallets is worth reporting, overriding a setup takes 5.
+    whale_veto_enabled: bool = True
+    whale_veto_min_wallets: int = 5
+
+    @property
+    def any_enabled(self) -> bool:
+        return any((self.valuation_enabled, self.whale_enabled,
+                    self.premium_enabled, self.macro_enabled))
 
 
 @dataclass(frozen=True)
@@ -675,6 +736,7 @@ class Settings:
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
     flow: FlowSettings = field(default_factory=FlowSettings)
+    onchain: OnChainSettings = field(default_factory=OnChainSettings)
     anomaly: AnomalySettings = field(default_factory=AnomalySettings)
     learning: LearningSettings = field(default_factory=LearningSettings)
     backtest: BacktestSettings = field(default_factory=BacktestSettings)
@@ -726,13 +788,32 @@ class Settings:
         )
         flow = FlowSettings(
             enabled=_env_bool("FLOW_ENABLED", False),
-            interval_min=_env_int("FLOW_INTERVAL_MIN", 240),
+            interval_min=_env_int("FLOW_INTERVAL_MIN", 30),
             markets_limit=_env_int("FLOW_MARKETS_LIMIT", 60),
-            max_picks=_env_int("FLOW_MAX_PICKS", 3),
-            max_skips=_env_int("FLOW_MAX_SKIPS", 4),
-            max_watch=_env_int("FLOW_MAX_WATCH", 2),
+            max_watch=_env_int("FLOW_MAX_WATCH", 5),
             narrator_provider=_env_str("FLOW_NARRATOR_PROVIDER", "deepseek"),
             narrator_model=_env_str("FLOW_NARRATOR_MODEL", ""),
+        )
+        onchain = OnChainSettings(
+            valuation_enabled=_env_bool("ONCHAIN_VALUATION_ENABLED", False),
+            valuation_interval_min=_env_int("ONCHAIN_VALUATION_INTERVAL_MIN", 60),
+            valuation_cache_ttl_sec=_env_int("ONCHAIN_VALUATION_CACHE_TTL_SEC", 3600),
+            valuation_rate_limit_backoff_sec=_env_int("ONCHAIN_VALUATION_BACKOFF_SEC", 900),
+            valuation_max_symbols=_env_int("ONCHAIN_VALUATION_MAX_SYMBOLS", 15),
+            whale_enabled=_env_bool("WHALE_HL_ENABLED", False),
+            whale_interval_min=_env_int("WHALE_HL_INTERVAL_MIN", 10),
+            whale_top_wallets=_env_int("WHALE_HL_TOP_WALLETS", 30),
+            whale_min_position_usd=_env_float("WHALE_HL_MIN_POSITION_USD", 30_000.0),
+            whale_min_wallets=_env_int("WHALE_HL_MIN_WALLETS", 3),
+            whale_cooldown_min=_env_int("WHALE_HL_COOLDOWN_MIN", 60),
+            whale_alert_enabled=_env_bool("WHALE_HL_ALERT_ENABLED", True),
+            premium_enabled=_env_bool("COINBASE_PREMIUM_ENABLED", False),
+            premium_interval_min=_env_int("COINBASE_PREMIUM_INTERVAL_MIN", 10),
+            macro_enabled=_env_bool("FLOW_MACRO_ENABLED", False),
+            macro_interval_min=_env_int("FLOW_MACRO_INTERVAL_MIN", 60),
+            staleness_min=_env_int("ONCHAIN_STALENESS_MIN", 30),
+            whale_veto_enabled=_env_bool("WHALE_VETO_ENABLED", True),
+            whale_veto_min_wallets=_env_int("WHALE_VETO_MIN_WALLETS", 5),
         )
         anomaly = AnomalySettings(
             enabled=_env_bool("ANOMALY_ENABLED", False),
@@ -874,6 +955,7 @@ class Settings:
             news=news,
             reports=reports,
             flow=flow,
+            onchain=onchain,
             anomaly=anomaly,
             learning=learning,
             backtest=backtest,

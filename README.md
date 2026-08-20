@@ -52,10 +52,13 @@ the five architectural problems that made the original hard to maintain. See
 | `wolf/structure.py` | Price-action helpers (swing points, liquidity sweep, RSI divergence) |
 | `wolf/orderflow.py` | Candle order flow — volume pace, trade-count pace, taker bias |
 | `wolf/detectors/` | One detector per module (`momentum`, `prepump`, `predump`, `scalp`, `swing`) |
-| `wolf/market.py` | Futures market context (funding rate, open interest) + provider |
+| `wolf/market.py` | Per-symbol context (funding, OI, on-chain, whale, premium) + provider |
 | `wolf/ai/` | AI debate layer + LLM clients (Anthropic / DeepSeek / Groq) |
-| `wolf/flow/` | Flow-intelligence data (CoinGecko + DefiLlama) + framework-filter brief |
-| `wolf/reports/flow.py` | Nansen-style flow-intelligence thread → News topic |
+| `wolf/flow/` | Shared market-data clients (CoinGecko, DefiLlama, Hyperliquid, sentiment) |
+| `wolf/onchain/` | Collectors: valuation, whale coordination, Coinbase premium, macro |
+| `wolf/reports/flow.py` | Flow Intelligence digest (reads collector snapshots) → own topic |
+| `wolf/reports/deepdive.py` | On-demand single-token bull-vs-bear card |
+| `wolf/reports/whale_alert.py` | Whale-coordination event alert → Whale Report topic |
 | `wolf/tracker.py` | Signal lifecycle engine + stats — the core |
 | `wolf/notify/telegram.py` | Telegram notifier + message builders |
 | `wolf/screener.py` | Thin orchestration (replaces the old 11k-line hub) |
@@ -288,35 +291,155 @@ Periodic reports each post to their own topic and are **opt-in**:
   fresh batch into a single grouped brief instead of a flat card — it only
   phrases the fetched headlines, never invents stories. Sources adapted from the
   `last30days` skill.
-* **Flow Intelligence** (`FLOW_ENABLED`) — a Nansen-style "flow" thread posted to
-  the News topic: BTC/market posture → stablecoin dry powder → chain rotation →
-  ranked token picks → watchlist → skips → conclusion + strategy. Built from
-  **free** data plus signals the bot already has:
-  * CoinGecko — market cap, FDV/MC (unlock pressure), turnover, % from ATH.
-  * DefiLlama — per-chain DEX volume, aggregate stablecoin supply (dry powder).
-  * Exchange perps (existing `MarketDataClient`) — **funding rate** per pick
-    (negative = shorts crowded → squeeze fuel = bullish).
-  * **Fear & Greed Index** (alternative.me) + **Coinbase Premium** (Coinbase
-    BTC/USD vs Binance BTC/USDT = US institutional demand). Extreme fear + a
-    positive premium + dry powder → a *contrarian* RISK-ON read ("be greedy when
-    others are fearful"). Both free & key-less, ported from the previous bot.
-  * **Hyperliquid** perps — funding rate + open interest per pick from a single
-    cached snapshot (`metaAndAssetCtxs`), wider alt coverage than Binance perps.
+* **Flow Intelligence** (`FLOW_ENABLED`) — a six-section digest posted to its
+  **own topic** (`FLOW_THREAD_ID`): market macro → dry powder → chain rotation →
+  institutional flow → whale positioning → watchlist. Give it a topic of its own
+  rather than folding it into the whale room: the whale room is event-driven
+  (coordination detected → alert), this is a periodic digest. Different rhythm,
+  different reason to open it.
+
+  The report **never fetches**. It renders snapshots the collectors below wrote
+  to the state store, so the interval costs nothing but a message, and the digest
+  and the signal gates cannot reach different conclusions from the same source.
+
+  Four things it will not do, each of them a bug the previous version shipped:
+  * **No entry calls.** It answers "which coin is worth a look", never "at what
+    price do I get in" — entries, stops and targets come from the detectors and
+    `build_targets()`, which read price structure. A test lowercases the whole
+    output and fails on "entry", "target", "stop loss", " sl " or " tp ".
+  * **No pegged or tokenized assets in the watchlist.** Stablecoins and tokenized
+    stocks screen beautifully on FDV/MC ≈ 1.0x, because full circulation is
+    trivially true for anything pegged. Filtered by ticker *and* by name, since
+    no static list keeps up with new ones.
+  * **Nothing you cannot trade.** Candidates are intersected with Wolf's exchange
+    universe — a screener hit whose `get_klines()` returns `[]` is not a finding.
+  * **Labels that match their numbers.** A 0.0% change reads "flat", not
+    "numpuk 🔥", and a `NEUTRAL` verdict carries no execution advice.
+
+  Stale snapshots are still shown, carrying their age (`🐋 Whale (data 45m lalu)`),
+  so nothing is mistaken for live.
 
   A **single-token deep-dive** (`POST /flow/{symbol}`) renders an honest bull-vs-
-  bear breakdown + playbook for one token (ENA-thread style): every bear point is
-  a real red flag computed from the data, never softened. Works on demand even
-  when the scheduled report is disabled.
+  bear breakdown + playbook for one token: every bear point is a real red flag
+  computed from the data, never softened. Fetching on demand is correct there —
+  the request is the trigger. An LLM narrator (`FLOW_NARRATOR_PROVIDER`) phrases
+  it, falling back to a template without a key. The digest itself is fully
+  deterministic: no model ever phrases its numbers.
 
-  A deterministic *framework filter* (`wolf/flow/brief.py`) selects picks (low
-  FDV/MC unlock pressure, healthy turnover, not already pumped, no wash-trading),
-  ranks them by a **Quant score** (unlock pressure + cross-sectional **liquidity
-  percentile** + funding tailwind), surfaces near-misses as a watchlist, and
-  explains every skip. An LLM **narrator** (`FLOW_NARRATOR_PROVIDER` = `deepseek`
-  | `groq` | `gemini` | `anthropic`) phrases the brief in the thread style;
-  **without an API key it falls back to a built-in template**, so it always
-  works. The narrator only ever phrases the computed numbers — it never invents
-  wallet-level metrics (real netflow / whale wallets need a paid Nansen key).
+### On-chain, whale and institutional collectors
+
+Each fetches on its own schedule, writes a timestamped snapshot to the state
+store, and knows nothing about who reads it. Two consumers read those snapshots:
+
+```
+COLLECTOR (scheduled job) → StateStore ─┬→ Flow Intelligence digest
+                                        └→ per-symbol signal context → gates + AI debate
+```
+
+| Collector | Env | Interval | Writes |
+|---|---|---|---|
+| Valuation | `ONCHAIN_VALUATION_ENABLED` | 60m | `onchain_valuation` |
+| Whale (Hyperliquid) | `WHALE_HL_ENABLED` | 10m | `whale_hyperliquid` |
+| Coinbase premium | `COINBASE_PREMIUM_ENABLED` | 10m | `coinbase_premium` |
+| Macro / dry powder / rotation | `FLOW_MACRO_ENABLED` | 60m | `flow_macro` |
+
+* **Valuation** — CoinGecko markets + DefiLlama TVL → FDV ratio (unlock
+  overhang), volume/market-cap turnover, distance from ATH, MCap/TVL and 30-day
+  TVL trend. Hourly because a 15-symbol universe on the 10-minute scan cycle
+  would be ~90 CoinGecko calls an hour uncached, and the key-less API will not
+  carry it; the cache cuts that to ~15, and an HTTP 429 opens a backoff window
+  rather than retrying into a longer ban.
+* **Whale (Hyperliquid)** — one **global** scan per run reads the leaderboard's
+  top ~30 wallets and every position they hold. It is not a per-symbol lookup:
+  doing it inside the context would re-fetch an identical leaderboard once per
+  scanned symbol.
+
+  The snapshot holds **two different facts**, and keeping them apart matters:
+  * `bias` — where every tracked wallet is *sitting*. Persists for as long as
+    they hold. This is what the veto gate and the digest's positioning section
+    read.
+  * `coins` — who *opened or added* during the last scan window. An event:
+    it needs `WHALE_HL_MIN_WALLETS` (default 3) distinct wallets moving the same
+    way on the same coin, and it empties on the next scan. This is what fires
+    the whale-room alert, with a 60-minute per-coin cooldown so a build-up
+    unfolding across scans is announced once rather than every ten minutes.
+
+  Reading `coins` where `bias` belongs is a live trap: ten minutes after a
+  coordinated entry the event list is empty while the same whales are still
+  holding, so anything keyed to it goes quietly blind.
+* **Coinbase premium** — Coinbase BTC/USD vs Binance BTC/USDT, the
+  US-institutional demand gauge. **BTC only**: for every other symbol the field
+  is `None` and changes nothing. A deliberate first cut — the premium is often
+  read market-wide and may earn that role here, but wiring it into every altcoin
+  on day one would make its effect impossible to attribute.
+* **Macro** — CoinGecko global + token screen, DefiLlama stablecoin supply and
+  per-chain DEX volume. Feeds sections 1–3 and 6 of the digest.
+
+The valuation read also appears under each watchlist entry, showing the bias
+plus only what the macro screen does not already print (MCap/TVL, 30-day TVL
+trend), so the two lines complement rather than repeat:
+
+```
+👀 $AAVE -1.4% 24h · turnover 15% mcap · mcap $4.00B · FDV/MC 1.1x · -45% dari ATH
+   🐻 fundamental mendukung SHORT · MCap/TVL 9.40 · TVL 30h -31%
+```
+
+**Staleness is the safety property.** A snapshot older than
+`ONCHAIN_STALENESS_MIN` (30m) reads as absent on the signal path, and the bot
+degrades to candle-only behaviour it already handles. Gating a live signal on a
+stale whale read is strictly worse than gating it on nothing. An undated or
+corrupt snapshot counts as stale too.
+
+### Measuring before gating
+
+Only the whale veto acts on any of this. Valuation and the Coinbase premium
+reach the AI debate, which is itself in monitor mode — it records a verdict and
+sends the signal anyway. So today those two change *what the reasoning says*,
+not *which signals fire*.
+
+That is deliberate, and it is the same measure-then-enable path the regime and
+AI flags already follow. Every signal records the on-chain context **as it stood
+when it fired** (`onchain_bias`, `whale_stance`, `whale_net_wallets`,
+`coinbase_premium_pct`), and the diagnostics digest buckets resolved outcomes by
+each:
+
+```
+whale:WITH             n=20 graded=20 wr=70.0 meanR=+0.960 t=+3.26 => ...
+whale:AGAINST          n=15 graded=15 wr=20.0 meanR=-0.440 t=-1.47 => ...
+onchain:SUPPORTS_LONG  n=14 graded=14 wr=100.0 meanR=+1.800 t=+0.00 => ...
+```
+
+`whale_stance` is stored **relative to the signal's own direction** (WITH /
+AGAINST), because "whales were LONG" means opposite things for a LONG and a
+SHORT and bucketing on the raw side averages the effect away. `NO_DATA` stays
+its own bucket: a collector that was off is not the same finding as one that
+looked and saw nothing. The lines appear only once a real bucket exists, so a
+deployment with the collectors off does not carry three rows of `NO_DATA`.
+
+Promote a dimension to a gate when its buckets say so — not before.
+
+**Whale veto gate.** A signal is dropped when whale *positioning* leans
+`WHALE_VETO_MIN_WALLETS` (default 5) **net** against its direction — six longs
+against one short is a net of five, while six against five is a net of one,
+which is a market having a disagreement rather than whales agreeing with each
+other. Because it reads standing positions, the veto holds as long as the whales
+hold, not just during the scan that spotted them.
+
+The bar is higher than the alert threshold on purpose: three wallets is worth
+reporting, overriding a technical setup takes five. It runs in the screener — not
+in a detector, which stays a pure function of candles plus context — and
+immediately **before** the AI debate, because the gate is a free dict lookup and
+the debate is three LLM calls, so a vetoed signal never costs a token.
+
+### Two whale outputs, two topics
+
+| Topic | What lands there | Rhythm |
+|---|---|---|
+| 👁 Whale Report | Large trades (existing) **+ coordination alerts** (`WHALE_HL_ALERT_ENABLED`) | Event — fires when wallets pile in |
+| 🧠 Flow Intelligence | Section 5: standing positioning per coin | Periodic — every `FLOW_INTERVAL_MIN` |
+
+Turning the alert off does not stop the scan: the snapshot still feeds the veto
+gate and the digest. Only the message is optional.
 
 Each is a small module that never touches the signal pipeline and degrades to
 nothing if its data is unavailable.
@@ -510,8 +633,8 @@ The API is then available at `http://localhost:8000` (interactive docs at
 | `POST` | `/signals` | Record a signal manually (external strategies) |
 | `GET`  | `/diagnostics?window_hours=24&format=text` | Statistics behind a verdict (see below) |
 | `POST` | `/signals/outcomes/import` | Merge an exported outcome log back into state |
-| `POST` | `/flow` | Build the flow-intelligence brief now → News topic |
-| `POST` | `/flow/{symbol}` | Single-token contrarian deep-dive (bull vs bear) → News topic |
+| `POST` | `/flow` | Render the Flow Intelligence digest now → its topic (503 if no collector has run) |
+| `POST` | `/flow/{symbol}` | Single-token deep-dive (bull vs bear), fetched on demand |
 
 Example — on-demand single-token deep-dive (works even when scheduled flow is off):
 

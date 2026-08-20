@@ -153,6 +153,48 @@ def _multi_tf_summary(tf_candles: dict) -> str:
     return "\n".join(lines)
 
 
+def _onchain_lines(context) -> list[str]:
+    """Fundamental / whale / institutional context for the debaters.
+
+    These are soft evidence, not gates. The screener already dropped anything
+    whales strongly contradict before the debate runs; what reaches here is a
+    setup worth arguing about, and these lines give the bull and the bear
+    something beyond the chart to argue with.
+
+    Every field is absent when its collector is off, has not run, or last ran
+    too long ago to trust — the context nulls them out — so a missing line means
+    "no data", never "no signal".
+    """
+    lines: list[str] = []
+
+    brief = getattr(context, "onchain_brief", "")
+    if brief:
+        # Multi-line block of facts; the bias label is already its first line.
+        lines.append(brief)
+    elif getattr(context, "onchain_bias", None):
+        lines.append(f"On-chain valuation bias: {context.onchain_bias}")
+
+    direction = getattr(context, "whale_coordination", None)
+    if direction:
+        longs = getattr(context, "whale_long_count", 0)
+        shorts = getattr(context, "whale_short_count", 0)
+        net = getattr(context, "whale_wallet_count", 0)
+        lines.append(
+            f"Whale positioning: tracked top wallets are {longs} long / {shorts} short "
+            f"on this coin — a net {net} leaning {direction}. This is where they are "
+            f"sitting now, not who moved most recently."
+        )
+
+    premium = getattr(context, "coinbase_premium_pct", None)
+    if premium is not None:
+        read = ("US institutions bidding" if premium >= 0.05
+                else "US institutions distributing" if premium <= -0.05
+                else "no clear institutional bias")
+        lines.append(f"Coinbase premium (BTC): {premium:+.3f}% — {read}.")
+
+    return lines
+
+
 def _describe(candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> str:
     lines = [
         f"Symbol: {candidate.symbol}",
@@ -168,6 +210,7 @@ def _describe(candidate: SignalCandidate, context=None, candles: Sequence = (), 
             lines.append(f"Funding rate: {context.funding_rate:.4f}%")
         if getattr(context, "oi_change_pct", None) is not None:
             lines.append(f"Open-interest change: {context.oi_change_pct:+.2f}%")
+        lines += _onchain_lines(context)
 
     if tf_candles:
         mtf = _multi_tf_summary(tf_candles)

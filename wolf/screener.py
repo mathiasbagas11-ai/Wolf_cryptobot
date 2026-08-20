@@ -88,6 +88,24 @@ def drop_forming(candles: list, interval: str, now_ms: Optional[int] = None) -> 
     return candles[:-1] if candles[-1].time + span > now else candles
 
 
+def _onchain_annotations(context, direction: str) -> dict:
+    """Snapshot the on-chain dimensions onto a signal, as they were at entry.
+
+    Taken at record time on purpose: re-reading the collectors when the trade
+    resolves would answer a different question. What matters is whether what was
+    knowable *when the signal fired* predicted how it turned out.
+    """
+    if context is None:
+        return {}
+    return {
+        "onchain_bias": getattr(context, "onchain_bias", None) or "",
+        "whale_stance": (context.whale_stance(direction)
+                         if hasattr(context, "whale_stance") else ""),
+        "whale_net_wallets": getattr(context, "whale_wallet_count", 0),
+        "coinbase_premium_pct": getattr(context, "coinbase_premium_pct", None),
+    }
+
+
 class Screener:
     def __init__(
         self,
@@ -110,6 +128,8 @@ class Screener:
         max_cost_r: float = 0.5,
         learning=None,
         macro_provider=None,
+        whale_veto_enabled: bool = True,
+        whale_veto_min_wallets: int = 5,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -130,6 +150,8 @@ class Screener:
         self._round_trip_bps = round_trip_bps
         self._max_cost_r = max_cost_r
         self._learning = learning
+        self._whale_veto_enabled = whale_veto_enabled
+        self._whale_veto_min_wallets = whale_veto_min_wallets
 
     @property
     def detector_names(self) -> list[str]:
@@ -277,6 +299,35 @@ class Screener:
             except Exception:
                 pass
         return tf_candles
+
+    def _whale_vetoed(self, candidate: SignalCandidate, context) -> bool:
+        """Drop a candidate that strong whale coordination contradicts.
+
+        Runs *before* :meth:`_apply_validator` on purpose. This gate is a dict
+        lookup against an already-collected snapshot — free — while the debate
+        is three LLM calls per candidate. Checking the cheap disqualifier first
+        means a signal the whales already contradict never reaches the model.
+
+        It lives here rather than inside a detector because detectors are pure
+        functions of candles plus context and are unit-tested that way; a gate
+        that reasons about *whether to believe* a setup is orchestration, the
+        same layer that already holds the regime, cost and R:R gates.
+
+        The bar is deliberately higher than the alert threshold: three wallets
+        is enough to be worth reporting, but overriding a technical setup takes
+        five. Whales are wrong often enough that a thin majority should not
+        silence the rest of the system.
+        """
+        if not self._whale_veto_enabled or context is None:
+            return False
+        if not context.whales_oppose(candidate.direction, self._whale_veto_min_wallets):
+            return False
+        log.info(
+            "Whale veto %s %s: %d wallet(s) coordinated %s against it",
+            candidate.symbol, candidate.direction,
+            context.whale_wallet_count, context.whale_coordination,
+        )
+        return True
 
     def _apply_validator(self, candidate: SignalCandidate, context, candles=(), tf_candles: dict = {}) -> None:
         """Run the AI debate and annotate the candidate. Monitor mode: never blocks.
@@ -582,6 +633,10 @@ class Screener:
                 continue
             if self._too_expensive(candidate):
                 continue
+            # Gate order is a cost decision: the whale veto is a free dict
+            # lookup, the debate below is three LLM calls. Cheap gate first.
+            if self._whale_vetoed(candidate, context):
+                continue
             tf_candles = self._fetch_tf_candles(symbol) if self._validator is not None else {}
             self._apply_validator(candidate, context, candles, tf_candles)
             signal = self._tracker.record_signal(
@@ -606,6 +661,11 @@ class Screener:
                 weak_strategy=candidate.weak_strategy,
                 bounce_flagged=candidate.bounce_flagged,
                 risk_scale=candidate.risk_scale,
+                # On-chain context as it stood when the signal fired. Recorded
+                # for later analysis, not acted on — the whale veto above is the
+                # only one of these with teeth today, and whether the others
+                # earn any is exactly what this sample is meant to answer.
+                **_onchain_annotations(context, candidate.direction),
             )
             if signal is None:
                 continue

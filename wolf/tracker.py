@@ -291,6 +291,10 @@ class Tracker:
         weak_strategy: bool = False,
         bounce_flagged: bool = False,
         risk_scale: float = 1.0,
+        onchain_bias: str = "",
+        whale_stance: str = "",
+        whale_net_wallets: int = 0,
+        coinbase_premium_pct: Optional[float] = None,
     ) -> Optional[Signal]:
         """Record a freshly-emitted signal as PENDING.
 
@@ -353,6 +357,10 @@ class Tracker:
             ai_confidence=ai_confidence,
             ai_rationale=ai_rationale,
             ai_vetoed=ai_vetoed,
+            onchain_bias=onchain_bias,
+            whale_stance=whale_stance,
+            whale_net_wallets=whale_net_wallets,
+            coinbase_premium_pct=coinbase_premium_pct,
             against_regime=against_regime,
             weak_strategy=weak_strategy,
             bounce_flagged=bounce_flagged,
@@ -752,6 +760,24 @@ class Tracker:
         vetoed_wins = sum(1 for o in vetoed if Status(o.status).is_win)
         vetoed_win_rate = round(vetoed_wins / len(vetoed) * 100, 1) if vetoed else None
 
+        # On-chain monitoring: is any of the new data actually predictive?
+        #
+        # Only the whale veto gates anything today; valuation and the Coinbase
+        # premium reach the AI debate, which is itself in monitor mode. So these
+        # buckets are the evidence for deciding whether any of them should be
+        # promoted to a real gate — the same measure-then-enable path the regime
+        # and AI flags already follow.
+        #
+        # "NO_DATA" is kept separate from "NEUTRAL" throughout: a collector that
+        # was off is not the same finding as a collector that looked and found
+        # nothing, and merging them would quietly dilute whatever effect exists.
+        by_whale_stance = _bucket_group(
+            graded, lambda o: getattr(o, "whale_stance", "") or "NO_DATA"
+        )
+        by_onchain_bias = _bucket_group(
+            graded, lambda o: getattr(o, "onchain_bias", "") or "NO_DATA"
+        )
+
         # Risk-gate monitoring: win-rate of signals that fought the regime or came
         # from a flagged strategy. If these underperform, promoting the gate to a
         # hard block (REGIME_HARD_BLOCK / AUTOPAUSE_HARD_BLOCK) is justified.
@@ -814,6 +840,8 @@ class Tracker:
             "active": len(active_sigs),
             "by_strategy": by_strategy,
             "by_ai_verdict": by_ai_verdict,
+            "by_whale_stance": by_whale_stance,
+            "by_onchain_bias": by_onchain_bias,
             "vetoed_count": len(vetoed),
             "vetoed_win_rate": vetoed_win_rate,
             "against_regime_count": against_regime_count,

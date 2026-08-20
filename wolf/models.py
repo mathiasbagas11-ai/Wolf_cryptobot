@@ -229,6 +229,22 @@ class Signal:
     bounce_flagged: bool = False
     risk_scale: float = 1.0
 
+    # On-chain context as it stood *at signal time*. Recorded, never acted on:
+    # none of these gate anything except whale_coordination, and the point of
+    # storing them is to find out whether they should. Reading them off a later
+    # snapshot would be useless — the question is whether what was knowable when
+    # the signal fired predicted how it resolved.
+    #
+    # Empty/None means the collector was off, had not run, or its snapshot was
+    # already stale — which is itself worth telling apart from "the data said
+    # nothing", so the buckets below keep NO_DATA distinct from NEUTRAL.
+    onchain_bias: str = ""              # SUPPORTS_LONG | SUPPORTS_SHORT | NEUTRAL | ""
+    whale_stance: str = ""              # WITH | AGAINST | NEUTRAL | "" — relative to
+                                        # this signal's own direction, so buckets
+                                        # stay comparable across LONG and SHORT
+    whale_net_wallets: int = 0
+    coinbase_premium_pct: Optional[float] = None
+
     def __post_init__(self) -> None:
         if not self.id:
             self.id = f"{self.symbol}_{int(time.time() * 1000)}"
