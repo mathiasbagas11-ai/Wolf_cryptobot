@@ -34,10 +34,11 @@ from wolf.news import NewsService, NewsSynthesizer, build_news_source
 from wolf.news.signal import NewsSignalScanner
 from wolf.notify import TelegramNotifier
 from wolf.reports import (
-    FlowReporter,
+    FlowIntelReporter,
     MajorsReporter,
     MarketPulse,
     MarketRadar,
+    TokenDeepDive,
     WhaleTracker,
 )
 from wolf.screener import Screener
@@ -66,7 +67,8 @@ class Application:
     radar: Optional[MarketRadar] = None
     pulse: Optional[MarketPulse] = None
     whale: Optional[WhaleTracker] = None
-    flow: Optional[FlowReporter] = None
+    flow: Optional[FlowIntelReporter] = None
+    deepdive: Optional[TokenDeepDive] = None
     anomaly: object = None            # anomaly.scanner.AnomalyScanner (optional)
 
     def warm_start_learning(self) -> None:
@@ -311,7 +313,11 @@ def build_application(settings: Settings | None = None) -> Application:
     whale = WhaleTracker(client, store, min_usd=r.whale_min_usd, tz=tz) if r.whale_enabled else None
 
     anomaly = build_anomaly_scanner(settings) if settings.anomaly.enabled else None
-    flow = build_flow_reporter(settings, client, anomaly=anomaly) if settings.flow.enabled else None
+    flow = (
+        build_flow_reporter(settings, store, universe_provider, anomaly=anomaly)
+        if settings.flow.enabled else None
+    )
+    deepdive = build_deepdive(settings, client)
 
     return Application(
         settings=settings,
@@ -332,6 +338,7 @@ def build_application(settings: Settings | None = None) -> Application:
         pulse=pulse,
         whale=whale,
         flow=flow,
+        deepdive=deepdive,
         anomaly=anomaly,
     )
 
@@ -362,34 +369,41 @@ def build_anomaly_scanner(settings: Settings):
     )
 
 
-def build_flow_reporter(settings: Settings, client: MarketDataClient,
-                        anomaly=None) -> FlowReporter:
-    """Construct the flow-intelligence reporter (used by the scheduler and the
-    on-demand REST endpoints, so a deep-dive works even when scheduling is off)."""
-    from wolf.flow import (
-        CoinGeckoClient,
-        DefiLlamaClient,
-        HyperliquidPerps,
-        SentimentClient,
+def build_flow_reporter(settings: Settings, store: StateStore,
+                        universe_provider=None, anomaly=None) -> FlowIntelReporter:
+    """Construct the Flow Intelligence reporter.
+
+    It takes the store and the universe, not HTTP clients: the digest reads what
+    the wolf.onchain collectors persisted rather than fetching its own copy, and
+    the universe is what keeps untradeable symbols out of the watchlist.
+    """
+    f = settings.flow
+    return FlowIntelReporter(
+        store,
+        universe_provider,
+        anomaly=anomaly,
+        max_watchlist=f.max_watch,
+        tz=settings.timezone,
     )
+
+
+def build_deepdive(settings: Settings, client: MarketDataClient) -> TokenDeepDive:
+    """Construct the on-demand single-token deep dive.
+
+    Always built: it serves the REST endpoint directly, so a deep dive works
+    even when the scheduled digest is disabled.
+    """
+    from wolf.flow import CoinGeckoClient, HyperliquidPerps
 
     f = settings.flow
     narrator = build_llm_client(
         f.narrator_provider, settings.api_key_for(f.narrator_provider), f.narrator_model
     )
-    return FlowReporter(
+    return TokenDeepDive(
         coingecko=CoinGeckoClient(timeout=settings.http_timeout),
-        defillama=DefiLlamaClient(timeout=settings.http_timeout),
-        sentiment=SentimentClient(timeout=settings.http_timeout),
         hyperliquid=HyperliquidPerps(timeout=settings.http_timeout),
         narrator=narrator,
         market_client=client,
-        anomaly=anomaly,
         markets_limit=f.markets_limit,
-        max_picks=f.max_picks,
-        max_skips=f.max_skips,
-        max_watch=f.max_watch,
         tz=settings.timezone,
     )
-
-

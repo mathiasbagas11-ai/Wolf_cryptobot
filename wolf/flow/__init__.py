@@ -1,13 +1,6 @@
 """Flow-intelligence data layer: free on-chain/market proxies (CoinGecko + DefiLlama)."""
 
-from wolf.flow.brief import (
-    FlowBrief,
-    Pick,
-    Skip,
-    TokenView,
-    build_brief,
-    build_token_view,
-)
+from wolf.flow.brief import TokenView, build_token_view, funding_signal
 from wolf.flow.coingecko import CoinGeckoClient, GlobalMetrics, TokenMetrics
 from wolf.flow.defillama import ChainActivity, DefiLlamaClient, StablecoinSupply
 from wolf.flow.hyperliquid import HyperliquidPerps
@@ -24,10 +17,7 @@ __all__ = [
     "FearGreed",
     "CoinbasePremium",
     "HyperliquidPerps",
-    "FlowBrief",
-    "Pick",
-    "Skip",
     "TokenView",
-    "build_brief",
     "build_token_view",
+    "funding_signal",
 ]
