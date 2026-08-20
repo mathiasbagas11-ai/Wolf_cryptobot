@@ -482,8 +482,21 @@ class Tracker:
                         eff_sl = entry  # move stop to breakeven after TP1
 
             if ladder and len(res.tps_hit) >= len(ladder):
+                # Every rung filled. Book it the same scaled way a partial exit
+                # is booked: each rung at its own price, weighted by the size
+                # closed there. Pricing the whole position at the final rung
+                # pretends nothing was sold on the way up, which overstates a
+                # full run by ~76% on the default 50/30/20 ladder — 3.0R booked
+                # against the 1.7R the ladder can actually pay.
+                realized = round(
+                    _partial_pnl(entry, is_long, ladder, res.tps_hit, ladder[-1].price), 3
+                )
                 res.terminal = Status.TP_HIT
-                res.exit_price = ladder[-1].price
+                res.realized_pnl_pct = realized
+                res.exit_price = (
+                    entry * (1 + realized / 100) if is_long
+                    else entry * (1 - realized / 100)
+                )
                 res.exit_time = c_time
                 break
 

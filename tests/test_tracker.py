@@ -82,7 +82,10 @@ def test_long_signal_hits_tp(store, fake_client, tracker_settings):
     resolved = tracker.check_pending()
     assert len(resolved) == 1
     assert resolved[0].status == Status.TP_HIT.value
-    assert resolved[0].pnl_pct == 10.0
+    # Both rungs filled, each at its own price: half the size sold at 105
+    # (+5%) and half at 110 (+10%) blends to +7.5%, not the +10% you would
+    # book by pretending the whole position rode to the final rung.
+    assert resolved[0].pnl_pct == 7.5
 
 
 # ── TP1-banks-win grading (partial-win after breakeven stop) ─────────────────
@@ -303,7 +306,8 @@ def test_stop_before_tp1_still_loss_when_enabled(store, fake_client):
 
 
 def test_full_ladder_win_unaffected_when_enabled(store, fake_client):
-    # Reaching the final rung stays a full win at the final-rung PnL.
+    # Reaching the final rung stays a full win, booked as the scaled exit it
+    # is: 50% out at 105 and 50% out at 110 => +7.5%.
     tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
     sig = tracker.record_signal(
         "SOLUSDT", "SCREENER", "LONG", 100, tp=110, sl=95,
@@ -316,7 +320,33 @@ def test_full_ladder_win_unaffected_when_enabled(store, fake_client):
     ])
     resolved = tracker.check_pending()
     assert resolved[0].status == Status.TP_HIT.value
-    assert resolved[0].pnl_pct == 10.0
+    assert resolved[0].pnl_pct == 7.5
+
+
+def test_full_run_cannot_exceed_the_ladder_ceiling(store, fake_client):
+    """A perfect run pays what the ladder can pay — 1.7R, not 3.0R.
+
+    Scaling out means most of the size is gone before the final rung: 50% at
+    1R, 30% at 2R, 20% at 3R. Booking the whole position at the last rung
+    would report 3.0R and make any strategy that runs its ladder look ~76%
+    better than the geometry allows.
+    """
+    tracker = Tracker(store, fake_client, TrackerSettings(tp1_banks_win=True))
+    sig = tracker.record_signal(
+        "BTCUSDT", "SCREENER", "LONG", 100, tp=115, sl=95,
+        entry_mode="MOMENTUM_NOW", tps=LADDER_1_3,
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = _candles_after(now_ms, [
+        (100, 106, 100, 105),   # TP1
+        (105, 111, 104, 110),   # TP2
+        (110, 116, 109, 115),   # TP3 -> terminal
+    ])
+    r = tracker.check_pending()[0]
+    assert r.status == Status.TP_HIT.value
+    assert r.tps_hit == [1, 2, 3]
+    assert r.pnl_pct == 8.5      # .5x5% + .3x10% + .2x15%
+    assert r.r_multiple == 1.7   # == LadderSettings().full_run_r
 
 
 def test_long_signal_hits_sl(store, fake_client, tracker_settings):
