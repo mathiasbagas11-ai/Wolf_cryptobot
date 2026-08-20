@@ -110,6 +110,8 @@ class Screener:
         max_cost_r: float = 0.5,
         learning=None,
         macro_provider=None,
+        whale_veto_enabled: bool = True,
+        whale_veto_min_wallets: int = 5,
     ) -> None:
         self._client = client
         self._tracker = tracker
@@ -130,6 +132,8 @@ class Screener:
         self._round_trip_bps = round_trip_bps
         self._max_cost_r = max_cost_r
         self._learning = learning
+        self._whale_veto_enabled = whale_veto_enabled
+        self._whale_veto_min_wallets = whale_veto_min_wallets
 
     @property
     def detector_names(self) -> list[str]:
@@ -277,6 +281,35 @@ class Screener:
             except Exception:
                 pass
         return tf_candles
+
+    def _whale_vetoed(self, candidate: SignalCandidate, context) -> bool:
+        """Drop a candidate that strong whale coordination contradicts.
+
+        Runs *before* :meth:`_apply_validator` on purpose. This gate is a dict
+        lookup against an already-collected snapshot — free — while the debate
+        is three LLM calls per candidate. Checking the cheap disqualifier first
+        means a signal the whales already contradict never reaches the model.
+
+        It lives here rather than inside a detector because detectors are pure
+        functions of candles plus context and are unit-tested that way; a gate
+        that reasons about *whether to believe* a setup is orchestration, the
+        same layer that already holds the regime, cost and R:R gates.
+
+        The bar is deliberately higher than the alert threshold: three wallets
+        is enough to be worth reporting, but overriding a technical setup takes
+        five. Whales are wrong often enough that a thin majority should not
+        silence the rest of the system.
+        """
+        if not self._whale_veto_enabled or context is None:
+            return False
+        if not context.whales_oppose(candidate.direction, self._whale_veto_min_wallets):
+            return False
+        log.info(
+            "Whale veto %s %s: %d wallet(s) coordinated %s against it",
+            candidate.symbol, candidate.direction,
+            context.whale_wallet_count, context.whale_coordination,
+        )
+        return True
 
     def _apply_validator(self, candidate: SignalCandidate, context, candles=(), tf_candles: dict = {}) -> None:
         """Run the AI debate and annotate the candidate. Monitor mode: never blocks.
@@ -581,6 +614,10 @@ class Screener:
                 log.debug("Skip %s %s: R:R %.2f < %.1f", candidate.symbol, candidate.direction, rr, self._min_rr)
                 continue
             if self._too_expensive(candidate):
+                continue
+            # Gate order is a cost decision: the whale veto is a free dict
+            # lookup, the debate below is three LLM calls. Cheap gate first.
+            if self._whale_vetoed(candidate, context):
                 continue
             tf_candles = self._fetch_tf_candles(symbol) if self._validator is not None else {}
             self._apply_validator(candidate, context, candles, tf_candles)
