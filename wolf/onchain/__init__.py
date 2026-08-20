@@ -17,6 +17,14 @@ Collectors own no module-level state: caches and cooldowns live on the instance
 anything that must outlive the process lives in the StateStore.
 """
 
+from wolf.onchain.coinbase_premium import (
+    PREMIUM_ACCUMULATION,
+    PREMIUM_DISTRIBUTION,
+    CoinbasePremiumCollector,
+    classify_premium,
+    compute_premium_pct,
+)
+from wolf.onchain.macro import MacroFlowCollector
 from wolf.onchain.valuation import (
     ValuationCollector,
     assess_valuation,
@@ -37,4 +45,10 @@ __all__ = [
     "WhaleHyperliquidCollector",
     "detect_whale_coordination",
     "summarise_coin_bias",
+    "CoinbasePremiumCollector",
+    "classify_premium",
+    "compute_premium_pct",
+    "PREMIUM_ACCUMULATION",
+    "PREMIUM_DISTRIBUTION",
+    "MacroFlowCollector",
 ]
