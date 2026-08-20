@@ -80,3 +80,183 @@ def test_predump_funding_bonus_increases_score():
     boosted = det.evaluate("X", cs, MarketContext(funding_rate=0.09, oi_change_pct=-5.0))
     assert base is not None and boosted is not None
     assert boosted.score > base.score
+
+
+# ── on-chain context: staleness, lookup, symbol normalisation ─────────────
+from datetime import datetime, timedelta, timezone
+
+from wolf.market import age_minutes, is_fresh, parse_iso
+from wolf.state import StateStore
+
+
+def _ts(minutes_ago: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+
+
+def _seed(store: StateStore, *, valuation_age=1.0, whale_age=1.0, premium_age=1.0) -> None:
+    store.write("onchain_valuation", {
+        "ts": _ts(valuation_age),
+        "symbols": {"SOL": {"bias": "SUPPORTS_LONG", "brief": "VALUASI ON-CHAIN SOL"}},
+    })
+    store.write("whale_hyperliquid", {
+        "ts": _ts(whale_age),
+        "coins": {"SOL": {"direction": "SHORT", "wallet_count": 5, "notional_usd": 2_400_000}},
+    })
+    store.write("coinbase_premium", {"ts": _ts(premium_age), "premium_pct": 0.12})
+
+
+def _provider(store, **kw):
+    return ContextProvider(_StubClient(), store, **kw)
+
+
+# ── timestamp helpers ─────────────────────────────────────────────────────
+def test_parse_iso_assumes_utc_when_naive():
+    assert parse_iso("2026-01-01T00:00:00").tzinfo is timezone.utc
+
+
+def test_parse_iso_rejects_junk():
+    assert parse_iso("not-a-date") is None
+    assert parse_iso("") is None
+    assert parse_iso(None) is None
+    assert parse_iso(12345) is None
+
+
+def test_age_minutes():
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    assert age_minutes("2026-01-01T11:30:00+00:00", now=now) == 30.0
+    assert age_minutes("nope", now=now) is None
+
+
+def test_is_fresh_boundaries():
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    assert is_fresh({"ts": "2026-01-01T11:31:00+00:00"}, 30.0, now=now)
+    assert is_fresh({"ts": "2026-01-01T11:30:00+00:00"}, 30.0, now=now), "exactly at the limit counts"
+    assert not is_fresh({"ts": "2026-01-01T11:29:00+00:00"}, 30.0, now=now)
+
+
+def test_undated_document_is_treated_as_stale():
+    """An undated snapshot must not gate signals forever."""
+    assert not is_fresh({"coins": {}}, 30.0)
+    assert not is_fresh(None, 30.0)
+    assert not is_fresh("garbage", 30.0)
+
+
+# ── fresh data flows into the context ─────────────────────────────────────
+def test_context_reads_fresh_onchain_state(store):
+    _seed(store)
+    ctx = _provider(store).build("SOLUSDT")
+
+    assert ctx.onchain_bias == "SUPPORTS_LONG"
+    assert "VALUASI ON-CHAIN SOL" in ctx.onchain_brief
+    assert ctx.whale_coordination == "SHORT"
+    assert ctx.whale_wallet_count == 5
+
+
+def test_context_still_carries_derivatives_data(store):
+    _seed(store)
+    ctx = _provider(store).build("SOLUSDT")
+    assert ctx.funding_rate == -0.08
+    assert ctx.oi_change_pct == 3.5
+
+
+# ── staleness → None ──────────────────────────────────────────────────────
+def test_stale_valuation_reads_as_absent(store):
+    _seed(store, valuation_age=45.0)
+    ctx = _provider(store).build("SOLUSDT")
+
+    assert ctx.onchain_bias is None
+    assert ctx.onchain_brief == ""
+    assert ctx.whale_coordination == "SHORT", "fresh sources are unaffected"
+
+
+def test_stale_whale_data_reads_as_absent(store):
+    _seed(store, whale_age=45.0)
+    ctx = _provider(store).build("SOLUSDT")
+
+    assert ctx.whale_coordination is None
+    assert ctx.whale_wallet_count == 0
+
+
+def test_stale_premium_reads_as_absent(store):
+    _seed(store, premium_age=90.0)
+    assert _provider(store).build("BTCUSDT").coinbase_premium_pct is None
+
+
+def test_staleness_threshold_is_configurable(store):
+    _seed(store, whale_age=45.0)
+    assert _provider(store, staleness_min=60.0).build("SOLUSDT").whale_coordination == "SHORT"
+
+
+def test_missing_store_degrades_to_derivatives_only():
+    ctx = ContextProvider(_StubClient()).build("SOLUSDT")
+    assert ctx.funding_rate == -0.08
+    assert ctx.onchain_bias is None
+    assert ctx.whale_coordination is None
+    assert ctx.coinbase_premium_pct is None
+
+
+def test_empty_store_degrades_cleanly(store):
+    ctx = _provider(store).build("SOLUSDT")
+    assert ctx.onchain_bias is None
+    assert ctx.whale_wallet_count == 0
+
+
+def test_corrupt_state_rows_do_not_raise(store):
+    store.write("whale_hyperliquid", {"ts": _ts(1.0), "coins": {"SOL": "not-a-dict"}})
+    store.write("onchain_valuation", {"ts": _ts(1.0), "symbols": "nope"})
+    ctx = _provider(store).build("SOLUSDT")
+    assert ctx.whale_coordination is None
+    assert ctx.onchain_bias is None
+
+
+def test_non_numeric_wallet_count_falls_back_to_zero(store):
+    store.write("whale_hyperliquid", {
+        "ts": _ts(1.0), "coins": {"SOL": {"direction": "LONG", "wallet_count": "many"}},
+    })
+    assert _provider(store).build("SOLUSDT").whale_wallet_count == 0
+
+
+# ── symbol normalisation ──────────────────────────────────────────────────
+def test_context_normalises_symbol_via_split_quote(store):
+    _seed(store)
+    assert _provider(store).build("SOLUSDT").whale_coordination == "SHORT"
+    assert _provider(store).build("SOL").whale_coordination == "SHORT"
+
+
+def test_normalisation_does_not_gut_names_containing_the_quote():
+    """``.replace('USDT', '')`` mapped SUSDTUSDT to 'S' and looked up the wrong coin."""
+    assert ContextProvider.base_symbol("SUSDTUSDT") == "SUSDT"
+    assert ContextProvider.base_symbol("BTCUSDT") == "BTC"
+    assert ContextProvider.base_symbol("ethusdt") == "ETH"
+
+
+def test_unknown_symbol_gets_no_whale_data(store):
+    _seed(store)
+    ctx = _provider(store).build("DOGEUSDT")
+    assert ctx.whale_coordination is None
+    assert ctx.onchain_bias is None
+
+
+# ── Coinbase premium is BTC-scoped ────────────────────────────────────────
+def test_premium_applies_to_btc(store):
+    _seed(store)
+    assert _provider(store).build("BTCUSDT").coinbase_premium_pct == 0.12
+
+
+def test_premium_is_none_for_every_other_symbol(store):
+    _seed(store)
+    assert _provider(store).build("SOLUSDT").coinbase_premium_pct is None
+    assert _provider(store).build("ETHUSDT").coinbase_premium_pct is None
+
+
+# ── whales_oppose ─────────────────────────────────────────────────────────
+def test_whales_oppose_requires_opposite_direction_and_enough_wallets():
+    ctx = MarketContext(whale_coordination="SHORT", whale_wallet_count=5)
+    assert ctx.whales_oppose("LONG", min_wallets=5)
+    assert not ctx.whales_oppose("SHORT", min_wallets=5), "same direction is agreement"
+    assert not ctx.whales_oppose("LONG", min_wallets=6), "below the threshold"
+
+
+def test_whales_oppose_is_false_without_data():
+    assert not MarketContext().whales_oppose("LONG", min_wallets=3)
+    assert not MarketContext(whale_coordination="SHORT", whale_wallet_count=5).whales_oppose("", 3)
