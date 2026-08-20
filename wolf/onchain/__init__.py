@@ -23,10 +23,18 @@ from wolf.onchain.valuation import (
     build_valuation_brief,
     compute_valuation_metrics,
 )
+from wolf.onchain.whale_hyperliquid import (
+    WhaleHyperliquidCollector,
+    detect_whale_coordination,
+    summarise_coin_bias,
+)
 
 __all__ = [
     "ValuationCollector",
     "compute_valuation_metrics",
     "assess_valuation",
     "build_valuation_brief",
+    "WhaleHyperliquidCollector",
+    "detect_whale_coordination",
+    "summarise_coin_bias",
 ]
