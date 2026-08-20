@@ -192,3 +192,50 @@ def test_describe_tolerates_a_context_without_the_new_fields():
 
     setup = _describe(_candidate("LONG"), _Legacy())
     assert "Funding rate" in setup
+
+
+# ── the gate inside a real cycle ──────────────────────────────────────────
+def test_run_cycle_drops_a_signal_the_whales_contradict(store, fake_client, tracker_settings):
+    """Proves the gate is actually reached, not just callable in isolation."""
+    from tests.test_screener import _breakout_candles
+    from wolf.detectors.momentum import MomentumBreakoutDetector
+    from wolf.tracker import Tracker
+
+    fake_client.klines["BTCUSDT"] = _breakout_candles()
+    tracker = Tracker(store, fake_client, tracker_settings)
+
+    class _OpposingContext:
+        """A LONG breakout on a coin six whales just went short on."""
+
+        def build(self, symbol):
+            return MarketContext(whale_coordination="SHORT", whale_wallet_count=6)
+
+    screener = Screener(
+        fake_client, tracker, [MomentumBreakoutDetector()], notifier=None,
+        universe=["BTCUSDT"], context_provider=_OpposingContext(),
+        whale_veto_min_wallets=5,
+    )
+
+    assert screener.run_cycle() == []
+    assert tracker.active_signals() == []
+
+
+def test_run_cycle_keeps_the_signal_when_whales_agree(store, fake_client, tracker_settings):
+    from tests.test_screener import _breakout_candles
+    from wolf.detectors.momentum import MomentumBreakoutDetector
+    from wolf.tracker import Tracker
+
+    fake_client.klines["BTCUSDT"] = _breakout_candles()
+    tracker = Tracker(store, fake_client, tracker_settings)
+
+    class _AgreeingContext:
+        def build(self, symbol):
+            return MarketContext(whale_coordination="LONG", whale_wallet_count=6)
+
+    screener = Screener(
+        fake_client, tracker, [MomentumBreakoutDetector()], notifier=None,
+        universe=["BTCUSDT"], context_provider=_AgreeingContext(),
+        whale_veto_min_wallets=5,
+    )
+
+    assert len(screener.run_cycle()) == 1
