@@ -29,6 +29,23 @@ from wolf.ai.base import LLMClient
 log = logging.getLogger("wolf.ai")
 
 
+def _provider_message(resp: "requests.Response") -> str:
+    """The provider's own explanation of an error, trimmed for a log line."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return (resp.text or "")[:300].strip() or "(empty body)"
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            return str(err.get("message") or err)[:300]
+        if err:
+            return str(err)[:300]
+        if body.get("message"):
+            return str(body["message"])[:300]
+    return str(body)[:300]
+
+
 class OpenAICompatLLMClient(LLMClient):
     def __init__(
         self,
@@ -44,6 +61,11 @@ class OpenAICompatLLMClient(LLMClient):
         self._model = model
         self._timeout = timeout
         self._extra_headers = extra_headers or {}
+        #: Why the last call failed, verbatim from the provider. Empty after a
+        #: success. Read by the startup self-test so a misconfigured key or an
+        #: empty balance is named on the deploy log instead of surfacing a day
+        #: later as an unbroken run of ABSTAIN verdicts.
+        self.last_error: str = ""
 
     @property
     def available(self) -> bool:
@@ -74,12 +96,29 @@ class OpenAICompatLLMClient(LLMClient):
                 json=payload,
                 timeout=self._timeout,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"] or ""
-        except (requests.RequestException, KeyError, IndexError, ValueError) as exc:
-            log.warning("OpenAI-compat call to %s failed: %s", self._base_url, exc)
+        except requests.RequestException as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            log.warning("OpenAI-compat call to %s failed: %s", self._base_url, self.last_error)
             return ""
+        if resp.status_code >= 400:
+            # The body is the whole diagnosis and raise_for_status discards it.
+            # A bare "402 Client Error" reads like a bug in our payload; the
+            # body says "Insufficient Balance", which is a billing problem and
+            # nothing a code change can fix. Same for an expired key (401) or a
+            # rate limit (429) — three very different faults that look
+            # identical without it.
+            self.last_error = f"HTTP {resp.status_code}: {_provider_message(resp)}"
+            log.warning("OpenAI-compat call to %s failed: %s", self._base_url, self.last_error)
+            return ""
+        try:
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, ValueError) as exc:
+            self.last_error = f"unreadable response: {type(exc).__name__}: {exc}"
+            log.warning("OpenAI-compat call to %s failed: %s", self._base_url, self.last_error)
+            return ""
+        self.last_error = ""
+        return content
 
     def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
         return self._chat(system, user, max_tokens=max_tokens, json_mode=False)

@@ -47,6 +47,9 @@ def _ai_mode_label(status: dict) -> str:
         return "OFF"
     if status.get("available"):
         return "MONITOR"
+    reason = status.get("reason")
+    if reason:
+        return f"⚠️ ENABLED BUT UNAVAILABLE — {reason}"
     degraded = ", ".join(status.get("degraded_roles") or []) or "arbiter"
     return f"⚠️ ENABLED BUT UNAVAILABLE — no key/model for: {degraded}"
 
@@ -96,6 +99,16 @@ def main() -> None:
 
     # Announce online to Telegram so the channel confirms the bot is up (and
     # surfaces any chat/topic misconfiguration in the logs immediately).
+    ai = ai_status(application, probe=True)
+    if ai["enabled"] and not ai["available"]:
+        log.warning(
+            "AI debate is ENABLED but cannot produce a verdict: %s. Every signal "
+            "will come back ABSTAIN, which the statistics cannot tell apart from "
+            "an AI with no opinion. Fix the provider key/balance or set "
+            "AI_DEBATE_ENABLED=false.",
+            ai.get("reason") or ", ".join(ai.get("degraded_roles") or []) or "unknown",
+        )
+
     application.notifier.notify_startup({
         "sources": application.client.source_names,
         "detectors": application.screener.detector_names,
@@ -106,7 +119,7 @@ def main() -> None:
         # Reality, not intent: an enabled layer whose arbiter has no usable
         # client abstains on every signal while the card still reads MONITOR.
         # That is how a run of 29/29 ABSTAIN went unnoticed.
-        "ai_mode": _ai_mode_label(ai_status(application)),
+        "ai_mode": _ai_mode_label(ai),
         "risk_gates": _risk_gates_label(settings.risk),
         "state": _state_label(application),
     })

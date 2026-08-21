@@ -263,3 +263,37 @@ def test_a_winner_inside_the_ceiling_is_not_flagged(store, fake_client, tracker_
         _outcome(rows, r=-1.0, status=Status.SL_HIT.value, n=i)
     diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
     assert not any(f.startswith("AVG_WIN_ABOVE_LADDER_CEILING") for f in diag["flags"])
+
+
+def test_a_silent_ai_names_the_fault_that_silenced_it(store, fake_client, tracker_settings):
+    """ABSTAIN is the shape every AI fault takes, so the count alone says nothing.
+
+    A rejected key, a spent balance and a model that cannot emit JSON all
+    degrade to the same verdict — deliberately, so the layer can never block
+    screening. The digest has to carry the reason, or the only way to tell them
+    apart is to go reading container logs.
+    """
+    rows = []
+    for i in range(12):
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, n=i)
+    for i, row in enumerate(rows):
+        row["ai_verdict"] = "ABSTAIN"
+        row["ai_rationale"] = (
+            "ABSTAIN/NO_JSON: HTTP 402: Insufficient Balance" if i < 9
+            else "ABSTAIN/ERROR: Timeout"
+        )
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    flag = next(f for f in diag["flags"] if f.startswith("AI_NEVER_DECIDES"))
+    assert flag == "AI_NEVER_DECIDES(NO_JSON=9,ERROR=3)"
+    assert flag in render_digest(diag)
+
+
+def test_a_silent_ai_with_no_reason_recorded_still_flags(store, fake_client, tracker_settings):
+    """Signals recorded before the reason was tracked must not break the flag."""
+    rows = []
+    for i in range(12):
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, n=i)
+    for row in rows:
+        row["ai_verdict"] = "ABSTAIN"
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert "AI_NEVER_DECIDES" in diag["flags"]

@@ -193,10 +193,15 @@ def test_flow_build_token_not_found():
 
 # ── OpenAI-compatible client (DeepSeek/Groq) ───────────────────────────────
 class _Resp:
-    def __init__(self, body):
+    def __init__(self, body, status_code=200, text=""):
         self._body = body
+        self.status_code = status_code
+        self.text = text
     def raise_for_status(self): pass
-    def json(self): return self._body
+    def json(self):
+        if self._body is None:
+            raise ValueError("no json")
+        return self._body
 
 
 def test_openai_compat_complete(monkeypatch):
@@ -231,3 +236,80 @@ def test_notify_flow_empty_sends_nothing():
     n = TelegramNotifier(TelegramSettings(bot_token="t", chat_id="1"), session=sess)
     n.notify_flow("")
     assert sess.calls == []
+
+
+# ── AI self-test: naming the fault instead of abstaining silently ───────────
+class _ErrResp:
+    def __init__(self, status_code, body, text=""):
+        self.status_code = status_code
+        self._body = body
+        self.text = text
+    def json(self):
+        if self._body is None:
+            raise ValueError("not json")
+        return self._body
+
+
+def test_provider_error_body_survives_into_the_reason(monkeypatch):
+    """A status code alone cannot tell a billing problem from a broken key.
+
+    DeepSeek answers a spent balance with 402 and the words "Insufficient
+    Balance"; raise_for_status throws the words away and leaves "402 Client
+    Error", which reads like a malformed request. The provider's own sentence
+    is the diagnosis, so it has to reach the log line.
+    """
+    from wolf.ai.debate import DebateValidator
+    from wolf.ai.openai_compat import OpenAICompatLLMClient
+
+    client = OpenAICompatLLMClient("k", "https://api.deepseek.com/v1", "deepseek-chat")
+    monkeypatch.setattr(
+        "wolf.ai.openai_compat.requests.post",
+        lambda *a, **kw: _ErrResp(402, {"error": {"message": "Insufficient Balance"}}),
+    )
+    result = DebateValidator(arbiter=client, bull=client, bear=client).selftest()
+    assert result["ok"] is False
+    assert result["reason"] == "HTTP 402: Insufficient Balance"
+
+
+def test_selftest_passes_when_the_arbiter_answers(monkeypatch):
+    from wolf.ai.debate import DebateValidator
+    from wolf.ai.openai_compat import OpenAICompatLLMClient
+
+    client = OpenAICompatLLMClient("k", "https://api.deepseek.com/v1", "deepseek-chat")
+    monkeypatch.setattr(
+        "wolf.ai.openai_compat.requests.post",
+        lambda *a, **kw: _ErrResp(200, {"choices": [{"message": {
+            "content": '{"decision": "NEUTRAL", "confidence": 0}'}}]}),
+    )
+    assert DebateValidator(arbiter=client).selftest() == {"ok": True, "reason": ""}
+
+
+def test_an_unset_key_is_reported_as_such(monkeypatch):
+    from wolf.ai.debate import DebateValidator
+    from wolf.ai.openai_compat import OpenAICompatLLMClient
+
+    client = OpenAICompatLLMClient("", "https://api.deepseek.com/v1", "deepseek-chat")
+    result = DebateValidator(arbiter=client).selftest()
+    assert result["ok"] is False
+    assert "key is unset" in result["reason"]
+
+
+def test_an_abstaining_debate_records_which_fault_caused_it(monkeypatch):
+    """The verdict is stored on the signal, so the reason has to ride with it."""
+    from wolf.ai.debate import DebateValidator, Decision
+    from wolf.ai.openai_compat import OpenAICompatLLMClient
+    from wolf.detectors.base import SignalCandidate
+
+    client = OpenAICompatLLMClient("k", "https://api.deepseek.com/v1", "deepseek-chat")
+    monkeypatch.setattr(
+        "wolf.ai.openai_compat.requests.post",
+        lambda *a, **kw: _ErrResp(402, {"error": {"message": "Insufficient Balance"}}),
+    )
+    cand = SignalCandidate(
+        symbol="BTCUSDT", signal_type="SCREENER", direction="LONG",
+        entry_price=100, tp=110, sl=95, score=80, strategy="MOMENTUM",
+    )
+    verdict = DebateValidator(arbiter=client, bull=client, bear=client).validate(cand)
+    assert verdict.decision == Decision.ABSTAIN
+    assert verdict.rationale.startswith("ABSTAIN/NO_JSON")
+    assert "Insufficient Balance" in verdict.rationale

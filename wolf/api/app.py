@@ -47,7 +47,7 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     @api.get("/health")
-    def health() -> dict:
+    def health(probe_ai: bool = False) -> dict:
         # state_dir is reported absolute, and outcomes_stored alongside it, so a
         # wiped history after a redeploy is visible instead of being mistaken for
         # a quiet week. A relative path means the container filesystem, which
@@ -59,7 +59,10 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             "outcomes_stored": len(store.read("signal_outcomes", default=[]) or []),
             "telegram_enabled": app_obj.notifier.enabled,
             # enabled vs available: when they disagree, every signal abstains.
-            "ai": ai_status(app_obj),
+            # ?probe_ai=true spends one arbiter call to ask the provider rather
+            # than the config, which is the only way to catch a key that is set
+            # but rejected, or a balance that has run out.
+            "ai": ai_status(app_obj, probe=probe_ai),
             "config": app_obj.settings.describe(),
         }
 

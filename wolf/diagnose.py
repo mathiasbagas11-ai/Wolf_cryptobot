@@ -338,7 +338,17 @@ def diagnose(
     if state_dir and not state_is_persistent(state_dir):
         flags.append("STATE_NOT_PERSISTED")
     if traded and abstain_rate >= 0.99:
-        flags.append("AI_NEVER_DECIDES")
+        # Name the fault, not just the symptom. Every one of these degrades to
+        # ABSTAIN precisely so it cannot break screening, which also means it
+        # cannot be seen: a rejected key, a spent balance and a model that
+        # cannot return JSON all read as an AI with no opinion.
+        reasons: dict[str, int] = {}
+        for o in traded:
+            code = (o.ai_rationale or "").split(":", 1)[0].strip()
+            if code.startswith("ABSTAIN/"):
+                reasons[code.split("/", 1)[1]] = reasons.get(code.split("/", 1)[1], 0) + 1
+        detail = ",".join(f"{k}={v}" for k, v in sorted(reasons.items(), key=lambda kv: -kv[1]))
+        flags.append(f"AI_NEVER_DECIDES({detail})" if detail else "AI_NEVER_DECIDES")
     if ai_available is False:
         flags.append("AI_CLIENT_UNAVAILABLE")
     unpriced = status_counts.get(Status.EXPIRED.value, 0)

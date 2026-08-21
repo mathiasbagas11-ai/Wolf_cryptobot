@@ -28,6 +28,18 @@ from wolf.detectors.base import SignalCandidate
 log = logging.getLogger("wolf.ai.debate")
 
 
+# Why a verdict came back ABSTAIN. Stored in the Verdict's rationale, so it
+# reaches the signal record and the daily digest can name the cause — an
+# abstention is invisible by design (it never blocks a signal), and without
+# this the three faults below are indistinguishable from an AI that read the
+# setup and had no opinion.
+_ABSTAIN_NO_ARBITER = "ABSTAIN/NO_ARBITER"   # no usable client for the arbiter role
+_ABSTAIN_ERROR = "ABSTAIN/ERROR"             # a role raised — network, auth, SDK
+_ABSTAIN_NO_JSON = "ABSTAIN/NO_JSON"         # arbiter answered, but not with a verdict
+
+ABSTAIN_REASONS = (_ABSTAIN_NO_ARBITER, _ABSTAIN_ERROR, _ABSTAIN_NO_JSON)
+
+
 class Decision:
     CONFIRM = "CONFIRM"
     NEUTRAL = "NEUTRAL"
@@ -272,9 +284,34 @@ class DebateValidator(SignalValidator):
             if not client.available
         ]
 
+    def selftest(self) -> dict:
+        """Ask the arbiter for one throwaway verdict, and report what came back.
+
+        Every failure in this layer degrades to ABSTAIN, which never blocks a
+        signal and so never breaks anything visibly. The cost is that a dead
+        key, an exhausted balance and a model that cannot return JSON all look
+        identical to an AI that simply had no opinion — and stay invisible
+        until a day of statistics comes back 100% ABSTAIN.
+
+        One call at boot turns that into a line on the deploy log carrying the
+        provider's own explanation.
+        """
+        if not self._arbiter.available:
+            return {"ok": False, "reason": "arbiter has no client — its provider key is unset"}
+        data = self._arbiter.complete_json(
+            _ARBITER_SYSTEM,
+            "PROPOSED SETUP:\n(startup self-test — reply NEUTRAL with confidence 0)\n\n"
+            "Decide: CONFIRM, NEUTRAL, or REJECT.",
+            _VERDICT_SCHEMA,
+            max_tokens=128,
+        )
+        if data.get("decision"):
+            return {"ok": True, "reason": ""}
+        return {"ok": False, "reason": getattr(self._arbiter, "last_error", "") or "returned no JSON"}
+
     def validate(self, candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> Verdict:
         if not self.available:
-            return Verdict(decision=Decision.ABSTAIN)
+            return Verdict(decision=Decision.ABSTAIN, rationale=_ABSTAIN_NO_ARBITER)
 
         chart_data = candles if (self._chart_candles > 0 and candles) else ()
         setup = _describe(candidate, context, chart_data, tf_candles=tf_candles)
@@ -288,9 +325,12 @@ class DebateValidator(SignalValidator):
                 "Decide: CONFIRM, NEUTRAL, or REJECT."
             )
             data = self._arbiter.complete_json(_ARBITER_SYSTEM, arbiter_prompt, _VERDICT_SCHEMA, max_tokens=512)
-        except Exception:  # the AI layer must never break screening
+        except Exception as exc:  # the AI layer must never break screening
             log.exception("Debate failed for %s — abstaining", candidate.symbol)
-            return Verdict(decision=Decision.ABSTAIN)
+            return Verdict(
+                decision=Decision.ABSTAIN,
+                rationale=f"{_ABSTAIN_ERROR}: {type(exc).__name__}",
+            )
 
         if not data:
             # The one abstain path that used to be completely silent, and the
@@ -301,7 +341,12 @@ class DebateValidator(SignalValidator):
                 "arbiter provider/key and that its model supports structured output.",
                 candidate.symbol,
             )
-            return Verdict(decision=Decision.ABSTAIN, bull_summary=bull, bear_summary=bear)
+            detail = getattr(self._arbiter, "last_error", "") or "no JSON"
+            return Verdict(
+                decision=Decision.ABSTAIN,
+                rationale=f"{_ABSTAIN_NO_JSON}: {detail}",
+                bull_summary=bull, bear_summary=bear,
+            )
 
         decision = str(data.get("decision", Decision.NEUTRAL)).upper()
         if decision not in (Decision.CONFIRM, Decision.NEUTRAL, Decision.REJECT):

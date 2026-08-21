@@ -135,7 +135,7 @@ def _build_market_client(settings: Settings) -> MarketDataClient:
     return MarketDataClient(sources, futures=futures, funding_sources=funding_sources)
 
 
-def ai_status(app: "Application") -> dict:
+def ai_status(app: "Application", probe: bool = False) -> dict:
     """Whether the debate layer can actually return a verdict, and what is missing.
 
     ``enabled`` is intent, ``available`` is reality. They disagree whenever the
@@ -148,12 +148,23 @@ def ai_status(app: "Application") -> dict:
             "enabled": app.settings.ai.enabled,
             "available": False,
             "degraded_roles": [],
+            "reason": "no validator wired",
         }
-    return {
+    status = {
         "enabled": app.settings.ai.enabled,
         "available": bool(getattr(validator, "available", False)),
         "degraded_roles": list(getattr(validator, "degraded_roles", [])),
+        "reason": "",
     }
+    # `available` only asks whether a client object exists. A key that is set
+    # but rejected, or a balance that ran out, passes that test and still
+    # abstains on every signal — so when the caller can afford one round trip,
+    # ask the provider instead of the config.
+    if probe and status["available"]:
+        result = getattr(validator, "selftest", lambda: {"ok": True, "reason": ""})()
+        status["available"] = bool(result.get("ok"))
+        status["reason"] = result.get("reason", "")
+    return status
 
 
 def build_application(settings: Settings | None = None) -> Application:
