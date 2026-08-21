@@ -233,3 +233,33 @@ def test_breakeven_win_rate_uses_realised_wins_not_the_ladder_ceiling(store, fak
     assert lad["avg_win_r"] == 0.5
     assert lad["avg_loss_r"] == 1.0
     assert round(lad["breakeven_win_rate"]) == 67     # 1.0 / 1.5
+
+
+def test_an_average_winner_above_the_ladder_ceiling_is_flagged(store, fake_client, tracker_settings):
+    """Scaling out caps a perfect run, so a bigger average winner cannot be real.
+
+    The 1:3 ladder sells 50% at 1R and 30% at 2R, leaving 20% to collect 3R —
+    1.7R for a flawless trade. An average winner above that is a grading fault,
+    and it is the kind that flatters every number downstream, so the digest has
+    to say it out loud rather than report a strong quarter.
+    """
+    rows = []
+    for i in range(12):
+        _outcome(rows, r=3.0, status=Status.TP_HIT.value, n=i)
+    for i in range(12, 20):
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, n=i)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert diag["ladder"]["avg_win_r"] == 3.0
+    flag = next(f for f in diag["flags"] if f.startswith("AVG_WIN_ABOVE_LADDER_CEILING"))
+    assert "3.00R>1.70R" in flag
+    assert flag in render_digest(diag)
+
+
+def test_a_winner_inside_the_ceiling_is_not_flagged(store, fake_client, tracker_settings):
+    rows = []
+    for i in range(12):
+        _outcome(rows, r=1.7, status=Status.TP_HIT.value, n=i)
+    for i in range(12, 20):
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, n=i)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert not any(f.startswith("AVG_WIN_ABOVE_LADDER_CEILING") for f in diag["flags"])

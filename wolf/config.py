@@ -695,6 +695,15 @@ class Settings:
     # while the widest ran 0.25R, and only the wide ones survived costs.
     max_cost_r: float = 0.5
 
+    # How far a market entry may be re-quoted before the setup counts as gone.
+    # A detector prices at the last closed bar, so by the time the alert is
+    # built price has moved; the entry is re-quoted at the live price and the
+    # ladder rebuilt around it. But past some distance that is no longer the
+    # same trade — it is chasing. Half the original risk unit is the line: the
+    # move that was supposed to pay has already half happened, into a stop that
+    # has not moved with it.
+    max_chase_r: float = 0.5
+
     # API server
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -929,6 +938,7 @@ class Settings:
             stats_report_hours=_env_int("STATS_REPORT_HOURS", 24),
             round_trip_cost_bps=_env_float("ROUND_TRIP_COST_BPS", 20.0),
             max_cost_r=_env_float("MAX_COST_R", 0.5),
+            max_chase_r=_env_float("MAX_CHASE_R", 0.5),
             api_host=_env_str("API_HOST", "0.0.0.0"),
             api_port=_env_int("API_PORT", 8000),
             api_key=_env_str("API_KEY"),

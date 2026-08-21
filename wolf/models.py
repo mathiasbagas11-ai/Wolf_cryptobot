@@ -33,6 +33,17 @@ class SignalType(str, Enum):
     NEWS = "NEWS"
 
 
+# Bar length of every interval the bot asks the exchange for. Lives here
+# because both the screener (dropping the bar still forming) and the tracker
+# (finding the bar an entry price was printed on) need it, and the tracker
+# cannot import the screener.
+INTERVAL_MS: dict[str, int] = {
+    "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+    "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
+    "6h": 21_600_000, "12h": 43_200_000, "1d": 86_400_000,
+}
+
+
 class EntryMode(str, Enum):
     MOMENTUM_NOW = "MOMENTUM_NOW"   # treated as active the moment it's sent
     RETEST_WAIT = "RETEST_WAIT"     # active only once price touches the entry zone
@@ -228,6 +239,9 @@ class Signal:
     # risk_scale: position-size multiplier actually applied (1.0 = full size).
     bounce_flagged: bool = False
     risk_scale: float = 1.0
+    # entry_quoted_live: the entry was taken from the live price feed at
+    # created_at, rather than from the last closed bar of the timeframe.
+    entry_quoted_live: bool = False
 
     # On-chain context as it stood *at signal time*. Recorded, never acted on:
     # none of these gate anything except whale_coordination, and the point of
@@ -251,7 +265,40 @@ class Signal:
         self.reasons = list(self.reasons)[:3]
         if self.entry_mode.upper() == EntryMode.MOMENTUM_NOW.value and not self.activated:
             self.activated = True
-            self.activated_at = self.activated_at or self.created_at
+            self.activated_at = self.activated_at or self.priced_at or self.created_at
+
+    @property
+    def priced_at(self) -> Optional[str]:
+        """When the entry price was printed, for an entry taken at market.
+
+        Normally the screener re-quotes at the live feed before sending, and
+        this is ``None``: the entry was priced at ``created_at``, exactly as
+        the timestamp says.
+
+        It matters when that re-quote could not happen — the exchange returned
+        no price — and the entry stays at what the detector read: ``closes[-1]``,
+        the close of the last *closed* bar of its own timeframe. A 1h signal
+        assembled at 10:07 then quotes the 10:00 price and is live from 10:00,
+        not 10:07. Those seven minutes already moved for or against the quote,
+        and grading from 10:07 would hand them over for free while hiding them
+        from the stop.
+
+        ``None`` too when the timeframe is unknown — the gap cannot be measured
+        without knowing how long a bar is — leaving ``created_at`` in play.
+        """
+        if self.entry_quoted_live:
+            return None  # quoted at created_at; there is no gap to close
+        span = INTERVAL_MS.get(self.timeframe or "")
+        if not span or not self.created_at:
+            return None
+        try:
+            created = datetime.fromisoformat(self.created_at)
+        except (TypeError, ValueError):
+            return None
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        floored = (int(created.timestamp() * 1000) // span) * span
+        return datetime.fromtimestamp(floored / 1000, tz=timezone.utc).isoformat()
 
     @property
     def is_long(self) -> bool:

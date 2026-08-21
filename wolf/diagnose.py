@@ -34,7 +34,7 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
-from wolf.config import state_is_persistent, volume_mount
+from wolf.config import LadderSettings, state_is_persistent, volume_mount
 from wolf.models import Signal, Status
 from wolf.tracker import Tracker, _parse_iso, _risk_pct, r_multiple_of
 
@@ -329,6 +329,8 @@ def diagnose(
         if traded else 0.0
     )
 
+    ladder = _ladder_economics(traded)
+
     flags = []
     # Same durability test the startup card uses. The old check here only asked
     # whether the path was absolute, which passes /app/state_data — absolute and
@@ -344,6 +346,14 @@ def diagnose(
         flags.append(f"UNPRICED_EXITS={unpriced}")
     if not tp1_banks_win:
         flags.append("TP1_BANKS_WIN_OFF")
+    # Scaling out caps a perfect run: most of the size is sold before the last
+    # rung, so no single trade can pay what the final rung is worth. An average
+    # winner above that ceiling is arithmetically impossible, which means the
+    # grading is wrong — not that the strategy is exceptional. Say so loudly,
+    # because every number downstream inherits the error and they all look good.
+    ceiling = LadderSettings().full_run_r
+    if ladder["avg_win_r"] > ceiling:
+        flags.append(f"AVG_WIN_ABOVE_LADDER_CEILING={ladder['avg_win_r']:.2f}R>{ceiling:.2f}R")
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -361,7 +371,7 @@ def diagnose(
             "cost_r": round(cost_r, 3),
         },
         "overall": overall,
-        "ladder": _ladder_economics(traded),
+        "ladder": ladder,
         "by_strategy": by_strategy,
         "by_whale_stance": by_whale_stance,
         "by_onchain_bias": by_onchain_bias,

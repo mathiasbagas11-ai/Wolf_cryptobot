@@ -291,6 +291,7 @@ def build_application(settings: Settings | None = None) -> Application:
         min_rr=settings.min_signal_rr,
         round_trip_bps=settings.round_trip_cost_bps,
         max_cost_r=settings.max_cost_r,
+        max_chase_r=settings.max_chase_r,
         learning=learning,
         whale_veto_enabled=settings.onchain.whale_veto_enabled,
         whale_veto_min_wallets=settings.onchain.whale_veto_min_wallets,
