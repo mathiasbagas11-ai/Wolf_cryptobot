@@ -27,7 +27,7 @@ from wolf.config import RiskSettings
 from wolf.detectors.base import Detector, SignalCandidate
 from wolf.exchange import BinanceClient
 from wolf.indicator_cache import CandleFeatures
-from wolf.models import INTERVAL_MS
+from wolf.models import INTERVAL_MS, Direction, EntryMode
 from wolf.notify import TelegramNotifier
 from wolf.regime import BEARISH, BULLISH, NEUTRAL, UNKNOWN
 from wolf.regime_composite import MarketContext
@@ -120,6 +120,7 @@ class Screener:
         min_rr: float = 1.5,
         round_trip_bps: float = 20.0,
         max_cost_r: float = 0.5,
+        max_chase_r: float = 0.5,
         learning=None,
         macro_provider=None,
         whale_veto_enabled: bool = True,
@@ -143,6 +144,7 @@ class Screener:
         self._min_rr = min_rr
         self._round_trip_bps = round_trip_bps
         self._max_cost_r = max_cost_r
+        self._max_chase_r = max_chase_r
         self._learning = learning
         self._whale_veto_enabled = whale_veto_enabled
         self._whale_veto_min_wallets = whale_veto_min_wallets
@@ -477,6 +479,72 @@ class Screener:
 
         return False
 
+    def _reprice_at_market(self, candidate: SignalCandidate) -> bool:
+        """Re-quote a market entry at the live price. Returns True to drop it.
+
+        Detectors price at ``closes[-1]`` — the close of the last *closed* bar
+        of their own timeframe — so a 1h setup found at 10:07 quotes the 10:00
+        price, and a 4h setup can quote one four hours old. Sending that as
+        "enter now" asks for a fill at a price that no longer exists, and every
+        distance in the card is measured from it.
+
+        The stop stays where the detector put it: it marks a level in the
+        market — beyond a swept wick, or an ATR band around the move — not an
+        offset from whatever price happened to be quoted. So re-quoting the
+        entry changes the risk unit, and the ladder is rebuilt around the new
+        one, each rung landing at the R-multiple it was placed at.
+
+        Past ``max_chase_r`` in the trade's favour the setup is not re-quoted
+        but abandoned. The stop has not moved, so chasing buys a smaller move
+        for the same loss — and the part of the move that was meant to pay has
+        already happened without us.
+        """
+        if candidate.entry_mode.upper() != EntryMode.MOMENTUM_NOW.value:
+            return False  # a pending entry is a level, not a quote
+        quoted, sl = candidate.entry_price, candidate.sl
+        risk = abs(quoted - sl)
+        if quoted <= 0 or risk <= 0:
+            return False
+        try:
+            live = self._client.get_price(candidate.symbol)
+        except Exception as exc:  # pragma: no cover - network shapes vary
+            log.debug("No live price for %s: %s — keeping quoted entry", candidate.symbol, exc)
+            return False
+        if not live or live <= 0:
+            return False
+
+        is_long = candidate.direction.upper() == Direction.LONG.value
+        drift = (live - quoted) if is_long else (quoted - live)
+        if drift / risk > self._max_chase_r:
+            log.info(
+                "Skip %s %s: ran %.2fR past the %.6g entry before the alert (limit %.2f)",
+                candidate.symbol, candidate.direction, drift / risk, quoted, self._max_chase_r,
+            )
+            return True
+        # Moved the other way and through the stop: the setup is already dead.
+        if (is_long and live <= sl) or (not is_long and live >= sl):
+            log.info("Skip %s %s: price is already past the stop", candidate.symbol, candidate.direction)
+            return True
+
+        new_risk = abs(live - sl)
+        sign = 1 if is_long else -1
+        rebuilt = []
+        for i, rung in enumerate(candidate.tps or [], start=1):
+            r = rung.get("r_multiple")
+            if not r:
+                # Hand-built rung with no R stamped: keep its distance in R by
+                # reading it off the entry it was placed against.
+                r = abs(rung["price"] - quoted) / risk
+            rebuilt.append({**rung, "level": rung.get("level", i), "price": live + sign * new_risk * r})
+        candidate.entry_price = live
+        candidate.entry_quoted_live = True
+        candidate.tps = rebuilt or None
+        if rebuilt:
+            candidate.tp = rebuilt[-1]["price"]
+        else:
+            candidate.tp = live + sign * new_risk * (abs(candidate.tp - quoted) / risk)
+        return False
+
     def _too_expensive(self, candidate: SignalCandidate) -> bool:
         """Reject a setup whose stop is too tight to survive its own costs.
 
@@ -621,6 +689,10 @@ class Screener:
                 continue
             if self._apply_bounce_guard(candidate, ctx):
                 continue
+            # Re-quote before the ratio gates, so they judge the trade as it
+            # can actually be entered rather than as it looked one bar ago.
+            if self._reprice_at_market(candidate):
+                continue
             rr = abs(candidate.tp - candidate.entry_price) / max(abs(candidate.entry_price - candidate.sl), 1e-9)
             if rr < self._min_rr:
                 log.debug("Skip %s %s: R:R %.2f < %.1f", candidate.symbol, candidate.direction, rr, self._min_rr)
@@ -655,6 +727,7 @@ class Screener:
                 weak_strategy=candidate.weak_strategy,
                 bounce_flagged=candidate.bounce_flagged,
                 risk_scale=candidate.risk_scale,
+                entry_quoted_live=candidate.entry_quoted_live,
                 # On-chain context as it stood when the signal fired. Recorded
                 # for later analysis, not acted on — the whale veto above is the
                 # only one of these with teeth today, and whether the others

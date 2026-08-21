@@ -318,6 +318,7 @@ class Tracker:
         weak_strategy: bool = False,
         bounce_flagged: bool = False,
         risk_scale: float = 1.0,
+        entry_quoted_live: bool = False,
         onchain_bias: str = "",
         whale_stance: str = "",
         whale_net_wallets: int = 0,
@@ -392,6 +393,7 @@ class Tracker:
             weak_strategy=weak_strategy,
             bounce_flagged=bounce_flagged,
             risk_scale=risk_scale,
+            entry_quoted_live=entry_quoted_live,
         )
 
         dedup_min = self._settings.dedup_for(signal.signal_type)

@@ -65,6 +65,11 @@ class SignalCandidate:
     # mode the flag is set but risk_scale stays 1.0 (observation only).
     bounce_flagged: bool = False
     risk_scale: float = 1.0
+    #: True once the screener has re-quoted ``entry_price`` at the live market
+    #: price. Detectors leave it False, because they price off the last closed
+    #: bar of their timeframe — and the tracker has to know which of the two it
+    #: is holding to know when the position went live.
+    entry_quoted_live: bool = False
 
 
 class Detector(ABC):

@@ -852,3 +852,114 @@ def test_detectors_never_see_the_forming_bar(store, tracker_settings):
     assert det.seen, "detector was never called"
     assert det.seen[-1].time + four_h <= now      # last bar handed over is closed
     assert det.seen[-1].time != forming_open
+
+
+# ── re-quoting a market entry at the live price ─────────────────────────────
+def _market_cand(entry=100.0, sl=95.0):
+    """A 1:3 market entry: 1R = 5, rungs at 1R / 2R / 3R off entry."""
+    return SignalCandidate(
+        symbol="BTCUSDT", signal_type="SCREENER", direction="LONG",
+        entry_price=entry, tp=entry + 15, sl=sl, score=80, strategy="MOMENTUM",
+        reasons=["x"], entry_mode="MOMENTUM_NOW", timeframe="1h",
+        tps=[
+            {"level": 1, "price": entry + 5, "allocation": 0.5, "r_multiple": 1.0},
+            {"level": 2, "price": entry + 10, "allocation": 0.3, "r_multiple": 2.0},
+            {"level": 3, "price": entry + 15, "allocation": 0.2, "r_multiple": 3.0},
+        ],
+    )
+
+
+def test_market_entry_is_requoted_and_the_ladder_follows(fake_client):
+    """Price drifted 1 (0.2R) since the bar close the detector read.
+
+    The stop is a level in the market, so it stays at 95; the risk unit widens
+    to 6 and every rung moves out to keep the R it was placed at. Leaving the
+    ladder where it was would quietly turn a 1:3 into a 1:2.5.
+    """
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[])
+    fake_client.prices["BTCUSDT"] = 101.0
+    cand = _market_cand()
+    assert screener._reprice_at_market(cand) is False
+    assert cand.entry_price == 101.0
+    assert cand.sl == 95
+    assert [r["price"] for r in cand.tps] == [107.0, 113.0, 119.0]
+    assert cand.tp == 119.0
+    rr = (cand.tp - cand.entry_price) / (cand.entry_price - cand.sl)
+    assert round(rr, 6) == 3.0
+
+
+def test_a_setup_that_already_ran_is_not_chased(fake_client):
+    """Past half the risk unit the move has begun without us.
+
+    The stop has not moved with price, so entering here pays the same loss for
+    a smaller remaining move — the ladder would just be re-drawn further away.
+    """
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[], max_chase_r=0.5)
+    fake_client.prices["BTCUSDT"] = 103.0   # 0.6R past the 100 quote
+    assert screener._reprice_at_market(_market_cand()) is True
+
+
+def test_a_better_entry_than_quoted_is_taken(fake_client):
+    """Drift against the signal is not chasing — it is a cheaper entry."""
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[])
+    fake_client.prices["BTCUSDT"] = 98.0
+    cand = _market_cand()
+    assert screener._reprice_at_market(cand) is False
+    assert cand.entry_price == 98.0
+    assert [r["price"] for r in cand.tps] == [101.0, 104.0, 107.0]
+
+
+def test_a_setup_already_through_its_stop_is_dropped(fake_client):
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[])
+    fake_client.prices["BTCUSDT"] = 94.0
+    assert screener._reprice_at_market(_market_cand()) is True
+
+
+def test_pending_entries_and_missing_prices_keep_the_quoted_entry(fake_client):
+    """A retest level is a decision, not a quote, and must survive untouched.
+
+    So must any entry the exchange could not price — degrading to the last
+    close is worse than emitting nothing only if the alternative works.
+    """
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[])
+    fake_client.prices["BTCUSDT"] = 103.0
+    retest = _market_cand()
+    retest.entry_mode = "RETEST_WAIT"
+    assert screener._reprice_at_market(retest) is False
+    assert retest.entry_price == 100.0
+
+    fake_client.prices.pop("BTCUSDT")
+    market = _market_cand()
+    assert screener._reprice_at_market(market) is False
+    assert market.entry_price == 100.0
+
+
+def test_short_entries_requote_in_the_other_direction(fake_client):
+    """Mirror case: for a SHORT, drift *down* is the run that must not be chased."""
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[], max_chase_r=0.5)
+    short = SignalCandidate(
+        symbol="BTCUSDT", signal_type="SCREENER", direction="SHORT",
+        entry_price=100.0, tp=85.0, sl=105.0, score=80, strategy="MOMENTUM",
+        reasons=["x"], entry_mode="MOMENTUM_NOW", timeframe="1h",
+        tps=[
+            {"level": 1, "price": 95.0, "allocation": 0.5, "r_multiple": 1.0},
+            {"level": 2, "price": 90.0, "allocation": 0.3, "r_multiple": 2.0},
+            {"level": 3, "price": 85.0, "allocation": 0.2, "r_multiple": 3.0},
+        ],
+    )
+    fake_client.prices["BTCUSDT"] = 99.0            # 0.2R in the trade's favour
+    assert screener._reprice_at_market(short) is False
+    assert short.entry_price == 99.0
+    assert [r["price"] for r in short.tps] == [93.0, 87.0, 81.0]
+
+    fake_client.prices["BTCUSDT"] = 97.0            # 0.6R — already gone
+    assert screener._reprice_at_market(_short_cand()) is True
+
+
+def _short_cand():
+    return SignalCandidate(
+        symbol="BTCUSDT", signal_type="SCREENER", direction="SHORT",
+        entry_price=100.0, tp=85.0, sl=105.0, score=80, strategy="MOMENTUM",
+        reasons=["x"], entry_mode="MOMENTUM_NOW", timeframe="1h",
+        tps=[{"level": 1, "price": 95.0, "allocation": 1.0, "r_multiple": 1.0}],
+    )

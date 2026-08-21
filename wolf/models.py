@@ -239,6 +239,9 @@ class Signal:
     # risk_scale: position-size multiplier actually applied (1.0 = full size).
     bounce_flagged: bool = False
     risk_scale: float = 1.0
+    # entry_quoted_live: the entry was taken from the live price feed at
+    # created_at, rather than from the last closed bar of the timeframe.
+    entry_quoted_live: bool = False
 
     # On-chain context as it stood *at signal time*. Recorded, never acted on:
     # none of these gate anything except whale_coordination, and the point of
@@ -268,15 +271,23 @@ class Signal:
     def priced_at(self) -> Optional[str]:
         """When the entry price was printed, for an entry taken at market.
 
-        Detectors read ``closes[-1]`` — the close of the last *closed* bar of
-        their own timeframe — so a 1h signal assembled at 10:07 quotes the
-        10:00 price. The position is live from 10:00, not from 10:07: the
-        seven minutes in between already moved against or in favour of that
-        quote, and grading from 10:07 would hand them over for free while
-        hiding them from the stop.
+        Normally the screener re-quotes at the live feed before sending, and
+        this is ``None``: the entry was priced at ``created_at``, exactly as
+        the timestamp says.
 
-        ``None`` when the timeframe is unknown, leaving ``created_at`` in play.
+        It matters when that re-quote could not happen — the exchange returned
+        no price — and the entry stays at what the detector read: ``closes[-1]``,
+        the close of the last *closed* bar of its own timeframe. A 1h signal
+        assembled at 10:07 then quotes the 10:00 price and is live from 10:00,
+        not 10:07. Those seven minutes already moved for or against the quote,
+        and grading from 10:07 would hand them over for free while hiding them
+        from the stop.
+
+        ``None`` too when the timeframe is unknown — the gap cannot be measured
+        without knowing how long a bar is — leaving ``created_at`` in play.
         """
+        if self.entry_quoted_live:
+            return None  # quoted at created_at; there is no gap to close
         span = INTERVAL_MS.get(self.timeframe or "")
         if not span or not self.created_at:
             return None

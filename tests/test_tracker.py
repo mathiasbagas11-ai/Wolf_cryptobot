@@ -764,3 +764,36 @@ def test_pending_entries_are_not_replayed_before_they_existed(store, fake_client
     tracker = Tracker(store, fake_client, TrackerSettings())
     assert tracker.check_pending() == []
     assert tracker.active_signals()[0].status == Status.PENDING.value
+
+
+def test_a_live_quoted_entry_is_graded_from_when_it_was_quoted(store, fake_client):
+    """No gap to close when the screener already re-quoted at the live price.
+
+    The bar-close fallback exists for entries the exchange could not price. If
+    it also applied to live quotes it would run the trade against price action
+    from before it was quoted — inventing stop-outs the position never saw.
+    """
+    stub = Tracker(store, fake_client, TrackerSettings())
+    sig = stub.record_signal(
+        "BTCUSDT", "MOMENTUM", "LONG", 100, tp=115, sl=95,
+        entry_mode="MOMENTUM_NOW", timeframe="1h", tps=LADDER_1_3,
+        entry_quoted_live=True,
+    )
+    created = datetime.fromisoformat(sig.created_at).replace(
+        minute=7, second=0, microsecond=0
+    )
+    sig.created_at = created.isoformat()
+    sig.activated_at = created.isoformat()
+    stub._save_pending([sig])
+    hour_ms = int(created.replace(minute=0).timestamp() * 1000)
+    fake_client.klines["BTCUSDT"] = [
+        # A dive through the stop that happened *before* 10:07 — not ours.
+        Candle(time=hour_ms, open=100, high=101, low=94, close=100, volume=100.0),
+        Candle(time=hour_ms + 900_000, open=100, high=106, low=100, close=105, volume=100.0),
+    ]
+    assert sig.priced_at is None
+    tracker = Tracker(store, fake_client, TrackerSettings())
+    assert tracker.check_pending() == []     # the 94 low predates the quote
+    live = tracker.active_signals()[0]
+    assert live.status == Status.ACTIVE.value
+    assert live.tps_hit == [1]               # only the 10:15 bar counted
