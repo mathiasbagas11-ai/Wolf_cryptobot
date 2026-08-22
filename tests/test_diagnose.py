@@ -284,7 +284,9 @@ def test_a_silent_ai_names_the_fault_that_silenced_it(store, fake_client, tracke
         )
     diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
     flag = next(f for f in diag["flags"] if f.startswith("AI_NEVER_DECIDES"))
-    assert flag == "AI_NEVER_DECIDES(NO_JSON=9,ERROR=3)"
+    assert flag == (
+        "AI_NEVER_DECIDES(NO_JSON: HTTP 402: Insufficient Balance x9 | ERROR: Timeout x3)"
+    )
     assert flag in render_digest(diag)
 
 
@@ -297,3 +299,46 @@ def test_a_silent_ai_with_no_reason_recorded_still_flags(store, fake_client, tra
         row["ai_verdict"] = "ABSTAIN"
     diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
     assert "AI_NEVER_DECIDES" in diag["flags"]
+
+
+def test_whale_stance_is_crossed_with_strategy(store, fake_client, tracker_settings):
+    """One dimension cannot tell a whale effect from the strategy mix.
+
+    Here every trade loses when whales agree and wins when they disagree — but
+    only because the losing strategy is the one whales happen to agree with.
+    The flat by_whale_stance split reads as a strong whale signal; the cross-tab
+    shows each strategy performing the same whichever side the whales took, so
+    the signal is the strategy, not the whales.
+    """
+    rows = []
+    for i in range(8):                      # PREDUMP loses, whales agree with it
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, strategy="PREDUMP", n=i)
+        rows[-1]["whale_stance"] = "WITH"
+    for i in range(8, 16):                  # MOMENTUM wins, whales oppose it
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, strategy="MOMENTUM", n=i)
+        rows[-1]["whale_stance"] = "AGAINST"
+    # A few of each strategy on the other side, performing the same as its peers.
+    for i in range(16, 20):
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, strategy="PREDUMP", n=i)
+        rows[-1]["whale_stance"] = "AGAINST"
+    for i in range(20, 24):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, strategy="MOMENTUM", n=i)
+        rows[-1]["whale_stance"] = "WITH"
+
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    cross = diag["whale_by_strategy"]
+    # Within a strategy the stance makes no difference — the flat split lied.
+    assert cross["PREDUMP"]["WITH"]["mean_r"] == cross["PREDUMP"]["AGAINST"]["mean_r"] == -1.0
+    assert cross["MOMENTUM"]["WITH"]["mean_r"] == cross["MOMENTUM"]["AGAINST"]["mean_r"] == 1.0
+    digest = render_digest(diag)
+    assert "wxs:PREDUMP" in digest and "wxs:MOMENTUM" in digest
+
+
+def test_the_cross_tab_stays_out_of_the_way_when_it_cannot_inform(store, fake_client, tracker_settings):
+    """A strategy whose trades all share one stance says nothing — omit it."""
+    rows = []
+    for i in range(10):
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, strategy="PREDUMP", n=i)
+        rows[-1]["whale_stance"] = "WITH"
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert "wxs:" not in render_digest(diag)

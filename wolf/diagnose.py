@@ -316,6 +316,34 @@ def diagnose(
     by_whale_stance = _onchain_buckets("whale_stance")
     by_onchain_bias = _onchain_buckets("onchain_bias")
 
+    # Whale stance crossed with strategy, because the one-dimensional split
+    # cannot tell a real effect from a bookkeeping artefact. If the strategies
+    # that lose are also the ones whose signals whales happen to agree with,
+    # "trading with whales loses" is just those strategies losing, re-labelled.
+    # Only the cross-tab separates the two, and the answer decides whether the
+    # whale veto is filtering the right side.
+    def _whale_by_strategy() -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for strategy in sorted({o.strategy or "?" for o in traded}):
+            rows = [o for o in traded if (o.strategy or "?") == strategy]
+            cells: dict[str, dict] = {}
+            for stance in sorted({(o.whale_stance or "NO_DATA") for o in rows}):
+                cell = [o for o in rows if (o.whale_stance or "NO_DATA") == stance]
+                graded_cell = [o for o in cell if Status(o.status).is_graded]
+                wins = sum(1 for o in graded_cell if Status(o.status).is_win)
+                cells[stance] = {
+                    "n": len(cell),
+                    "graded": len(graded_cell),
+                    "win_rate": round(wins / len(graded_cell) * 100, 1) if graded_cell else 0.0,
+                    "mean_r": round(
+                        statistics.fmean([r_multiple_of(o) for o in cell]), 3
+                    ) if cell else 0.0,
+                }
+            out[strategy] = cells
+        return out
+
+    whale_by_strategy = _whale_by_strategy()
+
     status_counts: dict[str, int] = {}
     for o in outcomes:
         status_counts[o.status] = status_counts.get(o.status, 0) + 1
@@ -344,10 +372,20 @@ def diagnose(
         # cannot return JSON all read as an AI with no opinion.
         reasons: dict[str, int] = {}
         for o in traded:
-            code = (o.ai_rationale or "").split(":", 1)[0].strip()
-            if code.startswith("ABSTAIN/"):
-                reasons[code.split("/", 1)[1]] = reasons.get(code.split("/", 1)[1], 0) + 1
-        detail = ",".join(f"{k}={v}" for k, v in sorted(reasons.items(), key=lambda kv: -kv[1]))
+            head, _, rest = (o.ai_rationale or "").partition(":")
+            if head.strip().startswith("ABSTAIN/"):
+                # Keep the provider's own sentence, not just the class of fault.
+                # "NO_JSON" says the arbiter did not return a verdict; only the
+                # message says whether that was an expired key, a spent balance
+                # or a model answering in prose — three different remedies, and
+                # two of them are not code changes at all.
+                key = head.strip().split("/", 1)[1]
+                if rest.strip():
+                    key = f"{key}: {rest.strip()}"
+                reasons[key] = reasons.get(key, 0) + 1
+        detail = " | ".join(
+            f"{k} x{v}" for k, v in sorted(reasons.items(), key=lambda kv: -kv[1])[:2]
+        )
         flags.append(f"AI_NEVER_DECIDES({detail})" if detail else "AI_NEVER_DECIDES")
     if ai_available is False:
         flags.append("AI_CLIENT_UNAVAILABLE")
@@ -384,6 +422,7 @@ def diagnose(
         "ladder": ladder,
         "by_strategy": by_strategy,
         "by_whale_stance": by_whale_stance,
+        "whale_by_strategy": whale_by_strategy,
         "by_onchain_bias": by_onchain_bias,
         "status_counts": status_counts,
         "ai_verdicts": ai_verdicts,
@@ -444,6 +483,22 @@ def render_digest(diag: dict) -> str:
                 f"wr={b['win_rate']:.1f} meanR={b['mean_r']:+.3f} t={b['t']:+.2f} "
                 f"=> {b['verdict']}"
             )
+
+    # Cross-tab, printed only when a whale stance actually varies within a
+    # strategy — that is the only case where it can separate a whale effect
+    # from the strategy mix, and the only case worth the extra lines.
+    cross = diag.get("whale_by_strategy") or {}
+    informative = {
+        name: cells for name, cells in cross.items()
+        if len([k for k in cells if k != "NO_DATA"]) >= 2
+    }
+    for name, cells in informative.items():
+        lines.append(
+            f"wxs:{name:<18} " + "  ".join(
+                f"{stance}(n={c['n']},wr={c['win_rate']:.0f},R={c['mean_r']:+.2f})"
+                for stance, c in sorted(cells.items())
+            )
+        )
 
     if diag.get("state_dir"):
         mark = "ok" if diag.get("state_persistent") else "EPHEMERAL"
