@@ -234,9 +234,20 @@ class RiskSettings:
     regime_symbol: str = "BTCUSDT"
     regime_interval: str = "1h"
 
-    # Drawdown throttle (always a HARD gate): pause ALL new entries once the paper
-    # equity is this far below its peak (percent). Protects realized gains.
-    drawdown_pause_pct: float = 15.0
+    # Drawdown throttle: pause ALL new entries once the paper equity is this far
+    # below its peak (percent). ``0`` (the default) disables it.
+    #
+    # Off by default because there is no capital behind it. The bot places no
+    # orders — the ledger is a paper record of signals it emitted — so pausing
+    # protects nothing, and what it actually stops is the sample from growing,
+    # at exactly the moment a losing stretch makes the sample most worth having.
+    # A circuit breaker that trips on a measurement, and whose only effect is to
+    # stop measuring, cannot pay for itself.
+    #
+    # Set DRAWDOWN_PAUSE_PCT to a positive number to arm it — which is what to
+    # do the day real orders are placed, since then it is protecting money
+    # rather than suppressing data.
+    drawdown_pause_pct: float = 0.0
 
     # Auto-pause underperformers, judged on realized edge in R (PnL per unit of
     # the trade's own risk) rather than in percent: targets are ATR multiples, so
@@ -878,7 +889,7 @@ class Settings:
             regime_filter_enabled=_env_bool("REGIME_FILTER_ENABLED", True),
             regime_symbol=_env_str("REGIME_SYMBOL", "BTCUSDT"),
             regime_interval=_env_str("REGIME_INTERVAL", "1h"),
-            drawdown_pause_pct=_env_float("DRAWDOWN_PAUSE_PCT", 15.0),
+            drawdown_pause_pct=_env_float("DRAWDOWN_PAUSE_PCT", 0.0),
             autopause_min_trades=_env_int("AUTOPAUSE_MIN_TRADES", 30),
             autopause_min_expectancy_r=_env_float("AUTOPAUSE_MIN_EXPECTANCY_R", 0.0),
             autopause_confidence_z=_env_float("AUTOPAUSE_CONFIDENCE_Z", 1.65),

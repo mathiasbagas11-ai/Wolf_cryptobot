@@ -364,8 +364,9 @@ class Screener:
         return True
 
     # ── risk gates ──────────────────────────────────────────────────────────
-    # Drawdown is always a hard pause; regime + auto-pause default to MONITOR
-    # (flag + down-score, still emit) and become hard blocks via RiskSettings.
+    # Drawdown is a hard pause when armed (off by default); regime + auto-pause
+    # default to MONITOR (flag + down-score, still emit) and become hard blocks
+    # via RiskSettings.
     def _current_regime(self) -> str:
         if not self._risk.regime_filter_enabled or self._regime_provider is None:
             return UNKNOWN
@@ -386,8 +387,14 @@ class Screener:
         return MarketContext(trend=self._current_regime())
 
     def _drawdown_paused(self) -> bool:
-        """True when paper equity has fallen far enough below its peak to pause."""
-        if self._account is None:
+        """True when paper equity has fallen far enough below its peak to pause.
+
+        Disabled at ``drawdown_pause_pct <= 0``, which is the default: the bot
+        places no orders, so the throttle guards no capital and its only real
+        effect is to stop recording signals during the drawdown that most needs
+        recording.
+        """
+        if self._account is None or self._risk.drawdown_pause_pct <= 0:
             return False
         try:
             return self._account.drawdown_pct() >= self._risk.drawdown_pause_pct

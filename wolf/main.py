@@ -27,7 +27,12 @@ def _risk_gates_label(risk) -> str:
     if risk.regime_filter_enabled:
         mode = "hard" if risk.regime_hard_block else "monitor"
         parts.append(f"regime({risk.regime_symbol},{mode})")
-    parts.append(f"drawdown≥{risk.drawdown_pause_pct:.0f}%(hard)")
+    # Naming a disarmed gate by its threshold reads as "pauses at 0%", i.e. the
+    # opposite of what it does. Say off when it is off.
+    parts.append(
+        f"drawdown≥{risk.drawdown_pause_pct:.0f}%(hard)"
+        if risk.drawdown_pause_pct > 0 else "drawdown(off)"
+    )
     ap_mode = "hard" if risk.autopause_hard_block else "monitor"
     parts.append(
         f"autopause<{risk.autopause_min_expectancy_r:+.2f}R/{risk.autopause_min_trades}({ap_mode})"

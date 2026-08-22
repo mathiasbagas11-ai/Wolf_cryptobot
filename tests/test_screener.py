@@ -963,3 +963,39 @@ def _short_cand():
         reasons=["x"], entry_mode="MOMENTUM_NOW", timeframe="1h",
         tps=[{"level": 1, "price": 95.0, "allocation": 1.0, "r_multiple": 1.0}],
     )
+
+
+# ── drawdown throttle ───────────────────────────────────────────────────────
+def test_a_deep_drawdown_does_not_pause_scanning_by_default(store, fake_client, tracker_settings):
+    """No orders are placed, so the throttle guards nothing and costs a sample.
+
+    Halting on a 40% paper drawdown stops the bot recording signals during the
+    stretch whose signals are most worth having, and protects no capital in
+    exchange — the ledger is a record of what was emitted, not a position.
+    """
+    screener, tracker = _momentum_screener(
+        store, fake_client, tracker_settings, account=_FakeAccount(40.0),
+    )
+    assert screener._drawdown_paused() is False
+    assert len(screener.run_cycle()) == 1
+    assert tracker.active_signals() != []
+
+
+def test_the_throttle_still_pauses_once_armed(store, fake_client, tracker_settings):
+    """Arming it is one env var, for the day the bot places real orders."""
+    screener, tracker = _momentum_screener(
+        store, fake_client, tracker_settings,
+        account=_FakeAccount(20.0), risk=RiskSettings(drawdown_pause_pct=15.0),
+    )
+    assert screener._drawdown_paused() is True
+    assert screener.run_cycle() == []
+    assert tracker.active_signals() == []
+
+
+def test_an_armed_throttle_leaves_a_shallow_drawdown_alone(store, fake_client, tracker_settings):
+    screener, _ = _momentum_screener(
+        store, fake_client, tracker_settings,
+        account=_FakeAccount(9.0), risk=RiskSettings(drawdown_pause_pct=15.0),
+    )
+    assert screener._drawdown_paused() is False
+    assert len(screener.run_cycle()) == 1
