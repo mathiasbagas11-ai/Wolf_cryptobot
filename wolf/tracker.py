@@ -22,16 +22,22 @@ Design notes (improvements over the previous bot):
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
-from wolf.config import TrackerSettings
+from wolf.config import LadderSettings, TrackerSettings
 from wolf.exchange import BinanceClient
 from wolf.models import Direction, EntryMode, Signal, Status, TpRung
 from wolf.state import StateStore
 
 log = logging.getLogger("wolf.tracker")
+
+# Below this many graded trades, a win rate is a small-sample artefact rather
+# than a finding — a "0.0% WR" off one trade says nothing about the strategy.
+MIN_GRADED_FOR_VERDICT = 20
 
 PENDING_KEY = "pending_signals"
 OUTCOMES_KEY = "signal_outcomes"
@@ -59,6 +65,19 @@ def normalize_ladder(
 
     Rungs on the wrong side of entry (i.e. not in profit territory) are dropped.
     If no valid ladder is supplied, falls back to a single rung at ``tp``.
+
+    Allocations are repaired rather than trusted, so that whatever comes in,
+    the ladder that comes out closes exactly 100% of the position and a scaled
+    exit can never leak or double-count size. A rung may arrive without one (a
+    hand-posted API signal, a ladder stored before the field existed), and
+    dropping an invalid rung changes what the survivors should carry.
+
+    A ladder that specifies *no* allocations is split evenly rather than given
+    the configured front-loaded weights. Silence is not a preference: assuming
+    50/30/20 for an old two-rung ladder would retroactively re-grade outcomes
+    that were booked under an even split, quietly rewriting recorded history.
+    Detectors state their allocations explicitly, so only legacy rungs land
+    here.
     """
     rungs: list[TpRung] = []
     for raw in tps or []:
@@ -70,14 +89,140 @@ def normalize_ladder(
         if not price or not level:
             continue
         if (is_long and price > entry) or (not is_long and price < entry):
-            rungs.append(TpRung(level=level, price=price))
+            rungs.append(TpRung(
+                level=level,
+                price=price,
+                allocation=float(raw.get("allocation") or 0.0),
+                r_multiple=float(raw.get("r_multiple") or 0.0),
+            ))
     if not rungs and tp:
         if (is_long and tp > entry) or (not is_long and tp < entry):
             rungs.append(TpRung(level=1, price=float(tp)))
     rungs.sort(key=lambda r: r.price, reverse=not is_long)
-    for i, rung in enumerate(rungs, start=1):
-        rung.level = i
+
+    supplied = sum(r.allocation for r in rungs)
+    even = 1 / len(rungs) if rungs else 0.0
+    risk_per_unit = abs(entry - sl)
+    for i, rung in enumerate(rungs):
+        rung.level = i + 1
+        rung.allocation = round(
+            even if supplied <= 0 else rung.allocation / supplied, 6
+        )
+        if not rung.r_multiple and risk_per_unit > 0:
+            rung.r_multiple = round(abs(rung.price - entry) / risk_per_unit, 3)
     return rungs
+
+
+def _resolved_at(sig: Signal) -> Optional[datetime]:
+    """When an outcome was booked, for windowing. ``None`` if unparseable."""
+    for value in (sig.resolved_at, sig.exit_time):
+        if value:
+            try:
+                return _parse_iso(value)
+            except (ValueError, TypeError):
+                continue
+    return None
+
+
+def _risk_pct(sig: Signal) -> float:
+    """Distance from entry to stop, in percent — one unit of risk (1R)."""
+    if sig.entry_price <= 0:
+        return 0.0
+    return abs(sig.entry_price - sig.sl) / sig.entry_price * 100
+
+
+def r_multiple_of(sig: Signal) -> float:
+    """PnL in units of the trade's own risk.
+
+    Derived on read rather than trusted from storage, so outcomes booked before
+    ``r_multiple`` existed still report correctly — entry and sl are persisted,
+    which is all the conversion needs. No backfill migration required.
+    """
+    if sig.r_multiple is not None:
+        return sig.r_multiple
+    risk = _risk_pct(sig)
+    if not risk or sig.pnl_pct is None:
+        return 0.0
+    return round(sig.pnl_pct / risk, 3)
+
+
+def _replay_start_ms(sig: Signal, created_ts: int) -> int:
+    """First candle open time the replay may include, inclusive.
+
+    A MOMENTUM_NOW entry is priced at ``closes[-1]`` — the close of the last
+    *closed* bar of the detector's own timeframe. On a 1h detector scanned at
+    10:07 that price was printed at 10:00, yet the replay only picked up 15m
+    bars opening after 10:07, so it started at 10:15. The fifteen minutes in
+    between were credited to the entry and hidden from the stop, on exactly
+    the kind of fast move that makes a momentum detector fire: the position
+    banked the run-up for free and could not be stopped out during it.
+
+    Replaying from the bar the entry price came from closes that window. Only
+    immediate entries get it — a RETEST_WAIT entry is a *level*, not a stale
+    quote, and must never be activated by price action that predates it.
+    """
+    # Everything else keeps the old rule: strictly after the signal existed.
+    if sig.entry_mode.upper() != EntryMode.MOMENTUM_NOW.value:
+        return created_ts + 1
+    priced_at = sig.priced_at
+    if not priced_at:
+        return created_ts + 1
+    return int(_parse_iso(priced_at).timestamp() * 1000)
+
+
+def _activation_time(sig: Signal, created_at: datetime) -> datetime:
+    """When the position actually went live.
+
+    For a MOMENTUM_NOW entry that is the moment its price was printed — the
+    close of the bar :func:`_replay_start_ms` picks out, not the later moment
+    the alert was assembled. Anything else falls back to ``created_at``, as do
+    records written before ``activated_at`` was persisted.
+    """
+    if sig.activated_at:
+        try:
+            return _parse_iso(sig.activated_at)
+        except (ValueError, TypeError):
+            pass
+    start_ms = _replay_start_ms(sig, int(created_at.timestamp() * 1000))
+    return min(created_at, datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc))
+
+
+def _partial_pnl(
+    entry: float,
+    is_long: bool,
+    ladder: list[TpRung],
+    tps_hit: list[int],
+    stop_price: float,
+) -> float:
+    """Blended PnL% of a scaled exit.
+
+    Each *hit* rung's slice is booked at its target price and every remaining
+    slice is closed at ``stop_price`` (breakeven once TP1 has moved the stop),
+    which is what scores a TP1-banked stop-out as the partial win it is.
+
+    Slices are weighted by each rung's ``allocation``, so a front-loaded ladder
+    banks what it actually closes at the near rung instead of assuming every
+    rung carries the same size. ``normalize_ladder`` guarantees the weights sum
+    to 1; the even-split fallback here only covers a ladder built by hand.
+    """
+    n = len(ladder)
+    if n == 0 or entry <= 0:
+        return 0.0
+
+    def pct(px: float) -> float:
+        move = (px - entry) if is_long else (entry - px)
+        return move / entry * 100
+
+    weights = [r.allocation for r in ladder]
+    if sum(weights) <= 0:
+        weights = [1 / n] * n
+    total_w = sum(weights) or 1.0
+
+    hit = set(tps_hit)
+    return sum(
+        (w / total_w) * pct(r.price if r.level in hit else stop_price)
+        for r, w in zip(ladder, weights)
+    )
 
 
 class EvalResult:
@@ -91,6 +236,7 @@ class EvalResult:
         "terminal",
         "exit_price",
         "exit_time",
+        "realized_pnl_pct",
     )
 
     def __init__(self) -> None:
@@ -101,6 +247,9 @@ class EvalResult:
         self.terminal: Optional[Status] = None
         self.exit_price: Optional[float] = None
         self.exit_time: Optional[datetime] = None
+        # Blended PnL% of a scaled exit; set only for a partial (TP1-banked) win
+        # so _resolve books the realized number instead of the single-exit geom.
+        self.realized_pnl_pct: Optional[float] = None
 
 
 class Tracker:
@@ -110,11 +259,17 @@ class Tracker:
         client: BinanceClient,
         settings: TrackerSettings,
         notify: Optional[NotifyFn] = None,
+        account=None,
+        learning=None,
+        ladder: Optional[LadderSettings] = None,
     ) -> None:
         self._store = store
         self._client = client
         self._settings = settings
+        self._ladder = ladder or LadderSettings()
         self._notify = notify or (lambda *_: None)
+        self._account = account  # optional PaperAccount for the Trade Report
+        self._learning = learning  # optional LearningEngine fed on resolution
         # Guards the compound read-modify-write of pending_signals. StateStore
         # makes each read/write atomic, but record_signal and check_pending each
         # do load -> mutate -> save, which would otherwise interleave when the
@@ -153,7 +308,21 @@ class Tracker:
         reasons: Optional[list[str]] = None,
         strategy: str = "CONFIRMED",
         entry_mode: str = EntryMode.RETEST_WAIT.value,
+        timeframe: str = "15m",
         tps: Optional[list[dict]] = None,
+        ai_verdict: str = "",
+        ai_confidence: int = 0,
+        ai_rationale: str = "",
+        ai_vetoed: bool = False,
+        against_regime: bool = False,
+        weak_strategy: bool = False,
+        bounce_flagged: bool = False,
+        risk_scale: float = 1.0,
+        entry_quoted_live: bool = False,
+        onchain_bias: str = "",
+        whale_stance: str = "",
+        whale_net_wallets: int = 0,
+        coinbase_premium_pct: Optional[float] = None,
     ) -> Optional[Signal]:
         """Record a freshly-emitted signal as PENDING.
 
@@ -182,6 +351,20 @@ class Tracker:
             log.warning("Reject %s SHORT: need tp<entry<sl (%.6g/%.6g/%.6g)", symbol, tp_f, entry, sl_f)
             return None
 
+        # The reward:risk policy is enforced in the screener, which covers every
+        # signal the bot generates itself. A hand-posted API signal bypasses
+        # that path, so flag it here rather than let a sub-policy trade enter
+        # the sample unremarked — deliberate overrides are allowed, silent ones
+        # are what quietly drag the measured expectancy down.
+        risk_per_unit = abs(entry - sl_f)
+        rr = abs(tp_f - entry) / risk_per_unit if risk_per_unit else 0.0
+        if rr and rr < self._ladder.rr_target * 0.8:
+            log.warning(
+                "%s %s recorded at R:R %.2f, below the %.1f target — "
+                "expected only for a manual override",
+                symbol, direction, rr, self._ladder.rr_target,
+            )
+
         ladder = normalize_ladder(tps, tp_f, sl_f, entry, is_long)
         signal = Signal(
             symbol=symbol,
@@ -194,14 +377,29 @@ class Tracker:
             confluence_level=confluence_level,
             reasons=reasons or [],
             strategy=strategy,
+            timeframe=timeframe,
             entry_mode=(entry_mode or EntryMode.RETEST_WAIT.value).upper(),
             tp_ladder=[r.to_dict() for r in ladder],
             timeout_hours=self._settings.timeout_for(signal_type),
+            ai_verdict=ai_verdict,
+            ai_confidence=ai_confidence,
+            ai_rationale=ai_rationale,
+            ai_vetoed=ai_vetoed,
+            onchain_bias=onchain_bias,
+            whale_stance=whale_stance,
+            whale_net_wallets=whale_net_wallets,
+            coinbase_premium_pct=coinbase_premium_pct,
+            against_regime=against_regime,
+            weak_strategy=weak_strategy,
+            bounce_flagged=bounce_flagged,
+            risk_scale=risk_scale,
+            entry_quoted_live=entry_quoted_live,
         )
 
+        dedup_min = self._settings.dedup_for(signal.signal_type)
         with self._lock:
             pending = self._load_pending()
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=self._settings.dedup_minutes)
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=dedup_min)
             for existing in pending:
                 if (
                     existing.symbol == symbol
@@ -210,7 +408,7 @@ class Tracker:
                 ):
                     try:
                         if _parse_iso(existing.created_at) > cutoff:
-                            log.debug("Dedup %s %s within %dm", symbol, direction, self._settings.dedup_minutes)
+                            log.debug("Dedup %s %s within %dm", symbol, direction, dedup_min)
                             return None
                     except ValueError:
                         continue
@@ -232,7 +430,13 @@ class Tracker:
         momentum = sig.entry_mode.upper() == EntryMode.MOMENTUM_NOW.value
 
         res.activated = bool(sig.activated) or momentum
-        res.activated_time = created_at if res.activated else None
+        # A signal that activated on an earlier cycle must resume from the candle
+        # it actually activated on, not from created_at. Every cycle replays the
+        # whole history, so treating pre-activation candles as live would let them
+        # register TP/SL hits the position was never open for — for a RETEST_WAIT
+        # long, price sits *above* entry until the retest, which is exactly where
+        # the TP rungs are.
+        res.activated_time = _activation_time(sig, created_at) if res.activated else None
         eff_sl = sig.sl
         first_lvl = ladder[0].level if ladder else None
 
@@ -246,13 +450,54 @@ class Tracker:
                     res.activated_time = c_time
                 else:
                     continue
+            elif res.activated_time is not None and c_time < res.activated_time:
+                continue  # candle predates activation — no position existed yet
 
-            # Stop-loss is checked first (conservative).
-            sl_hit = (is_long and c.low <= eff_sl) or (not is_long and c.high >= eff_sl)
-            if sl_hit:
-                res.terminal = Status.SL_HIT
-                res.exit_price = eff_sl
+            # A candle reports its high and its low but not the order they
+            # traded in. On a bar wide enough to reach both a take-profit and
+            # the stop, that order decides the outcome, so it has to be assumed.
+            #
+            # With ``intrabar_tp_first`` the order is inferred from the bar's own
+            # direction: a bar closing down printed its high first, one closing
+            # up printed its low first. Whichever extreme came first is the side
+            # that acts first.
+            #
+            # Inferring beats fixing the order either way. Always taking the stop
+            # first writes off a TP1 that plainly filled before the reversal.
+            # Always taking the profit first is worse still: the bar that *fills*
+            # TP1 routinely dips to entry beforehand, so it would be closed out
+            # by the breakeven stop it had just created.
+            high_first = c.close < c.open
+            tp_side_first = high_first if is_long else not high_first
+            stop_acts_first = not (self._ladder.intrabar_tp_first and tp_side_first)
+
+            def _stopped_out() -> bool:
+                return (is_long and c.low <= eff_sl) or (not is_long and c.high >= eff_sl)
+
+            def _close_at_stop() -> None:
+                banked = first_lvl is not None and first_lvl in res.tps_hit
+                if banked and self._settings.tp1_banks_win:
+                    # TP1 is already locked in and the stop now sits at breakeven,
+                    # so a scaled exit (a slice booked at each hit rung, the rest
+                    # at the stop) nets a partial profit — grade it a win.
+                    realized = round(
+                        _partial_pnl(entry, is_long, ladder, res.tps_hit, eff_sl), 3
+                    )
+                    res.terminal = Status.TP_HIT
+                    res.realized_pnl_pct = realized
+                    # Effective single exit price consistent with the blended PnL,
+                    # so the report's Entry→Exit never contradicts the PnL%.
+                    res.exit_price = (
+                        entry * (1 + realized / 100) if is_long
+                        else entry * (1 - realized / 100)
+                    )
+                else:
+                    res.terminal = Status.SL_HIT
+                    res.exit_price = eff_sl
                 res.exit_time = c_time
+
+            if stop_acts_first and _stopped_out():
+                _close_at_stop()
                 break
 
             for rung in ladder:
@@ -266,9 +511,29 @@ class Tracker:
                         eff_sl = entry  # move stop to breakeven after TP1
 
             if ladder and len(res.tps_hit) >= len(ladder):
+                # Every rung filled. Book it the same scaled way a partial exit
+                # is booked: each rung at its own price, weighted by the size
+                # closed there. Pricing the whole position at the final rung
+                # pretends nothing was sold on the way up, which overstates a
+                # full run by ~76% on the default 50/30/20 ladder — 3.0R booked
+                # against the 1.7R the ladder can actually pay.
+                realized = round(
+                    _partial_pnl(entry, is_long, ladder, res.tps_hit, ladder[-1].price), 3
+                )
                 res.terminal = Status.TP_HIT
-                res.exit_price = ladder[-1].price
+                res.realized_pnl_pct = realized
+                res.exit_price = (
+                    entry * (1 + realized / 100) if is_long
+                    else entry * (1 - realized / 100)
+                )
                 res.exit_time = c_time
+                break
+
+            # The profit side acted first on this bar, so the stop is re-checked
+            # against where it stands *now* — a TP1 filled here protects the
+            # remainder at breakeven instead of booking a full-R loss.
+            if not stop_acts_first and _stopped_out():
+                _close_at_stop()
                 break
 
         if res.terminal is None:
@@ -281,8 +546,16 @@ class Tracker:
                 else:
                     curr = self._client.get_price(sig.symbol)
                     if curr:
-                        pnl = (curr - entry) if is_long else (entry - curr)
-                        res.terminal = Status.EXPIRED_WIN if pnl > 0 else Status.EXPIRED_LOSS
+                        pnl_pct = ((curr - entry) if is_long else (entry - curr)) / entry * 100
+                        risk = _risk_pct(sig)
+                        r = (pnl_pct / risk) if risk else 0.0
+                        # Without a dead-band, timing out at +0.01% scored a win
+                        # worth as much as a TP hit — which is how a short
+                        # timeout manufactures a ~50% win rate out of noise.
+                        if abs(r) < self._settings.expiry_flat_r:
+                            res.terminal = Status.EXPIRED_FLAT
+                        else:
+                            res.terminal = Status.EXPIRED_WIN if r > 0 else Status.EXPIRED_LOSS
                         res.exit_price = curr
                     else:
                         res.terminal = Status.EXPIRED
@@ -320,7 +593,8 @@ class Tracker:
                         sig.symbol, interval="15m", limit=int(max(age_hours + 1, 4) * 4) + 10
                     )
                     created_ts = int(created_at.timestamp() * 1000)
-                    future = [c for c in candles if c.time > created_ts]
+                    start_ts = _replay_start_ms(sig, created_ts)
+                    future = [c for c in candles if c.time >= start_ts]
                     res = self._evaluate(sig, future, created_at, now)
                 except (KeyError, ValueError, TypeError) as exc:
                     log.warning("Eval failed for %s: %s — keeping pending", sig.symbol, exc)
@@ -362,14 +636,57 @@ class Tracker:
         for sig, event, info in pending_notifications:
             self._safe_notify(sig, event, info)
         for sig in resolved:
-            self._safe_notify(sig, "RESOLVED", {})
+            self._safe_notify(sig, "RESOLVED", self._resolution_info(sig))
         return resolved
+
+    def _resolution_info(self, sig: Signal) -> dict:
+        """Trade-Report payload: paper-account move + a learned-edge note."""
+        if self._learning is not None:
+            try:
+                self._learning.observe(sig)
+            except Exception:  # learning must never break tracking/notify
+                log.exception("Learning observe failed for %s", sig.symbol)
+        info: dict = {"lesson": self._lesson(sig)}
+        if self._account is not None:
+            try:
+                snapshot = self._account.apply(sig)
+            except Exception:  # the account must never break tracking/notify
+                log.exception("Paper account update failed for %s", sig.symbol)
+                snapshot = None
+            if snapshot:
+                info.update(snapshot)
+        return info
+
+    def _lesson(self, sig: Signal) -> str:
+        """One-line takeaway from the cumulative record for this strategy."""
+        bucket = self.stats().get("by_strategy", {}).get(sig.strategy)
+        if not bucket or not bucket.get("total"):
+            return f"{sig.strategy}: first graded trade — building a baseline."
+        wr = bucket["win_rate"]
+        n = bucket["total"]
+        avg = bucket["avg_pnl"]
+        if wr >= 55 and avg > 0:
+            verdict = "edge holding — keep taking these"
+        elif wr >= 45:
+            verdict = "roughly coin-flip — needs tighter filters"
+        else:
+            verdict = "underperforming — tighten or pause this setup"
+        return f"{sig.strategy}: {wr:.0f}% win over {n} ({avg:+.2f}% avg) — {verdict}."
 
     def _resolve(self, sig: Signal, res: EvalResult, created_at: datetime, now: datetime) -> None:
         exit_price = res.exit_price
         exit_time = res.exit_time or now
-        hold_hours = (exit_time - created_at).total_seconds() / 3600
-        if exit_price and sig.entry_price > 0 and res.terminal != Status.INVALIDATED:
+        # Measured from when the position went live, not from when the alert
+        # was assembled — an immediate entry is priced off an earlier bar
+        # close, so those two differ and the exit can legitimately land
+        # before ``created_at``.
+        opened_at = min(res.activated_time or created_at, created_at)
+        hold_hours = max((exit_time - opened_at).total_seconds() / 3600, 0.0)
+        if res.realized_pnl_pct is not None:
+            # Scaled-exit (TP1-banked) partial win: book the blended realized PnL
+            # rather than the single-exit geometry off the breakeven stop.
+            pnl = res.realized_pnl_pct
+        elif exit_price and sig.entry_price > 0 and res.terminal != Status.INVALIDATED:
             pnl = (
                 (exit_price - sig.entry_price) / sig.entry_price * 100
                 if sig.is_long
@@ -381,6 +698,8 @@ class Tracker:
         sig.exit_price = exit_price
         sig.exit_time = exit_time.isoformat()
         sig.pnl_pct = round(pnl, 3)
+        risk_pct = _risk_pct(sig)
+        sig.r_multiple = round(pnl / risk_pct, 3) if risk_pct else 0.0
         sig.hold_hours = round(hold_hours, 2)
         sig.tps_hit = res.tps_hit
         sig.resolved_at = now.isoformat()
@@ -403,9 +722,20 @@ class Tracker:
         raw = self._store.read(OUTCOMES_KEY, default=[])
         return [Signal.from_dict(d) for d in raw if isinstance(d, dict)]
 
-    def stats(self) -> dict:
-        """Aggregate win-rate / PnL stats over resolved outcomes."""
+    def stats(self, window_hours: Optional[float] = None) -> dict:
+        """Aggregate win-rate / PnL stats over resolved outcomes.
+
+        ``window_hours=None`` reports all-time. Passing the report interval makes
+        a daily message describe *that day* — cumulative figures blend every day
+        since startup, which can show improvement while the run deteriorates.
+        """
         outcomes = self.outcomes()
+        if window_hours and window_hours > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+            # Records with no usable timestamp predate the field and are old by
+            # definition, so they fall outside any recent window.
+            outcomes = [o for o in outcomes if (ts := _resolved_at(o)) is not None and ts >= cutoff]
+        active_sigs = self.active_signals()
         graded = [o for o in outcomes if Status(o.status).is_win or Status(o.status).is_loss]
         wins = [o for o in graded if Status(o.status).is_win]
         total = len(graded)
@@ -413,24 +743,160 @@ class Tracker:
         pnls = [o.pnl_pct for o in graded if o.pnl_pct is not None]
         avg_pnl = (sum(pnls) / len(pnls)) if pnls else 0.0
 
-        by_strategy: dict[str, dict] = {}
-        for o in graded:
-            bucket = by_strategy.setdefault(o.strategy, {"wins": 0, "total": 0, "pnl": 0.0})
-            bucket["total"] += 1
-            bucket["pnl"] += o.pnl_pct or 0.0
-            if Status(o.status).is_win:
-                bucket["wins"] += 1
-        for bucket in by_strategy.values():
-            bucket["win_rate"] = round(bucket["wins"] / bucket["total"] * 100, 1) if bucket["total"] else 0.0
-            bucket["avg_pnl"] = round(bucket["pnl"] / bucket["total"], 3) if bucket["total"] else 0.0
+        def _bucket_group(outcomes_iter, key_fn) -> dict[str, dict]:
+            buckets: dict[str, dict] = {}
+            for o in outcomes_iter:
+                b = buckets.setdefault(
+                    key_fn(o), {"wins": 0, "total": 0, "pnl": 0.0, "r": 0.0, "_rs": []}
+                )
+                b["total"] += 1
+                b["pnl"] += o.pnl_pct or 0.0
+                r = r_multiple_of(o)
+                b["r"] += r
+                b["_rs"].append(r)
+                if Status(o.status).is_win:
+                    b["wins"] += 1
+            for b in buckets.values():
+                rs = b.pop("_rs")
+                n = b["total"]
+                b["win_rate"] = round(b["wins"] / n * 100, 1) if n else 0.0
+                b["avg_pnl"] = round(b["pnl"] / n, 3) if n else 0.0
+                # Targets are ATR multiples, so percent averages are dominated by
+                # whichever volatile symbols happened to trade. R is comparable.
+                b["avg_r"] = round(b["r"] / n, 3) if n else 0.0
+                # Spread of R, and the standard error that follows from it. An
+                # average alone cannot say whether a strategy is losing or merely
+                # unlucky, which is what let a 12-trade sample drive live gating.
+                b["sd_r"] = round(statistics.stdev(rs), 3) if n > 1 else 0.0
+                b["se_r"] = round(b["sd_r"] / math.sqrt(n), 3) if n > 1 else 0.0
+                b["conclusive"] = n >= MIN_GRADED_FOR_VERDICT
+            return buckets
+
+        by_strategy = _bucket_group(graded, lambda o: o.strategy)
+
+        # Emit counts: all recorded signals (active + all resolved), not just graded.
+        # This lets us compare "how many fired" vs "how many got resolved" per detector.
+        emitted_by_strategy: dict[str, int] = {}
+        active_count_by_strategy: dict[str, int] = {}
+        for sig in active_sigs:
+            emitted_by_strategy[sig.strategy] = emitted_by_strategy.get(sig.strategy, 0) + 1
+            active_count_by_strategy[sig.strategy] = active_count_by_strategy.get(sig.strategy, 0) + 1
+        for o in outcomes:  # ALL resolved (graded + invalidated + expired)
+            emitted_by_strategy[o.strategy] = emitted_by_strategy.get(o.strategy, 0) + 1
+        for name, bucket in by_strategy.items():
+            bucket["emitted"] = emitted_by_strategy.get(name, bucket["total"])
+            bucket["active"] = active_count_by_strategy.get(name, 0)
+        # Create zero-stat entries for strategies that only have active signals
+        # (no resolved outcomes yet), so the per-detector emit count is visible.
+        for name, emitted in emitted_by_strategy.items():
+            if name not in by_strategy:
+                by_strategy[name] = {
+                    "wins": 0, "total": 0, "pnl": 0.0,
+                    "win_rate": 0.0, "avg_pnl": 0.0,
+                    "emitted": emitted,
+                    "active": active_count_by_strategy.get(name, 0),
+                }
+
+        # AI verdict breakdown: was the AI predictive?
+        # "NO_AI" = AI was not configured; "ABSTAIN" = AI ran but couldn't decide.
+        by_ai_verdict = _bucket_group(graded, lambda o: o.ai_verdict if o.ai_verdict else "NO_AI")
+
+        # Veto signal: win rate of signals the AI flagged as REJECT+high-confidence
+        # (ai_vetoed=True). If this is significantly lower than overall, enabling
+        # veto mode would have improved results.
+        vetoed = [o for o in graded if o.ai_vetoed]
+        vetoed_wins = sum(1 for o in vetoed if Status(o.status).is_win)
+        vetoed_win_rate = round(vetoed_wins / len(vetoed) * 100, 1) if vetoed else None
+
+        # On-chain monitoring: is any of the new data actually predictive?
+        #
+        # Only the whale veto gates anything today; valuation and the Coinbase
+        # premium reach the AI debate, which is itself in monitor mode. So these
+        # buckets are the evidence for deciding whether any of them should be
+        # promoted to a real gate — the same measure-then-enable path the regime
+        # and AI flags already follow.
+        #
+        # "NO_DATA" is kept separate from "NEUTRAL" throughout: a collector that
+        # was off is not the same finding as a collector that looked and found
+        # nothing, and merging them would quietly dilute whatever effect exists.
+        by_whale_stance = _bucket_group(
+            graded, lambda o: getattr(o, "whale_stance", "") or "NO_DATA"
+        )
+        by_onchain_bias = _bucket_group(
+            graded, lambda o: getattr(o, "onchain_bias", "") or "NO_DATA"
+        )
+
+        # Risk-gate monitoring: win-rate of signals that fought the regime or came
+        # from a flagged strategy. If these underperform, promoting the gate to a
+        # hard block (REGIME_HARD_BLOCK / AUTOPAUSE_HARD_BLOCK) is justified.
+        def _flag_win_rate(predicate) -> tuple[int, Optional[float]]:
+            sub = [o for o in graded if predicate(o)]
+            if not sub:
+                return 0, None
+            sub_wins = sum(1 for o in sub if Status(o.status).is_win)
+            return len(sub), round(sub_wins / len(sub) * 100, 1)
+
+        against_regime_count, against_regime_win_rate = _flag_win_rate(lambda o: o.against_regime)
+        weak_flag_count, weak_flag_win_rate = _flag_win_rate(lambda o: o.weak_strategy)
+
+        # Bounce-guard monitoring: W/L + avg PnL of shorts flagged for bounce
+        # risk. This is the what-if sample that decides when to flip the guard
+        # from monitor to live (and how to calibrate the size/score knobs).
+        bounce_sub = [o for o in graded if getattr(o, "bounce_flagged", False)]
+        bounce_flag_count, bounce_flag_win_rate = _flag_win_rate(
+            lambda o: getattr(o, "bounce_flagged", False)
+        )
+        bounce_pnls = [o.pnl_pct for o in bounce_sub if o.pnl_pct is not None]
+        bounce_flag_avg_pnl = round(sum(bounce_pnls) / len(bounce_pnls), 3) if bounce_pnls else None
+
+        # Expectancy spans every outcome that actually took a position, scratches
+        # included: a breakeven or flat exit really happened, tied up risk and
+        # paid fees, so dropping it from the average would flatter the result.
+        traded = [o for o in outcomes if o.status != Status.INVALIDATED.value]
+        avg_r = (sum(r_multiple_of(o) for o in traded) / len(traded)) if traded else 0.0
+
+        # The win rate this ladder actually needed, from realised wins and
+        # losses rather than from the configured geometry. They are not the
+        # same number: a front-loaded scale-out plus a breakeven stop means the
+        # typical winner banks ~0.5R, not the ladder's 1.7R ceiling, and the
+        # ceiling version understates the requirement by roughly half.
+        win_rs = [r for r in (r_multiple_of(o) for o in traded) if r > 0]
+        loss_rs = [-r for r in (r_multiple_of(o) for o in traded) if r < 0]
+        avg_win_r = (sum(win_rs) / len(win_rs)) if win_rs else 0.0
+        avg_loss_r = (sum(loss_rs) / len(loss_rs)) if loss_rs else 0.0
+        need_wr = (
+            avg_loss_r / (avg_win_r + avg_loss_r) * 100
+            if (avg_win_r + avg_loss_r) else 0.0
+        )
 
         return {
+            "window_hours": window_hours,
             "total_resolved": len(outcomes),
             "total_graded": total,
+            "total_traded": len(traded),
             "wins": len(wins),
             "losses": total - len(wins),
+            "flat": sum(1 for o in outcomes if o.status == Status.EXPIRED_FLAT.value),
+            "invalidated": sum(1 for o in outcomes if o.status == Status.INVALIDATED.value),
             "win_rate": round(win_rate, 1),
             "avg_pnl_pct": round(avg_pnl, 3),
-            "active": len(self.active_signals()),
+            "avg_r": round(avg_r, 3),
+            "avg_win_r": round(avg_win_r, 3),
+            "avg_loss_r": round(avg_loss_r, 3),
+            "breakeven_win_rate": round(need_wr, 1),
+            "conclusive": total >= MIN_GRADED_FOR_VERDICT,
+            "active": len(active_sigs),
             "by_strategy": by_strategy,
+            "by_ai_verdict": by_ai_verdict,
+            "by_whale_stance": by_whale_stance,
+            "by_onchain_bias": by_onchain_bias,
+            "vetoed_count": len(vetoed),
+            "vetoed_win_rate": vetoed_win_rate,
+            "against_regime_count": against_regime_count,
+            "against_regime_win_rate": against_regime_win_rate,
+            "weak_flag_count": weak_flag_count,
+            "weak_flag_win_rate": weak_flag_win_rate,
+            "bounce_flag_count": bounce_flag_count,
+            "bounce_flag_win_rate": bounce_flag_win_rate,
+            "bounce_flag_avg_pnl": bounce_flag_avg_pnl,
         }

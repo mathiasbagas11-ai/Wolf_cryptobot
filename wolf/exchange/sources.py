@@ -104,6 +104,16 @@ class ExchangeSource(ABC):
         """
         return []
 
+    def get_book_depth(self) -> dict[str, float]:
+        """Top-of-book USD depth per symbol, as ``{symbol: bid+ask notional}``.
+
+        The liquidity side of a volume/liquidity ratio, which klines cannot
+        provide. Venues with an all-symbols book ticker answer it in one
+        request; the rest return ``{}`` and callers omit the figure rather than
+        substituting a made-up denominator.
+        """
+        return {}
+
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
         """Recent public trades ``[{id, symbol, price, qty, usd, side, time}]``.
 
@@ -166,6 +176,30 @@ class BinanceSource(ExchangeSource):
                 })
             except (KeyError, ValueError, TypeError):
                 continue
+        return out
+
+    def get_book_depth(self) -> dict[str, float]:
+        # One request returns the best bid/ask and their sizes for every symbol.
+        return self.parse_book_depth(self._get_json(f"{self._base}/ticker/bookTicker", {}))
+
+    @staticmethod
+    def parse_book_depth(payload) -> dict[str, float]:
+        """Sum the best bid and ask into one USD depth figure per symbol.
+
+        Top-of-book only — a proxy for how thick the market is, not the full
+        book. That is enough for a *relative* ranking, which is all this is
+        used for.
+        """
+        if not isinstance(payload, list):
+            return {}
+        out: dict[str, float] = {}
+        for r in payload:
+            try:
+                depth = float(r["bidPrice"]) * float(r["bidQty"]) + float(r["askPrice"]) * float(r["askQty"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if depth > 0:
+                out[r["symbol"]] = depth
         return out
 
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:

@@ -41,6 +41,35 @@ def test_health_redacts_secrets(client):
     assert body["config"]["gemini_api_key"] in (True, False)
 
 
+class _FakeFlow:
+    def build(self):
+        return "FLOW REPORT TEXT"
+    def build_token(self, symbol):
+        return f"DEEP DIVE {symbol.upper()}" if symbol.upper() == "ENA" else None
+
+
+def test_flow_endpoint_posts_report(client):
+    api, app_obj = client
+    app_obj.flow = _FakeFlow()
+    resp = api.post("/flow")
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "FLOW REPORT TEXT"
+
+
+def test_flow_deep_dive_endpoint(client):
+    """The deep dive is its own on-demand reporter, separate from the digest."""
+    api, app_obj = client
+    app_obj.deepdive = _FakeFlow()
+    assert api.post("/flow/ena").json()["text"] == "DEEP DIVE ENA"
+    assert api.post("/flow/nope").status_code == 404
+
+
+def test_flow_endpoint_503_when_reporting_is_disabled(client):
+    api, app_obj = client
+    app_obj.flow = None
+    assert api.post("/flow").status_code == 503
+
+
 def test_record_and_list_active(client):
     api, _ = client
     payload = {
@@ -91,3 +120,70 @@ def test_open_when_no_key_configured(client):
     api, _ = client
     payload = {"symbol": "ETHUSDT", "direction": "LONG", "entry_price": 100, "tp": 110, "sl": 95}
     assert api.post("/signals", json=payload).status_code == 200
+
+
+# ── outcome import (restore after an ephemeral state dir was wiped) ─────────
+def test_health_reports_state_location_and_depth(client):
+    api, _ = client
+    body = api.get("/health").json()
+    assert body["state_dir"].startswith("/")   # absolute: verifiable against a volume
+    assert body["outcomes_stored"] == 0
+
+
+def test_import_outcomes_restores_exported_log(client):
+    api, app_obj = client
+    export = {"count": 2, "outcomes": [
+        {"id": "BTCUSDT_1", "symbol": "BTCUSDT", "signal_type": "SCREENER",
+         "direction": "LONG", "entry_price": 100.0, "tp": 110.0, "sl": 95.0,
+         "status": "TP_HIT", "pnl_pct": 10.0, "strategy": "SCALP"},
+        {"id": "ETHUSDT_2", "symbol": "ETHUSDT", "signal_type": "SCREENER",
+         "direction": "LONG", "entry_price": 100.0, "tp": 110.0, "sl": 95.0,
+         "status": "SL_HIT", "pnl_pct": -5.0, "strategy": "SCALP"},
+    ]}
+    resp = api.post("/signals/outcomes/import", json=export)
+    assert resp.status_code == 200
+    assert resp.json()["imported"] == 2
+    assert len(app_obj.tracker.outcomes()) == 2
+    assert app_obj.tracker.stats()["wins"] == 1
+
+
+def test_import_outcomes_is_idempotent(client):
+    """Re-running an import must not duplicate the sample it restores."""
+    api, app_obj = client
+    export = {"outcomes": [
+        {"id": "BTCUSDT_1", "symbol": "BTCUSDT", "signal_type": "SCREENER",
+         "direction": "LONG", "entry_price": 100.0, "tp": 110.0, "sl": 95.0,
+         "status": "TP_HIT", "pnl_pct": 10.0, "strategy": "SCALP"},
+    ]}
+    api.post("/signals/outcomes/import", json=export)
+    second = api.post("/signals/outcomes/import", json=export)
+    assert second.json() == {"imported": 0, "skipped_without_id": 0, "total_stored": 1}
+    assert len(app_obj.tracker.outcomes()) == 1
+
+
+def test_import_outcomes_accepts_bare_list_and_rejects_junk(client):
+    api, _ = client
+    ok = api.post("/signals/outcomes/import", json=[
+        {"id": "X_1", "symbol": "X", "signal_type": "SCREENER", "direction": "LONG",
+         "entry_price": 1.0, "tp": 2.0, "sl": 0.5, "status": "TP_HIT"},
+    ])
+    assert ok.json()["imported"] == 1
+    assert api.post("/signals/outcomes/import", json={"outcomes": "nope"}).status_code == 400
+
+
+def test_diagnostics_json_and_text(client):
+    api, _ = client
+    body = api.get("/diagnostics").json()
+    assert body["overall"]["verdict"] == "INCONCLUSIVE"  # empty history buys nothing
+    assert "cost" in body and "concurrency" in body
+
+    text = api.get("/diagnostics", params={"format": "text"}).text
+    assert text.startswith("WOLF-DIAG v1")
+
+
+def test_health_reports_ai_intent_versus_reality(client):
+    """enabled vs available: when they disagree, every signal abstains."""
+    api, _ = client
+    ai = api.get("/health").json()["ai"]
+    assert ai["enabled"] is False          # no AI configured in test settings
+    assert ai["available"] is False

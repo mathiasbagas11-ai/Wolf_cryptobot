@@ -17,14 +17,27 @@ blocks a signal, so the bot keeps working with the AI layer off.
 from __future__ import annotations
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 from wolf.ai.base import LLMClient, NullLLMClient
 from wolf.detectors.base import SignalCandidate
 
 log = logging.getLogger("wolf.ai.debate")
+
+
+# Why a verdict came back ABSTAIN. Stored in the Verdict's rationale, so it
+# reaches the signal record and the daily digest can name the cause — an
+# abstention is invisible by design (it never blocks a signal), and without
+# this the three faults below are indistinguishable from an AI that read the
+# setup and had no opinion.
+_ABSTAIN_NO_ARBITER = "ABSTAIN/NO_ARBITER"   # no usable client for the arbiter role
+_ABSTAIN_ERROR = "ABSTAIN/ERROR"             # a role raised — network, auth, SDK
+_ABSTAIN_NO_JSON = "ABSTAIN/NO_JSON"         # arbiter answered, but not with a verdict
+
+ABSTAIN_REASONS = (_ABSTAIN_NO_ARBITER, _ABSTAIN_ERROR, _ABSTAIN_NO_JSON)
 
 
 class Decision:
@@ -49,7 +62,7 @@ class Verdict:
 
 class SignalValidator(ABC):
     @abstractmethod
-    def validate(self, candidate: SignalCandidate, context=None) -> Verdict:
+    def validate(self, candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> Verdict:
         raise NotImplementedError
 
 
@@ -84,7 +97,117 @@ _ARBITER_SYSTEM = (
 )
 
 
-def _describe(candidate: SignalCandidate, context=None) -> str:
+def _chart_summary(candles: Sequence, n: int = 20) -> str:
+    """Compact OHLCV + RSI table for the last n candles."""
+    from wolf import indicators as ind
+
+    if not candles or n <= 0:
+        return ""
+    window = list(candles[-n:])
+    closes = [c.close for c in window]
+    rsi_vals = ind.rsi_series(closes, 14)
+    lines = [f"=== LAST {len(window)} × 15m CANDLES (oldest → newest) ==="]
+    lines.append("  bar   close     chg%    vol_ratio  rsi")
+    avg_vol = sum(c.volume for c in window[:-1]) / max(len(window) - 1, 1)
+    for i, c in enumerate(window):
+        chg = (c.close - c.open) / c.open * 100 if c.open else 0
+        vr = c.volume / avg_vol if avg_vol > 0 else 1.0
+        rsi_val = rsi_vals[i]
+        rsi_str = f"{rsi_val:.0f}" if not math.isnan(rsi_val) else " --"
+        marker = " ← signal bar" if i == len(window) - 1 else ""
+        lines.append(
+            f"  [{i - len(window) + 1:3d}]  {c.close:>9.4g}  {chg:>+5.1f}%   {vr:>4.1f}x      {rsi_str:>3}{marker}"
+        )
+    highs = [c.high for c in window]
+    lows = [c.low for c in window]
+    lines.append(f"  Range: low {min(lows):.4g} — high {max(highs):.4g}")
+    last_rsi = next((v for v in reversed(rsi_vals) if not math.isnan(v)), None)
+    if last_rsi is not None:
+        lines.append(f"  RSI(14) at signal bar: {last_rsi:.1f}")
+    return "\n".join(lines)
+
+
+_MTF_TIMEFRAMES = ("1d", "4h", "1h", "30m")
+
+
+def _multi_tf_summary(tf_candles: dict) -> str:
+    """Compact per-timeframe trend table for the AI (1D → 30M)."""
+    from wolf import indicators as ind
+
+    lines = ["=== MULTI-TIMEFRAME OVERVIEW ==="]
+    for tf in _MTF_TIMEFRAMES:
+        candles = tf_candles.get(tf) or []
+        if not candles or len(candles) < 10:
+            continue
+        closes = [c.close for c in candles]
+        n = len(closes)
+        price = closes[-1]
+        chg = (closes[-1] - closes[-2]) / closes[-2] * 100 if n >= 2 else 0.0
+        ema20 = ind.ema(closes, min(20, n - 1))
+        ema50 = ind.ema(closes, min(50, n - 1))
+        trend = "→ NEUTRAL"
+        if ema20 and ema50:
+            if ema20[-1] > ema50[-1] and price > ema20[-1]:
+                trend = "↑ BULL"
+            elif ema20[-1] < ema50[-1] and price < ema20[-1]:
+                trend = "↓ BEAR"
+            elif ema20[-1] > ema50[-1]:
+                trend = "↗ BULL/PULL"
+            else:
+                trend = "↘ BEAR/PULL"
+        rsi_str = ""
+        if n >= 15:
+            rsi_vals = ind.rsi_series(closes[-20:], 14)
+            last_rsi = next((v for v in reversed(rsi_vals) if not math.isnan(v)), None)
+            if last_rsi is not None:
+                rsi_str = f"  RSI {last_rsi:.0f}"
+        lines.append(f"  {tf.upper():>3s}  {price:.4g}  {chg:+.2f}%  {trend}{rsi_str}")
+    return "\n".join(lines)
+
+
+def _onchain_lines(context) -> list[str]:
+    """Fundamental / whale / institutional context for the debaters.
+
+    These are soft evidence, not gates. The screener already dropped anything
+    whales strongly contradict before the debate runs; what reaches here is a
+    setup worth arguing about, and these lines give the bull and the bear
+    something beyond the chart to argue with.
+
+    Every field is absent when its collector is off, has not run, or last ran
+    too long ago to trust — the context nulls them out — so a missing line means
+    "no data", never "no signal".
+    """
+    lines: list[str] = []
+
+    brief = getattr(context, "onchain_brief", "")
+    if brief:
+        # Multi-line block of facts; the bias label is already its first line.
+        lines.append(brief)
+    elif getattr(context, "onchain_bias", None):
+        lines.append(f"On-chain valuation bias: {context.onchain_bias}")
+
+    direction = getattr(context, "whale_coordination", None)
+    if direction:
+        longs = getattr(context, "whale_long_count", 0)
+        shorts = getattr(context, "whale_short_count", 0)
+        net = getattr(context, "whale_wallet_count", 0)
+        lines.append(
+            f"Whale positioning: tracked top wallets are {longs} long / {shorts} short "
+            f"on this coin — a net {net} leaning {direction}. This is where they are "
+            f"sitting now, not who moved most recently."
+        )
+
+    premium = getattr(context, "coinbase_premium_pct", None)
+    if premium is not None:
+        read = ("US institutions bidding" if premium >= 0.05
+                else "US institutions distributing" if premium <= -0.05
+                else "no clear institutional bias")
+        lines.append(f"Coinbase premium (BTC): {premium:+.3f}% — {read}.")
+
+    return lines
+
+
+def _describe(candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> str:
     lines = [
         f"Symbol: {candidate.symbol}",
         f"Strategy: {candidate.strategy} ({candidate.signal_type})",
@@ -99,34 +222,131 @@ def _describe(candidate: SignalCandidate, context=None) -> str:
             lines.append(f"Funding rate: {context.funding_rate:.4f}%")
         if getattr(context, "oi_change_pct", None) is not None:
             lines.append(f"Open-interest change: {context.oi_change_pct:+.2f}%")
+        lines += _onchain_lines(context)
+
+    if tf_candles:
+        mtf = _multi_tf_summary(tf_candles)
+        if mtf:
+            lines.append("")
+            lines.append(mtf)
+
+    if candles:
+        chart = _chart_summary(candles)
+        if chart:
+            lines.append("")
+            lines.append(chart)
+
     return "\n".join(lines)
 
 
 class DebateValidator(SignalValidator):
-    def __init__(self, client: Optional[LLMClient] = None) -> None:
-        self._client = client or NullLLMClient()
+    """Bull/Bear/Arbiter debate, optionally split across three providers.
 
-    def validate(self, candidate: SignalCandidate, context=None) -> Verdict:
-        if not self._client.available:
-            return Verdict(decision=Decision.ABSTAIN)
+    Pass a single ``client`` to run every role on one model (back-compat), or
+    distinct ``bull``/``bear``/``arbiter`` clients to debate across providers —
+    e.g. DeepSeek (bull) vs Groq (bear), refereed by Hermes (arbiter).
+    """
 
-        setup = _describe(candidate, context)
+    def __init__(
+        self,
+        client: Optional[LLMClient] = None,
+        *,
+        bull: Optional[LLMClient] = None,
+        bear: Optional[LLMClient] = None,
+        arbiter: Optional[LLMClient] = None,
+        chart_candles: int = 0,
+    ) -> None:
+        fallback = client or NullLLMClient()
+        self._bull = bull or fallback
+        self._bear = bear or fallback
+        self._arbiter = arbiter or fallback
+        self._chart_candles = chart_candles
+
+    @property
+    def available(self) -> bool:
+        """Whether this validator can actually produce a verdict.
+
+        Only the arbiter returns the structured decision, so it is the hard
+        requirement — ``any()`` across the three roles was wrong: a live bull
+        with a null arbiter made the layer look healthy while every signal
+        abstained, because the arbiter's ``complete_json`` returned ``{}``.
+        """
+        return self._arbiter.available
+
+    @property
+    def degraded_roles(self) -> list[str]:
+        """Roles with no usable client. Bull/bear missing weakens the debate
+        rather than disabling it: the arbiter still decides, but on a one-sided
+        argument, so it is worth naming out loud."""
+        return [
+            name for name, client in
+            (("bull", self._bull), ("bear", self._bear), ("arbiter", self._arbiter))
+            if not client.available
+        ]
+
+    def selftest(self) -> dict:
+        """Ask the arbiter for one throwaway verdict, and report what came back.
+
+        Every failure in this layer degrades to ABSTAIN, which never blocks a
+        signal and so never breaks anything visibly. The cost is that a dead
+        key, an exhausted balance and a model that cannot return JSON all look
+        identical to an AI that simply had no opinion — and stay invisible
+        until a day of statistics comes back 100% ABSTAIN.
+
+        One call at boot turns that into a line on the deploy log carrying the
+        provider's own explanation.
+        """
+        if not self._arbiter.available:
+            return {"ok": False, "reason": "arbiter has no client — its provider key is unset"}
+        data = self._arbiter.complete_json(
+            _ARBITER_SYSTEM,
+            "PROPOSED SETUP:\n(startup self-test — reply NEUTRAL with confidence 0)\n\n"
+            "Decide: CONFIRM, NEUTRAL, or REJECT.",
+            _VERDICT_SCHEMA,
+            max_tokens=128,
+        )
+        if data.get("decision"):
+            return {"ok": True, "reason": ""}
+        return {"ok": False, "reason": getattr(self._arbiter, "last_error", "") or "returned no JSON"}
+
+    def validate(self, candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> Verdict:
+        if not self.available:
+            return Verdict(decision=Decision.ABSTAIN, rationale=_ABSTAIN_NO_ARBITER)
+
+        chart_data = candles if (self._chart_candles > 0 and candles) else ()
+        setup = _describe(candidate, context, chart_data, tf_candles=tf_candles)
         try:
-            bull = self._client.complete(_BULL_SYSTEM, setup, max_tokens=512)
-            bear = self._client.complete(_BEAR_SYSTEM, setup, max_tokens=512)
+            bull = self._bull.complete(_BULL_SYSTEM, setup, max_tokens=512)
+            bear = self._bear.complete(_BEAR_SYSTEM, setup, max_tokens=512)
             arbiter_prompt = (
                 f"PROPOSED SETUP:\n{setup}\n\n"
                 f"BULL CASE:\n{bull or '(none)'}\n\n"
                 f"BEAR CASE:\n{bear or '(none)'}\n\n"
                 "Decide: CONFIRM, NEUTRAL, or REJECT."
             )
-            data = self._client.complete_json(_ARBITER_SYSTEM, arbiter_prompt, _VERDICT_SCHEMA, max_tokens=512)
-        except Exception:  # the AI layer must never break screening
+            data = self._arbiter.complete_json(_ARBITER_SYSTEM, arbiter_prompt, _VERDICT_SCHEMA, max_tokens=512)
+        except Exception as exc:  # the AI layer must never break screening
             log.exception("Debate failed for %s — abstaining", candidate.symbol)
-            return Verdict(decision=Decision.ABSTAIN)
+            return Verdict(
+                decision=Decision.ABSTAIN,
+                rationale=f"{_ABSTAIN_ERROR}: {type(exc).__name__}",
+            )
 
         if not data:
-            return Verdict(decision=Decision.ABSTAIN, bull_summary=bull, bear_summary=bear)
+            # The one abstain path that used to be completely silent, and the
+            # one that fired on every signal: an arbiter returning no JSON looks
+            # exactly like a healthy run in the logs.
+            log.warning(
+                "Arbiter returned no verdict JSON for %s — abstaining. Check the "
+                "arbiter provider/key and that its model supports structured output.",
+                candidate.symbol,
+            )
+            detail = getattr(self._arbiter, "last_error", "") or "no JSON"
+            return Verdict(
+                decision=Decision.ABSTAIN,
+                rationale=f"{_ABSTAIN_NO_JSON}: {detail}",
+                bull_summary=bull, bear_summary=bear,
+            )
 
         decision = str(data.get("decision", Decision.NEUTRAL)).upper()
         if decision not in (Decision.CONFIRM, Decision.NEUTRAL, Decision.REJECT):

@@ -20,26 +20,51 @@ from typing import Optional, Sequence
 
 from wolf import indicators as ind
 from wolf import structure as struct
-from wolf.detectors.base import Detector, SignalCandidate, build_targets
+from wolf.config import LadderSettings
+from wolf.detectors.base import (
+    DEFAULT_LADDER,
+    Detector,
+    SignalCandidate,
+    build_targets,
+    score_flow,
+)
 from wolf.models import Candle
 
 
 class PreDumpDetector(Detector):
     name = "PREDUMP"
+    timeframe = "1h"
     min_candles = 60
 
-    def __init__(self, score_threshold: int = 65) -> None:
+    def __init__(
+        self,
+        score_threshold: int = 70,
+        ladder: LadderSettings = DEFAULT_LADDER,
+        flow_veto: bool = True,
+    ) -> None:
         self.score_threshold = score_threshold
+        self.ladder = ladder
+        self.flow_veto = flow_veto
 
-    def evaluate(self, symbol: str, candles: Sequence[Candle], context=None) -> Optional[SignalCandidate]:
+    def evaluate(
+        self, symbol: str, candles: Sequence[Candle], context=None, features=None
+    ) -> Optional[SignalCandidate]:
         if not self._ready(candles):
             return None
-        closes = ind.closes(candles)
-        price = closes[-1]
-        atr = ind.atr(candles, 14)
-        rsi = ind.rsi(closes, 14)
-        if any(math.isnan(x) for x in (atr, rsi)) or atr <= 0:
-            return None
+
+        if features is not None and features.valid:
+            price = features.price
+            atr = features.atr
+            rsi = features.rsi
+            vr = features.vol_ratio
+        else:
+            closes = ind.closes(candles)
+            price = closes[-1]
+            atr = ind.atr(candles, 14)
+            rsi = ind.rsi(closes, 14)
+            if any(math.isnan(x) for x in (atr, rsi)) or atr <= 0:
+                return None
+            vr = ind.volume_ratio(candles, 20)
 
         score = 0
         reasons: list[str] = []
@@ -69,17 +94,39 @@ class PreDumpDetector(Detector):
             score += 20
             reasons.append("Bearish rejection candle — upper-wick selling")
 
-        # 4. Distribution — volume fading vs average
-        vr = ind.volume_ratio(candles, 20)
+        # 4a. Aggressive buying into the highs vetoes the fade. "Overbought"
+        #     has never been a reason to short on its own; the offer has to be
+        #     in control before distribution is the right read.
+        verdict = score_flow(candles, is_long=False, max_points=10)
+        if verdict.conflict and self.flow_veto:
+            return None
+        score += verdict.points
+        if verdict.reason:
+            reasons.append(verdict.reason)
+
+        # 4b. Distribution — volume fading vs average
         if not math.isnan(vr) and vr < 0.8:
             score += 15
             reasons.append(f"Volume fading: {vr:.1f}x average — distribution")
 
-        # 5. Risk/reward sanity
+        # 5. VWAP premium — distribution at fair value or above (+15)
+        vwap_val = ind.vwap(candles, lookback=50)
+        if not math.isnan(vwap_val) and price >= vwap_val:
+            score += 15
+            reasons.append(f"Price at VWAP premium {vwap_val:.6g} — distribution zone")
+
+        # 6. Bearish FvG above price — structural resistance overhead (+10)
+        fvgs = ind.find_fvgs(candles, lookback=50)
+        bear_fvg = next((g for g in fvgs if g["type"] == "BEAR" and g["bottom"] >= price), None)
+        if bear_fvg:
+            score += 10
+            reasons.append(f"Bearish FvG above ({bear_fvg['bottom']:.6g}–{bear_fvg['top']:.6g}) — supply overhead")
+
+        # 7. Risk/reward sanity
         if atr / price < 0.1:
             score += 5
 
-        # 6. Derivatives confluence (optional) — overheated positive funding
+        # 8. Derivatives confluence (optional) — overheated positive funding
         #    means longs are crowded and ripe for liquidation.
         if context is not None:
             if context.funding_overheated_long:
@@ -92,7 +139,7 @@ class PreDumpDetector(Detector):
         if score < self.score_threshold:
             return None
 
-        sl, tp, ladder = build_targets(price, atr, is_long=False, sl_mult=1.5, tp_mults=(2.0, 4.0))
+        sl, tp, ladder = build_targets(price, atr, is_long=False, sl_mult=1.5, ladder_cfg=self.ladder)
         return SignalCandidate(
             symbol=symbol,
             signal_type="PREDUMP",
@@ -104,6 +151,7 @@ class PreDumpDetector(Detector):
             strategy=self.name,
             reasons=reasons,
             confluence_level="HIGH" if score >= 85 else "MEDIUM",
+            timeframe=self.timeframe,
             entry_mode="MOMENTUM_NOW",
             tps=ladder,
         )
