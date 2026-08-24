@@ -520,6 +520,30 @@ class DebateRole:
     provider: str  # deepseek | groq | hermes | anthropic
     model: str
 
+    def mismatch(self) -> str:
+        """Why this provider cannot serve this model, or "" if it looks fine.
+
+        Provider and model are two independent env vars, so setting one without
+        the other is easy and produces no error until the first call — which
+        the debate layer swallows into an ABSTAIN. Only OpenRouter names models
+        as ``vendor/model``; a slashed name anywhere else was meant for a
+        provider that was never switched.
+        """
+        provider = (self.provider or "").lower()
+        slashed = "/" in (self.model or "")
+        if slashed and provider not in ("hermes", "openrouter"):
+            return (
+                f"model {self.model!r} is an OpenRouter-style name but the provider "
+                f"is {provider!r}; set the matching *_PROVIDER to hermes, or use a "
+                f"bare {provider} model name"
+            )
+        if not slashed and provider in ("hermes", "openrouter"):
+            return (
+                f"provider {provider!r} serves OpenRouter, which needs a "
+                f"'vendor/model' name; {self.model!r} has no vendor prefix"
+            )
+        return ""
+
 
 @dataclass(frozen=True)
 class FlowSettings:
@@ -639,9 +663,9 @@ class AISettings:
     """
 
     enabled: bool = False
-    bull: DebateRole = DebateRole("deepseek", "deepseek-chat")
-    bear: DebateRole = DebateRole("deepseek", "deepseek-chat")
-    arbiter: DebateRole = DebateRole("deepseek", "deepseek-chat")
+    bull: DebateRole = DebateRole("deepseek", "deepseek-v4-flash")
+    bear: DebateRole = DebateRole("deepseek", "deepseek-v4-flash")
+    arbiter: DebateRole = DebateRole("deepseek", "deepseek-v4-flash")
     # If a REJECT verdict at/above this confidence should veto the signal.
     veto_enabled: bool = True
     veto_min_confidence: int = 70
@@ -923,15 +947,15 @@ class Settings:
             enabled=_env_bool("AI_DEBATE_ENABLED", False),
             bull=DebateRole(
                 provider=_env_str("DEBATE_BULL_PROVIDER", "deepseek"),
-                model=_env_str("DEBATE_BULL_MODEL", "deepseek-chat"),
+                model=_env_str("DEBATE_BULL_MODEL", "deepseek-v4-flash"),
             ),
             bear=DebateRole(
                 provider=_env_str("DEBATE_BEAR_PROVIDER", "deepseek"),
-                model=_env_str("DEBATE_BEAR_MODEL", "deepseek-chat"),
+                model=_env_str("DEBATE_BEAR_MODEL", "deepseek-v4-flash"),
             ),
             arbiter=DebateRole(
                 provider=_env_str("DEBATE_ARBITER_PROVIDER", "deepseek"),
-                model=_env_str("DEBATE_ARBITER_MODEL", "deepseek-chat"),
+                model=_env_str("DEBATE_ARBITER_MODEL", "deepseek-v4-flash"),
             ),
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),

@@ -104,6 +104,16 @@ def main() -> None:
 
     # Announce online to Telegram so the channel confirms the bot is up (and
     # surfaces any chat/topic misconfiguration in the logs immediately).
+    # Config-level check first: it costs nothing and names the exact env var,
+    # where the probe below can only relay whatever the provider replied.
+    for role_name in ("bull", "bear", "arbiter"):
+        problem = getattr(settings.ai, role_name).mismatch()
+        if problem:
+            log.warning(
+                "DEBATE_%s_PROVIDER/_MODEL disagree: %s",
+                role_name.upper(), problem,
+            )
+
     ai = ai_status(application, probe=True)
     if ai["enabled"] and not ai["available"]:
         log.warning(

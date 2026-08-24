@@ -313,3 +313,32 @@ def test_an_abstaining_debate_records_which_fault_caused_it(monkeypatch):
     assert verdict.decision == Decision.ABSTAIN
     assert verdict.rationale.startswith("ABSTAIN/NO_JSON")
     assert "Insufficient Balance" in verdict.rationale
+
+
+# ── provider / model config mismatch ────────────────────────────────────────
+def test_an_openrouter_model_name_on_another_provider_is_caught():
+    """Provider and model are separate env vars, so setting one is a real slip.
+
+    Nothing rejects the pair until the first call, and the debate layer turns
+    that call's failure into an ABSTAIN — so the mistake surfaces a day later
+    as statistics that quietly mean nothing.
+    """
+    from wolf.config import DebateRole
+
+    bad = DebateRole("deepseek", "nousresearch/hermes-3-llama-3.1-405b")
+    assert "OpenRouter-style name" in bad.mismatch()
+    assert "hermes" in bad.mismatch()
+
+
+def test_an_openrouter_provider_needs_a_vendor_prefixed_model():
+    from wolf.config import DebateRole
+
+    assert "vendor prefix" in DebateRole("hermes", "deepseek-v4-flash").mismatch()
+
+
+def test_matching_pairs_report_nothing():
+    from wolf.config import DebateRole
+
+    assert DebateRole("deepseek", "deepseek-v4-flash").mismatch() == ""
+    assert DebateRole("hermes", "nousresearch/hermes-3-llama-3.1-405b").mismatch() == ""
+    assert DebateRole("anthropic", "claude-sonnet-4-5").mismatch() == ""
