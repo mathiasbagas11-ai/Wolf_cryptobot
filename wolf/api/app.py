@@ -17,6 +17,7 @@ POST /track             advance pending signals now
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any, Optional
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
@@ -26,6 +27,7 @@ from wolf.app import Application, ai_status, build_application, build_deepdive
 from wolf.config import Settings
 from wolf.diagnose import diagnose, render_digest
 from wolf.logging_setup import setup_logging
+from wolf.whatif import compare_stop_rules, render as render_whatif
 
 
 def create_app(application: Optional[Application] = None) -> FastAPI:
@@ -156,6 +158,24 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         if format == "text":
             return PlainTextResponse(render_digest(diag))
         return diag
+
+    @api.get("/whatif/stops")
+    def whatif_stops(limit: int = 200, format: str = "text"):
+        """Re-grade resolved signals under each stop-advance rule.
+
+        Refetches the candles that decided each trade and replays it with one
+        setting changed, so the two columns differ only by the rule. Costs one
+        klines request per signal, which is why it is asked for rather than
+        folded into the daily digest.
+        """
+        report = compare_stop_rules(app_obj.tracker, limit=limit)
+        if format == "text":
+            return PlainTextResponse(render_whatif(report))
+        return {
+            "error": report.get("error", ""),
+            "sample": report.get("sample", 0),
+            "results": [asdict(r) for r in report.get("results", [])],
+        }
 
     @api.post("/signals/outcomes/import", dependencies=[Depends(require_api_key)])
     def import_outcomes(payload: Any = Body(...)) -> dict:

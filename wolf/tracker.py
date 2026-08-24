@@ -421,6 +421,27 @@ class Tracker:
         )
         return signal
 
+    def _advanced_stop(self, current, entry, ladder, rung, first_lvl, is_long):
+        """Where the stop sits once ``rung`` has filled.
+
+        Under "breakeven" only the first rung moves it, to entry, and nothing
+        moves it again — so a trade that reaches TP2 still hands its last slice
+        back to entry if price turns. Under "ladder" every rung pushes the stop
+        to the rung beneath it, which for TP1 is the same breakeven move.
+
+        The stop is never walked backwards: rungs can fill out of order on a
+        single wide bar, and a later rung must not undo an earlier advance.
+        """
+        if rung.level == first_lvl:
+            return entry
+        if self._ladder.stop_advance != "ladder":
+            return current
+        below = [r for r in ladder if r.level < rung.level]
+        if not below:
+            return current
+        target = max(below, key=lambda r: r.level).price
+        return max(current, target) if is_long else min(current, target)
+
     # ── evaluation ──────────────────────────────────────────────────────
     def _evaluate(self, sig: Signal, future: list, created_at: datetime, now: datetime) -> EvalResult:
         res = EvalResult()
@@ -507,8 +528,7 @@ class Tracker:
                 if hit:
                     res.tps_hit.append(rung.level)
                     res.tps_meta[rung.level] = (rung.price, c_time)
-                    if rung.level == first_lvl:
-                        eff_sl = entry  # move stop to breakeven after TP1
+                    eff_sl = self._advanced_stop(eff_sl, entry, ladder, rung, first_lvl, is_long)
 
             if ladder and len(res.tps_hit) >= len(ladder):
                 # Every rung filled. Book it the same scaled way a partial exit

@@ -349,6 +349,21 @@ class LadderSettings:
     # first. See Tracker._evaluate for why inferring beats either fixed rule.
     intrabar_tp_first: bool = True
 
+    # Where the stop goes as rungs fill.
+    #   "breakeven" — TP1 moves it to entry, and there it stays for the rest of
+    #     the trade. Whatever the position goes on to reach, the last slice is
+    #     always given back to entry.
+    #   "ladder"    — each filled rung pushes the stop to the rung below it, so
+    #     TP1 still means breakeven but TP2 protects the TP1 price.
+    #
+    # Not obviously an improvement, which is why it is a setting and not a
+    # rewrite: advancing the stop pays +0.2R on a trade that would have drifted
+    # back to entry, and costs -0.4R on one that dips under TP1 before running
+    # to TP3. It wins only if the first is more than twice as common as the
+    # second, and that is a question for measurement — see
+    # ``wolf.whatif.compare_stop_rules``.
+    stop_advance: str = "breakeven"
+
     def allocations_for(self, rungs: int) -> tuple[float, ...]:
         """Allocations resized to a ladder of ``rungs`` rungs.
 
@@ -908,6 +923,7 @@ class Settings:
             tp_ladder_fractions=_env_float_csv("RISK_TP_FRACTIONS", (1 / 3, 2 / 3, 1.0)),
             tp_allocations=_env_float_csv("RISK_TP_ALLOCATIONS", (0.5, 0.3, 0.2)),
             intrabar_tp_first=_env_bool("INTRABAR_TP_FIRST", True),
+            stop_advance=_env_str("STOP_ADVANCE", "breakeven"),
         )
         risk = RiskSettings(
             regime_filter_enabled=_env_bool("REGIME_FILTER_ENABLED", True),
