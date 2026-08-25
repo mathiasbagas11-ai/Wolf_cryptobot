@@ -1,5 +1,6 @@
-# Claude Code session data
-.claude/
+# Claude Code: session data stays local, shared project config is committed
+.claude/*
+!.claude/settings.json
 
 # Byte-compiled / optimized
 __pycache__/
