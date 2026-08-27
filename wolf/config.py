@@ -355,6 +355,9 @@ class LadderSettings:
     #     always given back to entry.
     #   "ladder"    — each filled rung pushes the stop to the rung below it, so
     #     TP1 still means breakeven but TP2 protects the TP1 price.
+    #   "none"      — the stop never moves off the level the detector chose. The
+    #     remainder can lose, so a banked TP1 can still end negative; in return
+    #     nothing caps a winner at the 0.5R a breakeven scratch pays.
     #
     # Not obviously an improvement, which is why it is a setting and not a
     # rewrite: advancing the stop pays +0.2R on a trade that would have drifted

@@ -14,6 +14,7 @@ no entries and re-uses only setups the bot actually took.
 from __future__ import annotations
 
 import logging
+import math
 import statistics
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -21,7 +22,10 @@ from typing import Optional
 
 from wolf.config import LadderSettings, TrackerSettings
 from wolf.models import Status
-from wolf.tracker import OUTCOMES_KEY, Tracker, _parse_iso, _replay_start_ms, _risk_pct
+from wolf.tracker import (
+    OUTCOMES_KEY, Tracker, _parse_iso, _partial_pnl, _replay_start_ms, _risk_pct,
+    normalize_ladder,
+)
 
 log = logging.getLogger("wolf.whatif")
 
@@ -93,14 +97,25 @@ def _regrade_one(probe: Tracker, sig, candles: list) -> Optional[float]:
         log.exception("Re-grade failed for %s", sig.symbol)
         return None
     risk = _risk_pct(sig)
+    if not risk:
+        return None
     pnl = res.realized_pnl_pct
-    if pnl is None and res.exit_price and sig.entry_price > 0:
+    if pnl is None and res.terminal is None:
+        # Still open at the end of the history. Dropping it would not be
+        # neutral: a stop that never advances is exactly what keeps a trade
+        # running, so the unresolved rows are the ones where the rules differ
+        # most, and excluding them would quietly grade each rule on the trades
+        # that suit it. Value it where it stands instead — the rungs already
+        # banked at their own prices, the remainder at the last close.
+        ladder = normalize_ladder(sig.tp_ladder, sig.tp, sig.sl, sig.entry_price, sig.is_long)
+        pnl = _partial_pnl(sig.entry_price, sig.is_long, ladder, res.tps_hit, candles[-1].close)
+    elif pnl is None and res.exit_price and sig.entry_price > 0:
         pnl = (
             (res.exit_price - sig.entry_price) / sig.entry_price * 100
             if sig.is_long
             else (sig.entry_price - res.exit_price) / sig.entry_price * 100
         )
-    if pnl is None or not risk:
+    if pnl is None:
         return None
     return pnl / risk
 
@@ -121,7 +136,7 @@ def _summarise(rule: str, rs: list[float]) -> RuleResult:
 
 def compare_stop_rules(
     tracker: Tracker,
-    rules: tuple[str, ...] = ("breakeven", "ladder"),
+    rules: tuple[str, ...] = ("breakeven", "ladder", "none"),
     limit: int = 200,
 ) -> dict:
     """Score each stop-advance rule over the same resolved signals.
@@ -175,6 +190,35 @@ def compare_stop_rules(
         "scored": n_scored,
         "skipped": len(signals) - n_scored,
         "results": [_summarise(rule, scored[rule]) for rule in rules],
+        "paired": [_paired(rules[0], rule, scored[rules[0]], scored[rule])
+                   for rule in rules[1:]],
+    }
+
+
+def _paired(base: str, rule: str, a: list[float], b: list[float]) -> dict:
+    """Compare two rules trade by trade, which is what the design supports.
+
+    Every trade is scored under both rules, so the two columns are not
+    independent samples and comparing their means throws away the pairing.
+    Most differences are exactly zero — the rules only diverge on trades that
+    reached a rung past the first — and it is the handful that moved, and by
+    how much, that decides whether a gap is worth acting on. A mean built from
+    six changed trades out of fifty-eight is a different claim to one built
+    from fifty-eight.
+    """
+    diffs = [y - x for x, y in zip(a, b)]
+    changed = [d for d in diffs if abs(d) > 1e-9]
+    mean = statistics.fmean(diffs) if diffs else 0.0
+    sd = statistics.stdev(diffs) if len(diffs) > 1 else 0.0
+    se = sd / math.sqrt(len(diffs)) if sd else 0.0
+    return {
+        "base": base,
+        "rule": rule,
+        "changed": len(changed),
+        "helped": sum(1 for d in changed if d > 0),
+        "hurt": sum(1 for d in changed if d < 0),
+        "mean_diff": round(mean, 4),
+        "t": round(mean / se, 2) if se else 0.0,
     }
 
 
@@ -186,6 +230,11 @@ def render(report: dict) -> str:
         f"resolved signals ({report['skipped']} without usable history)"
     ]
     lines += [r.line() for r in report["results"]]
+    for p in report.get("paired", []):
+        lines.append(
+            f"vs {p['base']:<9} {p['rule']}: changed {p['changed']} trade(s) "
+            f"(+{p['helped']}/-{p['hurt']}) diff={p['mean_diff']:+.4f}R t={p['t']:+.2f}"
+        )
     best = max(report["results"], key=lambda r: r.mean_r)
     spread = best.mean_r - min(r.mean_r for r in report["results"])
     lines.append(

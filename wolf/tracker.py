@@ -428,10 +428,16 @@ class Tracker:
         moves it again — so a trade that reaches TP2 still hands its last slice
         back to entry if price turns. Under "ladder" every rung pushes the stop
         to the rung beneath it, which for TP1 is the same breakeven move.
+        Under "none" it never moves at all: the remainder keeps running against
+        the original stop, which is the only setting that lets a banked TP1 end
+        up a net loss — and the only one that does not cap most winners at the
+        0.5R a breakeven scratch pays.
 
         The stop is never walked backwards: rungs can fill out of order on a
         single wide bar, and a later rung must not undo an earlier advance.
         """
+        if self._ladder.stop_advance == "none":
+            return current  # the stop stays where the detector put it
         if rung.level == first_lvl:
             return entry
         if self._ladder.stop_advance != "ladder":

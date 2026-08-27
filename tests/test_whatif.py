@@ -16,16 +16,16 @@ LADDER_1_3 = [
 ]
 
 
-def _run(store, fake_client, path, ladder_cfg):
+def _run(store, fake_client, path, ladder_cfg, symbol="BTCUSDT"):
     """Grade one LONG (entry 100 / stop 95) over ``path`` under ``ladder_cfg``."""
     tracker = Tracker(store, fake_client, TrackerSettings(), ladder=ladder_cfg)
     sig = tracker.record_signal(
-        "BTCUSDT", "MOMENTUM", "LONG", 100, tp=115, sl=95,
+        symbol, "MOMENTUM", "LONG", 100, tp=115, sl=95,
         entry_mode="MOMENTUM_NOW", timeframe="15m", tps=LADDER_1_3,
         entry_quoted_live=True,
     )
     now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
-    fake_client.klines["BTCUSDT"] = [
+    fake_client.klines[symbol] = [
         # A bar from before the signal, so the fetched history demonstrably
         # reaches back to the entry — which is what the replay checks for. It
         # sits below every rung and above the stop, so it changes no outcome.
@@ -102,7 +102,8 @@ def test_the_comparison_scores_both_rules_on_the_same_trades(store, fake_client)
     assert report["sample"] == 1
     assert report["scored"] == 1 and report["skipped"] == 0
     scores = {r.rule: r.mean_r for r in report["results"]}
-    assert scores == {"breakeven": 1.1, "ladder": 1.3}
+    assert scores["breakeven"] == 1.1
+    assert scores["ladder"] == 1.3
     assert "ladder leads by +0.200R/trade" in render(report)
 
 
@@ -219,9 +220,8 @@ def test_both_rules_always_score_the_identical_set_of_trades(store, fake_client)
     from wolf import whatif
 
     stopped_out = [(100, 101, 94, 96)]        # straight to the stop, resolves
-    for path in (_TP2_THEN_FADE, stopped_out):
-        fake_client.klines.clear()
-        _run(store, fake_client, path, LadderSettings())
+    for symbol, path in (("BTCUSDT", _TP2_THEN_FADE), ("ETHUSDT", stopped_out)):
+        _run(store, fake_client, path, LadderSettings(), symbol=symbol)
 
     tracker = Tracker(store, fake_client, TrackerSettings())
     real = whatif._regrade_one
@@ -250,3 +250,58 @@ def test_the_render_says_how_much_of_the_sample_it_could_use(store, fake_client)
     text = render(compare_stop_rules(Tracker(store, fake_client, TrackerSettings())))
     assert "scored 1 of 1" in text
     assert "0 without usable history" in text
+
+
+def test_a_never_moving_stop_lets_the_remainder_run(store, fake_client):
+    """Under "none" the last slice keeps its original stop instead of entry."""
+    r = _run(store, fake_client, [
+        (100, 106, 100, 105),   # TP1
+        (105, 111, 104, 110),   # TP2
+        (110, 116, 109, 115),   # TP3 -> full run either way
+    ], LadderSettings(stop_advance="none"))
+    assert r.tps_hit == [1, 2, 3] and r.r_multiple == 1.7
+
+
+def test_a_never_moving_stop_gives_back_what_tp1_banked(store, fake_client):
+    """The cost of protecting nothing, which "breakeven" exists to avoid.
+
+    TP1 banks half at +1R, then price runs to the original stop and the other
+    half loses 1R: the two cancel and the trade scratches at 0R, where a
+    breakeven stop would have kept the +0.5R.
+    """
+    path = [(100, 106, 100, 105), (105, 105, 94, 95)]
+    frozen = _run(store, fake_client, path, LadderSettings(stop_advance="breakeven"))
+    assert frozen.r_multiple == 0.5
+
+    fake_client.klines.clear()
+    loose = _run(store, fake_client, path, LadderSettings(stop_advance="none"))
+    assert loose.r_multiple == 0.0
+
+
+def test_a_trade_still_open_is_valued_not_discarded(store, fake_client):
+    """Dropping unresolved trades would grade each rule on the trades it suits.
+
+    A stop that never advances is precisely what leaves a trade running, so the
+    unresolved rows are where the rules differ most. They are marked to the
+    last close instead of being excluded.
+    """
+    # Resolves under a breakeven stop (bar 3 pierces entry) but not under one
+    # that never moved, since 99 never reaches the original stop at 95.
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
+    assert report["scored"] == 1, report
+    assert {r.rule for r in report["results"]} == {"breakeven", "ladder", "none"}
+    scores = {r.rule: r.mean_r for r in report["results"]}
+    assert scores["none"] == 1.1   # marked at the last close, which is entry
+
+
+def test_the_paired_view_counts_the_trades_that_actually_moved(store, fake_client):
+    """Six changed trades out of fifty-eight is a different claim to fifty-eight."""
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings(), symbol="BTCUSDT")
+    _run(store, fake_client, [(100, 101, 94, 96)], LadderSettings(), symbol="ETHUSDT")
+
+    report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
+    ladder = next(p for p in report["paired"] if p["rule"] == "ladder")
+    assert ladder["base"] == "breakeven"
+    assert ladder["changed"] == 1 and ladder["helped"] == 1 and ladder["hurt"] == 0
+    assert "changed 1 trade(s) (+1/-0)" in render(report)
