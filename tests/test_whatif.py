@@ -138,3 +138,46 @@ def test_the_endpoint_renders_the_comparison(store, fake_client):
     body = client.get("/whatif/stops").text
     assert "breakeven" in body and "ladder" in body
     assert "ladder leads by +0.200R/trade" in body
+
+
+# ── Telegram commands ───────────────────────────────────────────────────────
+def _router_app(store, fake_client):
+    from types import SimpleNamespace
+    from wolf.config import Settings
+
+    return SimpleNamespace(
+        analyze=None,
+        tracker=Tracker(store, fake_client, TrackerSettings()),
+        settings=Settings(),
+        screener=SimpleNamespace(_validator=None),
+        account=None,
+        learning=None,
+    )
+
+
+def test_whatif_is_reachable_as_a_telegram_command(store, fake_client):
+    """The API is not exposed on this deployment; Telegram is the way in."""
+    from wolf.notify.commands import CommandRouter
+
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    reply = CommandRouter(_router_app(store, fake_client)).handle("/whatif")
+    assert "breakeven" in reply and "ladder" in reply
+    assert "ladder leads by +0.200R/trade" in reply
+
+
+def test_diag_is_reachable_as_a_telegram_command(store, fake_client):
+    """The digest already arrives daily; this asks for it between reports."""
+    from wolf.notify.commands import CommandRouter
+
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    router = CommandRouter(_router_app(store, fake_client))
+    assert "WOLF-DIAG" in router.handle("/diag")
+    assert "WOLF-DIAG" in router.handle("/diag 48")
+    assert "Usage" in router.handle("/diag banyak")
+
+
+def test_both_commands_are_listed_in_help(store, fake_client):
+    from wolf.notify.commands import CommandRouter
+
+    help_text = CommandRouter(_router_app(store, fake_client)).handle("/help")
+    assert "/whatif" in help_text and "/diag" in help_text

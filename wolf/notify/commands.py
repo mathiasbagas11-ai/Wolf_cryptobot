@@ -32,6 +32,8 @@ _HELP = (
     "<code>/paper</code> — paper balance &amp; return\n"
     "<code>/learning</code> — strategy edge &amp; blacklist\n"
     "<code>/active</code> — open signals\n"
+    "<code>/diag</code> — diagnostic digest now (add hours, e.g. <code>/diag 48</code>)\n"
+    "<code>/whatif</code> — re-grade past signals under each stop rule\n"
     "<code>/help</code> — this message"
 )
 
@@ -64,9 +66,51 @@ class CommandRouter:
             return self._learning()
         if cmd == "active":
             return self._active()
+        if cmd == "whatif":
+            return self._whatif()
+        if cmd == "diag":
+            return self._diag(arg)
         if getattr(self._app, "analyze", None) is not None and not arg and cmd.isalnum():
             return self._app.analyze.analyze(cmd)  # bare ticker shortcut
         return "❓ Unknown command. Try <code>/help</code>."
+
+    def _whatif(self) -> str:
+        """Compare stop-advance rules over the signals already resolved.
+
+        Refetches the candles that decided each trade, so it is slow and costs
+        one request per signal — a command rather than part of the daily card.
+        """
+        from wolf.whatif import compare_stop_rules, render
+
+        try:
+            report = compare_stop_rules(self._app.tracker)
+        except Exception:
+            log.exception("What-if comparison failed")
+            return "⚠️ What-if failed — see logs."
+        return f"<pre>{esc(render(report))}</pre>"
+
+    def _diag(self, arg: str) -> str:
+        """The digest the daily report sends, on demand."""
+        from wolf.app import ai_status
+        from wolf.diagnose import diagnose, render_digest
+
+        try:
+            hours = float(arg) if arg else 24.0
+        except ValueError:
+            return "⚠️ Usage: <code>/diag</code> or <code>/diag 48</code>"
+        try:
+            digest = render_digest(diagnose(
+                self._app.tracker,
+                window_hours=hours,
+                round_trip_bps=self._app.settings.round_trip_cost_bps,
+                tp1_banks_win=self._app.settings.tracker.tp1_banks_win,
+                state_dir=self._app.settings.state_dir,
+                ai_available=ai_status(self._app)["available"],
+            ))
+        except Exception:
+            log.exception("Diagnostics digest failed")
+            return "⚠️ Diagnostics failed — see logs."
+        return f"<pre>{esc(digest)}</pre>"
 
     def _calc(self, arg: str) -> str:
         parts = arg.split()
