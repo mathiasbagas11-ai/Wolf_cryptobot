@@ -41,6 +41,10 @@ from wolf.tracker import Tracker, _parse_iso, _risk_pct, r_multiple_of
 # A verdict needs both a real sample and a real signal-to-noise ratio.
 MIN_CONCLUSIVE_TRADES = 100
 CONCLUSIVE_T = 2.0
+# Below this fraction of the whole sample's spread, a bucket's own standard
+# deviation is treated as collapsed rather than small — see _summarise.
+DEGENERATE_SD_FRACTION = 0.25
+
 # One-sided 95% bound, matching the auto-pause gate.
 CI_Z = 1.96
 
@@ -173,8 +177,22 @@ def _ladder_economics(traded: list) -> dict:
     }
 
 
-def _summarise(rs: list[float], cost_r: float) -> dict:
-    """Mean, spread and verdict for one population of R-multiples."""
+def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0) -> dict:
+    """Mean, spread and verdict for one population of R-multiples.
+
+    ``sd_floor`` guards against a spread that collapsed rather than one that is
+    genuinely small. This ladder quantises its outcomes — a stop pays -1.0R, a
+    banked TP1 pays 0.5R, a full run 1.7R — so a handful of trades landing on
+    the same rung is ordinary, and it breaks the t-statistic in both
+    directions at once. Three SWING trades all at exactly -1.0R gave sd=0, se=0
+    and t=0, reading as "no evidence" for a sample that lost unanimously; two
+    PREDUMP trades at 0.499 and 0.500 gave sd=0.001 and t=999, reading as
+    overwhelming proof of an edge.
+
+    Neither sample knows anything about variance. Substituting the spread of
+    the whole traded sample says so honestly: these outcomes vary about as much
+    as every other bucket's, and this one is simply too small to have shown it.
+    """
     n = len(rs)
     if n == 0:
         return {
@@ -183,7 +201,9 @@ def _summarise(rs: list[float], cost_r: float) -> dict:
         }
     mean = statistics.fmean(rs)
     sd = statistics.stdev(rs) if n > 1 else 0.0
-    se = sd / math.sqrt(n) if n > 1 and sd else 0.0
+    # Only a collapsed spread is replaced; a merely narrow one is left alone.
+    eff_sd = max(sd, sd_floor) if sd < sd_floor * DEGENERATE_SD_FRACTION else sd
+    se = eff_sd / math.sqrt(n) if eff_sd else 0.0
     t = mean / se if se else 0.0
     half = CI_Z * se
     net = mean - cost_r
@@ -254,13 +274,16 @@ def diagnose(
     median_1r, cost_r = _cost_r(traded)
 
     overall = _summarise([r_multiple_of(o) for o in traded], cost_r)
+    # The whole sample's spread is the reference every bucket is measured
+    # against, so a bucket whose own spread collapsed borrows this one.
+    sample_sd = overall["sd_r"]
 
     by_strategy: dict[str, dict] = {}
     for name in sorted({o.strategy for o in traded}):
         rows = [o for o in traded if o.strategy == name]
         graded_rows = [o for o in rows if Status(o.status).is_graded]
         strat_1r, strat_cost_r = _cost_r(rows)
-        summary = _summarise([r_multiple_of(o) for o in rows], strat_cost_r)
+        summary = _summarise([r_multiple_of(o) for o in rows], strat_cost_r, sample_sd)
         summary["cost_r"] = round(strat_cost_r, 3)
 
         wins = sum(1 for o in graded_rows if Status(o.status).is_win)
@@ -304,7 +327,7 @@ def diagnose(
             rows = [o for o in traded if (getattr(o, key, "") or "NO_DATA") == label]
             graded_rows = [o for o in rows if Status(o.status).is_graded]
             _, bucket_cost_r = _cost_r(rows)
-            summary = _summarise([r_multiple_of(o) for o in rows], bucket_cost_r)
+            summary = _summarise([r_multiple_of(o) for o in rows], bucket_cost_r, sample_sd)
             wins = sum(1 for o in graded_rows if Status(o.status).is_win)
             summary.update({
                 "graded": len(graded_rows),

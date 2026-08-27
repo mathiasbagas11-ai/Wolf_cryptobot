@@ -342,3 +342,53 @@ def test_the_cross_tab_stays_out_of_the_way_when_it_cannot_inform(store, fake_cl
         rows[-1]["whale_stance"] = "WITH"
     diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
     assert "wxs:" not in render_digest(diag)
+
+
+def test_a_unanimous_bucket_is_not_reported_as_no_evidence(store, fake_client, tracker_settings):
+    """Three trades all at exactly -1.0R gave sd=0, se=0, and therefore t=0.
+
+    A t of zero is how "the mean is indistinguishable from nothing" is written,
+    which is the opposite of what a unanimous sample says. The ladder quantises
+    its outcomes, so buckets landing on one value are ordinary, not exotic.
+    """
+    rows = []
+    for i in range(20):                       # a spread for the sample to borrow
+        _outcome(rows, r=1.5 if i % 2 else -1.0, status=Status.TP_HIT.value if i % 2
+                 else Status.SL_HIT.value, strategy="SCALP", n=i)
+    for i in range(20, 23):                   # SWING: three identical stop-outs
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, strategy="SWING", n=i)
+
+    swing = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))["by_strategy"]["SWING"]
+    assert swing["sd_r"] == 0.0               # its own spread really is zero
+    assert swing["t"] < -1.0                  # but the verdict is not "nothing"
+
+
+def test_near_identical_outcomes_do_not_manufacture_certainty(store, fake_client, tracker_settings):
+    """Two wins at 0.499 and 0.500 produced t=999 — proof of an edge from n=2.
+
+    sd was 0.001, so the standard error all but vanished. Nothing about those
+    two trades justifies more confidence than twenty varied ones.
+    """
+    rows = []
+    for i in range(20):
+        _outcome(rows, r=1.5 if i % 2 else -1.0, status=Status.TP_HIT.value if i % 2
+                 else Status.SL_HIT.value, strategy="SCALP", n=i)
+    _outcome(rows, r=0.499, status=Status.TP_HIT.value, strategy="PREDUMP", n=20)
+    _outcome(rows, r=0.500, status=Status.TP_HIT.value, strategy="PREDUMP", n=21)
+
+    pre = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))["by_strategy"]["PREDUMP"]
+    assert pre["t"] < 1.0
+    assert pre["verdict"] == INCONCLUSIVE
+
+
+def test_a_genuinely_narrow_spread_is_left_alone(store, fake_client, tracker_settings):
+    """The floor must catch collapse, not quietly widen every honest estimate."""
+    rows = []
+    for i in range(20):
+        _outcome(rows, r=1.5 if i % 2 else -1.0, status=Status.TP_HIT.value if i % 2
+                 else Status.SL_HIT.value, strategy="SCALP", n=i)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    scalp = diag["by_strategy"]["SCALP"]
+    # SCALP is the whole sample here, so its spread is its own — untouched.
+    assert scalp["sd_r"] == diag["overall"]["sd_r"]
+    assert scalp["t"] == diag["overall"]["t"]
