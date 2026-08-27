@@ -26,6 +26,11 @@ def _run(store, fake_client, path, ladder_cfg):
     )
     now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
     fake_client.klines["BTCUSDT"] = [
+        # A bar from before the signal, so the fetched history demonstrably
+        # reaches back to the entry — which is what the replay checks for. It
+        # sits below every rung and above the stop, so it changes no outcome.
+        Candle(time=now_ms - 900_000, open=100, high=100, low=100, close=100, volume=100.0)
+    ] + [
         Candle(time=now_ms + (i + 1) * 900_000, open=o, high=h, low=l, close=c, volume=100.0)
         for i, (o, h, l, c) in enumerate(path)
     ]
@@ -95,6 +100,7 @@ def test_the_comparison_scores_both_rules_on_the_same_trades(store, fake_client)
     report = compare_stop_rules(tracker)
     assert report["error"] == ""
     assert report["sample"] == 1
+    assert report["scored"] == 1 and report["skipped"] == 0
     scores = {r.rule: r.mean_r for r in report["results"]}
     assert scores == {"breakeven": 1.1, "ladder": 1.3}
     assert "ladder leads by +0.200R/trade" in render(report)
@@ -109,12 +115,31 @@ def test_an_empty_history_says_so_rather_than_reporting_zero(store, fake_client)
 
 
 def test_missing_price_history_refuses_to_compare(store, fake_client):
-    """Scoring the rules on different trades would be worse than no answer."""
+    """No answer beats an answer computed from whatever candles came back."""
     _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
     fake_client.klines.clear()          # candles no longer fetchable
     report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
     assert report["results"] == []
-    assert "price history unavailable" in report["error"]
+    assert "reaching back to its entry" in report["error"]
+
+
+def test_history_that_starts_after_the_entry_is_refused(store, fake_client):
+    """The klines API answers with the newest N bars, not a date range.
+
+    Asking for as many bars as a trade lasted returns *today's* last N bars, and
+    for an older signal every one of them sits after its start — so the filter
+    passes them all and the replay grades the setup against unrelated prices.
+    A history whose first bar begins after the entry is not this trade's
+    history, however plausible the numbers it would produce.
+    """
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    first = fake_client.klines["BTCUSDT"][0]
+    fake_client.klines["BTCUSDT"] = [
+        c for c in fake_client.klines["BTCUSDT"] if c.time > first.time
+    ]
+    report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
+    assert report["results"] == []
+    assert "reaching back to its entry" in report["error"]
 
 
 def test_the_endpoint_renders_the_comparison(store, fake_client):
@@ -181,3 +206,47 @@ def test_both_commands_are_listed_in_help(store, fake_client):
 
     help_text = CommandRouter(_router_app(store, fake_client)).handle("/help")
     assert "/whatif" in help_text and "/diag" in help_text
+
+
+def test_both_rules_always_score_the_identical_set_of_trades(store, fake_client):
+    """A signal counts under every rule or under none — never just one.
+
+    The advanced stop terminates trades sooner, so it resolves some that the
+    frozen stop leaves running. Scoring each rule over whatever it managed to
+    grade let the columns hold different trades: three trades' difference in
+    membership was worth 4.16R, which was the entire reported gap between them.
+    """
+    from wolf import whatif
+
+    stopped_out = [(100, 101, 94, 96)]        # straight to the stop, resolves
+    for path in (_TP2_THEN_FADE, stopped_out):
+        fake_client.klines.clear()
+        _run(store, fake_client, path, LadderSettings())
+
+    tracker = Tracker(store, fake_client, TrackerSettings())
+    real = whatif._regrade_one
+    calls = {"n": 0}
+
+    def flaky(probe, sig, candles):
+        # Fail for exactly one rule on one signal — the asymmetry that bit.
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return None
+        return real(probe, sig, candles)
+
+    whatif._regrade_one = flaky
+    try:
+        report = whatif.compare_stop_rules(tracker)
+    finally:
+        whatif._regrade_one = real
+
+    counts = {r.rule: r.n for r in report["results"]}
+    assert len(set(counts.values())) == 1, counts
+
+
+def test_the_render_says_how_much_of_the_sample_it_could_use(store, fake_client):
+    """Coverage is part of the answer: 189 of 198 is a different claim to 198."""
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    text = render(compare_stop_rules(Tracker(store, fake_client, TrackerSettings())))
+    assert "scored 1 of 1" in text
+    assert "0 without usable history" in text

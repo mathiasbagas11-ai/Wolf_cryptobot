@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import statistics
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Optional
 
 from wolf.config import LadderSettings, TrackerSettings
@@ -44,51 +45,64 @@ class RuleResult:
         )
 
 
-def _regrade(tracker: Tracker, signals: list, ladder: LadderSettings) -> Optional[list[float]]:
-    """R-multiples the sample would have produced under ``ladder``.
+#: A 15m bar is 900s, and exchanges serve klines counted back from *now*, so
+#: reaching a signal's own window means asking for every bar since. Past this
+#: many the request stops being served, and the signal is skipped rather than
+#: replayed against whatever came back.
+_MAX_BARS = 1000
+_BAR_MS = 900_000
 
-    ``None`` when price history could not be fetched for enough of the sample
-    to compare — a partial answer here is worse than none, because the rules
-    would be scored on different trades.
+
+def _history(tracker: Tracker, sig) -> Optional[list]:
+    """The candles this signal actually lived through, or ``None``.
+
+    The klines API takes a count, not a date range: it answers with the most
+    recent ``limit`` bars. Asking for as many bars as the trade *lasted* — two
+    hours for a trade held two hours — therefore returns the last two hours of
+    today, and every one of them passes a "after the signal started" filter if
+    the signal is older than that. The replay then grades a week-old setup
+    against this afternoon's price.
+
+    So the count is measured from now back to the signal's start, and the first
+    bar returned is checked against that start. If the history does not reach,
+    the signal is dropped: no answer is better than an answer computed from the
+    wrong prices.
     """
-    probe = Tracker(tracker._store, tracker._client, tracker._settings, ladder=ladder)
-    out: list[float] = []
-    missed = 0
-    for sig in signals:
-        try:
-            created_at = _parse_iso(sig.created_at)
-            resolved_at = _parse_iso(sig.exit_time or sig.resolved_at or sig.created_at)
-            hours = max((resolved_at - created_at).total_seconds() / 3600, 1.0)
-            candles = tracker._client.get_klines(
-                sig.symbol, interval="15m", limit=int(hours * 4) + 20
-            )
-            start_ts = _replay_start_ms(sig, int(created_at.timestamp() * 1000))
-            future = [c for c in candles if c.time >= start_ts]
-            if not future:
-                missed += 1
-                continue
-            fresh = replace(sig, status=Status.PENDING.value, tps_hit=[], exit_price=None,
-                            exit_time=None, pnl_pct=None, r_multiple=None, resolved_at=None)
-            res = probe._evaluate(fresh, future, created_at, resolved_at)
-        except Exception:
-            log.exception("Re-grade failed for %s", sig.symbol)
-            missed += 1
-            continue
-        risk = _risk_pct(sig)
-        pnl = res.realized_pnl_pct
-        if pnl is None and res.exit_price and sig.entry_price > 0:
-            pnl = (
-                (res.exit_price - sig.entry_price) / sig.entry_price * 100
-                if sig.is_long
-                else (sig.entry_price - res.exit_price) / sig.entry_price * 100
-            )
-        if pnl is None or not risk:
-            missed += 1
-            continue
-        out.append(pnl / risk)
-    if missed > len(signals) / 2:
+    created_at = _parse_iso(sig.created_at)
+    start_ts = _replay_start_ms(sig, int(created_at.timestamp() * 1000))
+    now = datetime.now(timezone.utc)
+    bars_back = int((now.timestamp() * 1000 - start_ts) // _BAR_MS) + 10
+    if bars_back > _MAX_BARS or bars_back <= 0:
         return None
-    return out
+    candles = tracker._client.get_klines(sig.symbol, interval="15m", limit=bars_back)
+    if not candles or candles[0].time > start_ts:
+        return None  # the window opens before anything we were served
+    return [c for c in candles if c.time >= start_ts]
+
+
+def _regrade_one(probe: Tracker, sig, candles: list) -> Optional[float]:
+    """R-multiple this signal would have returned, replayed over ``candles``."""
+    created_at = _parse_iso(sig.created_at)
+    try:
+        res = probe._evaluate(
+            replace(sig, status=Status.PENDING.value, tps_hit=[], exit_price=None,
+                    exit_time=None, pnl_pct=None, r_multiple=None, resolved_at=None),
+            candles, created_at, datetime.now(timezone.utc),
+        )
+    except Exception:
+        log.exception("Re-grade failed for %s", sig.symbol)
+        return None
+    risk = _risk_pct(sig)
+    pnl = res.realized_pnl_pct
+    if pnl is None and res.exit_price and sig.entry_price > 0:
+        pnl = (
+            (res.exit_price - sig.entry_price) / sig.entry_price * 100
+            if sig.is_long
+            else (sig.entry_price - res.exit_price) / sig.entry_price * 100
+        )
+    if pnl is None or not risk:
+        return None
+    return pnl / risk
 
 
 def _summarise(rule: str, rs: list[float]) -> RuleResult:
@@ -110,7 +124,14 @@ def compare_stop_rules(
     rules: tuple[str, ...] = ("breakeven", "ladder"),
     limit: int = 200,
 ) -> dict:
-    """Score each stop-advance rule over the same resolved signals."""
+    """Score each stop-advance rule over the same resolved signals.
+
+    Candles are fetched once per signal and replayed under every rule, so the
+    columns cannot drift apart: a signal either scores under all rules or is
+    excluded from all of them. Fetching per rule let each one skip a different
+    set of signals, and three trades' difference in membership was enough to
+    account for the entire gap between them.
+    """
     raw = tracker._store.read(OUTCOMES_KEY, default=[]) or []
     from wolf.models import Signal
 
@@ -119,22 +140,51 @@ def compare_stop_rules(
     if not signals:
         return {"error": "no graded signals with a ladder to replay", "results": []}
 
-    results = []
-    for rule in rules:
-        rs = _regrade(tracker, signals, replace(tracker._ladder, stop_advance=rule))
-        if rs is None:
-            return {
-                "error": "price history unavailable for too much of the sample",
-                "results": [],
-            }
-        results.append(_summarise(rule, rs))
-    return {"error": "", "sample": len(signals), "results": results}
+    histories = []
+    for sig in signals:
+        try:
+            candles = _history(tracker, sig)
+        except Exception:
+            log.exception("History fetch failed for %s", sig.symbol)
+            candles = None
+        if candles:
+            histories.append((sig, candles))
+    if not histories:
+        return {"error": "no signal had price history reaching back to its entry",
+                "results": []}
+
+    probes = {
+        rule: Tracker(tracker._store, tracker._client, tracker._settings,
+                      ladder=replace(tracker._ladder, stop_advance=rule))
+        for rule in rules
+    }
+    scored: dict[str, list[float]] = {rule: [] for rule in rules}
+    for sig, candles in histories:
+        row = {rule: _regrade_one(probes[rule], sig, candles) for rule in rules}
+        if any(v is None for v in row.values()):
+            continue  # scored under every rule, or under none
+        for rule, value in row.items():
+            scored[rule].append(value)
+
+    n_scored = len(next(iter(scored.values()))) if scored else 0
+    if not n_scored:
+        return {"error": "no signal could be re-graded under every rule", "results": []}
+    return {
+        "error": "",
+        "sample": len(signals),
+        "scored": n_scored,
+        "skipped": len(signals) - n_scored,
+        "results": [_summarise(rule, scored[rule]) for rule in rules],
+    }
 
 
 def render(report: dict) -> str:
     if report.get("error"):
         return f"WHATIF stop rules: {report['error']}"
-    lines = [f"WHATIF stop rules | replayed {report['sample']} resolved signals"]
+    lines = [
+        f"WHATIF stop rules | scored {report['scored']} of {report['sample']} "
+        f"resolved signals ({report['skipped']} without usable history)"
+    ]
     lines += [r.line() for r in report["results"]]
     best = max(report["results"], key=lambda r: r.mean_r)
     spread = best.mean_r - min(r.mean_r for r in report["results"])
