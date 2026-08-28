@@ -235,10 +235,15 @@ def render(report: dict) -> str:
             f"vs {p['base']:<9} {p['rule']}: changed {p['changed']} trade(s) "
             f"(+{p['helped']}/-{p['hurt']}) diff={p['mean_diff']:+.4f}R t={p['t']:+.2f}"
         )
-    best = max(report["results"], key=lambda r: r.mean_r)
-    spread = best.mean_r - min(r.mean_r for r in report["results"])
+    # Measured against the rule in force, not against the worst of the set.
+    # Best-minus-worst credited "ladder" with +0.130R by subtracting "none",
+    # a rule nobody is running, when the change actually on offer was +0.015R.
+    results = report["results"]
+    base = results[0]
+    best = max(results, key=lambda r: r.mean_r)
+    gain = best.mean_r - base.mean_r
     lines.append(
-        f"=> {best.rule} leads by {spread:+.3f}R/trade"
-        if spread else "=> no difference on this sample"
+        f"=> {best.rule} beats the live rule ({base.rule}) by {gain:+.3f}R/trade"
+        if gain > 0 else f"=> nothing beats the live rule ({base.rule})"
     )
     return "\n".join(lines)

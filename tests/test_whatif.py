@@ -104,7 +104,7 @@ def test_the_comparison_scores_both_rules_on_the_same_trades(store, fake_client)
     scores = {r.rule: r.mean_r for r in report["results"]}
     assert scores["breakeven"] == 1.1
     assert scores["ladder"] == 1.3
-    assert "ladder leads by +0.200R/trade" in render(report)
+    assert "ladder beats the live rule (breakeven) by +0.200R/trade" in render(report)
 
 
 def test_an_empty_history_says_so_rather_than_reporting_zero(store, fake_client):
@@ -163,7 +163,7 @@ def test_the_endpoint_renders_the_comparison(store, fake_client):
     client = TestClient(create_app(app_obj))
     body = client.get("/whatif/stops").text
     assert "breakeven" in body and "ladder" in body
-    assert "ladder leads by +0.200R/trade" in body
+    assert "ladder beats the live rule (breakeven) by +0.200R/trade" in body
 
 
 # ── Telegram commands ───────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ def test_whatif_is_reachable_as_a_telegram_command(store, fake_client):
     _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
     reply = CommandRouter(_router_app(store, fake_client)).handle("/whatif")
     assert "breakeven" in reply and "ladder" in reply
-    assert "ladder leads by +0.200R/trade" in reply
+    assert "ladder beats the live rule (breakeven) by +0.200R/trade" in reply
 
 
 def test_diag_is_reachable_as_a_telegram_command(store, fake_client):
@@ -305,3 +305,25 @@ def test_the_paired_view_counts_the_trades_that_actually_moved(store, fake_clien
     assert ladder["base"] == "breakeven"
     assert ladder["changed"] == 1 and ladder["helped"] == 1 and ladder["hurt"] == 0
     assert "changed 1 trade(s) (+1/-0)" in render(report)
+
+
+def test_the_headline_measures_against_the_rule_in_force(store, fake_client):
+    """Best-minus-worst credits a winner with beating a rule nobody runs.
+
+    With three rules on the card that overstated the change on offer by nearly
+    ten times: "ladder leads by +0.130R" was ladder against "none", while the
+    decision actually facing the reader — switch from breakeven — was +0.015R.
+    """
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings(), symbol="BTCUSDT")
+    _run(store, fake_client, [(100, 106, 100, 105), (105, 105, 94, 95)],
+         LadderSettings(), symbol="SOLUSDT")
+
+    report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
+    scores = {r.rule: r.mean_r for r in report["results"]}
+    assert scores["none"] < scores["breakeven"] < scores["ladder"]
+
+    text = render(report)
+    gain = round(scores["ladder"] - scores["breakeven"], 3)
+    assert f"beats the live rule (breakeven) by {gain:+.3f}R/trade" in text
+    # The gap to the rule nobody is running must not appear as the headline.
+    assert f"{scores['ladder'] - scores['none']:+.3f}R/trade" not in text
