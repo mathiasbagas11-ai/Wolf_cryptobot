@@ -34,6 +34,7 @@ _HELP = (
     "<code>/active</code> — open signals\n"
     "<code>/diag</code> — diagnostic digest now (add hours, e.g. <code>/diag 48</code>)\n"
     "<code>/whatif</code> — re-grade past signals under each stop rule\n"
+    "<code>/ai</code> — is the debate layer actually answering?\n"
     "<code>/help</code> — this message"
 )
 
@@ -68,11 +69,39 @@ class CommandRouter:
             return self._active()
         if cmd == "whatif":
             return self._whatif()
+        if cmd == "ai":
+            return self._ai()
         if cmd == "diag":
             return self._diag(arg)
         if getattr(self._app, "analyze", None) is not None and not arg and cmd.isalnum():
             return self._app.analyze.analyze(cmd)  # bare ticker shortcut
         return "❓ Unknown command. Try <code>/help</code>."
+
+    def _ai(self) -> str:
+        """Ask the arbiter for one verdict and report what came back.
+
+        Whether the layer works is otherwise only visible in the next day's
+        digest, because a broken one abstains rather than failing — so a fix
+        applied now cannot be confirmed until the abstentions it caused have
+        aged out of the window. One live call answers it immediately.
+        """
+        from wolf.app import ai_status
+
+        try:
+            st = ai_status(self._app, probe=True)
+        except Exception:
+            log.exception("AI probe failed")
+            return "⚠️ AI probe failed — see logs."
+        if not st.get("enabled"):
+            return "🤖 <b>AI debate</b>: OFF (<code>AI_DEBATE_ENABLED</code> is false)"
+        if st.get("available"):
+            degraded = ", ".join(st.get("degraded_roles") or [])
+            extra = f"\nWeak roles: {esc(degraded)}" if degraded else ""
+            return f"🤖 <b>AI debate</b>: OK — the arbiter returned a verdict.{extra}"
+        return (
+            "🤖 <b>AI debate</b>: ENABLED but not answering\n"
+            f"<code>{esc(st.get('reason') or 'unknown')}</code>"
+        )
 
     def _whatif(self) -> str:
         """Compare stop-advance rules over the signals already resolved.

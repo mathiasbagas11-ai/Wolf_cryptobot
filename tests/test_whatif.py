@@ -327,3 +327,58 @@ def test_the_headline_measures_against_the_rule_in_force(store, fake_client):
     assert f"beats the live rule (breakeven) by {gain:+.3f}R/trade" in text
     # The gap to the rule nobody is running must not appear as the headline.
     assert f"{scores['ladder'] - scores['none']:+.3f}R/trade" not in text
+
+
+# ── /ai probe ───────────────────────────────────────────────────────────────
+def _app_with_validator(store, fake_client, validator, enabled=True):
+    from types import SimpleNamespace
+    from dataclasses import replace as dc_replace
+    from wolf.config import Settings
+
+    settings = Settings()
+    return SimpleNamespace(
+        analyze=None, account=None, learning=None,
+        tracker=Tracker(store, fake_client, TrackerSettings()),
+        settings=dc_replace(settings, ai=dc_replace(settings.ai, enabled=enabled)),
+        screener=SimpleNamespace(_validator=validator),
+    )
+
+
+def test_ai_command_reports_the_providers_own_reason(store, fake_client):
+    """A fix applied now is otherwise unconfirmable until tomorrow's digest.
+
+    A broken debate layer abstains rather than failing, so the abstentions it
+    already caused stay in the window long after the cause is gone. One live
+    call separates "fixed" from "still broken" on the spot.
+    """
+    from wolf.notify.commands import CommandRouter
+
+    class _Broken:
+        available = True
+        degraded_roles: list = []
+        def selftest(self):
+            return {"ok": False, "reason": "HTTP 400: unknown model name"}
+
+    reply = CommandRouter(_app_with_validator(store, fake_client, _Broken())).handle("/ai")
+    assert "not answering" in reply
+    assert "HTTP 400: unknown model name" in reply
+
+
+def test_ai_command_confirms_a_working_arbiter(store, fake_client):
+    from wolf.notify.commands import CommandRouter
+
+    class _Working:
+        available = True
+        degraded_roles: list = []
+        def selftest(self):
+            return {"ok": True, "reason": ""}
+
+    reply = CommandRouter(_app_with_validator(store, fake_client, _Working())).handle("/ai")
+    assert "OK" in reply and "returned a verdict" in reply
+
+
+def test_ai_command_says_so_when_the_layer_is_switched_off(store, fake_client):
+    from wolf.notify.commands import CommandRouter
+
+    app = _app_with_validator(store, fake_client, None, enabled=False)
+    assert "OFF" in CommandRouter(app).handle("/ai")
