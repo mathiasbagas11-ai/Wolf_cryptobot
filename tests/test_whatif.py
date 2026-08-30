@@ -382,3 +382,76 @@ def test_ai_command_says_so_when_the_layer_is_switched_off(store, fake_client):
 
     app = _app_with_validator(store, fake_client, None, enabled=False)
     assert "OFF" in CommandRouter(app).handle("/ai")
+
+
+# ── cost gate sweep ─────────────────────────────────────────────────────────
+def _resolved(store, *, r: float, risk_pct: float, n: int):
+    """Append a resolved outcome with an exact R and stop distance."""
+    from datetime import timedelta, timezone
+    from wolf.models import Signal
+    from wolf.tracker import OUTCOMES_KEY
+
+    entry = 100.0
+    start = datetime.now(timezone.utc) - timedelta(hours=3)
+    rows = store.read(OUTCOMES_KEY, default=[]) or []
+    rows.append(Signal(
+        symbol=f"AAA{n}USDT", signal_type="SCREENER", direction="LONG",
+        entry_price=entry, tp=entry * 1.05, sl=entry * (1 - risk_pct / 100),
+        strategy="SCALP", status=Status.TP_HIT.value if r > 0 else Status.SL_HIT.value,
+        pnl_pct=r * risk_pct, r_multiple=r,
+        tp_ladder=LADDER_1_3, activated_at=start.isoformat(),
+        exit_time=(start + timedelta(hours=1)).isoformat(),
+        resolved_at=(start + timedelta(hours=1)).isoformat(),
+    ).to_dict())
+    store.write(OUTCOMES_KEY, rows)
+
+
+def test_the_cost_gate_sweep_prices_each_threshold(store, fake_client):
+    """A gate on stop distance can be priced without any price history.
+
+    Both halves of the answer are already on the record: how far the stop sat,
+    which is what the gate reads, and what the trade returned. So this can use
+    every stored outcome rather than the recent slice a candle replay reaches.
+    """
+    from wolf.whatif import compare_cost_gates, render_cost_gates
+
+    # Tight stops: a real gross edge that its own costs more than consume.
+    for i in range(20):
+        _resolved(store, r=+0.5 if i % 2 else -0.4, risk_pct=0.80, n=i)
+    # Wide stops: the same modest edge, at a fraction of the cost.
+    for i in range(20, 40):
+        _resolved(store, r=+0.5 if i % 2 else -0.4, risk_pct=4.00, n=i)
+
+    report = compare_cost_gates(Tracker(store, fake_client, TrackerSettings()))
+    rows = {r.threshold: r for r in report["results"]}
+    assert rows[999.0].kept == 40                  # ungated: everything
+    assert rows[0.15].kept == 20                   # only the wide stops survive
+    assert rows[999.0].net_r < rows[0.15].net_r    # and they are the profitable half
+
+    text = render_cost_gates(report)
+    assert "no gate" in text
+    assert "read the shape of the curve, not the winning row" in text
+
+
+def test_pre_fix_outcomes_are_kept_out_of_the_sweep(store, fake_client):
+    """An R above the ladder's ceiling could not have been paid, so it is not data."""
+    from wolf.whatif import compare_cost_gates
+
+    for i in range(10):
+        _resolved(store, r=+0.5, risk_pct=2.0, n=i)
+    for i in range(10, 14):
+        _resolved(store, r=+3.0, risk_pct=2.0, n=i)   # the 3.0R booking bug
+
+    report = compare_cost_gates(Tracker(store, fake_client, TrackerSettings()))
+    assert report["excluded_inflated"] == 4
+    assert report["sample"] == 10
+    assert all(r.mean_r == 0.5 for r in report["results"])
+
+
+def test_the_cost_sweep_is_reachable_from_telegram(store, fake_client):
+    from wolf.notify.commands import CommandRouter
+
+    for i in range(6):
+        _resolved(store, r=+0.5, risk_pct=2.0, n=i)
+    reply = CommandRouter(_router_app(store, fake_client)).handle("/whatif cost")
+    assert "cost gate" in reply and "no gate" in reply

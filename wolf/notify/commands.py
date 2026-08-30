@@ -34,6 +34,7 @@ _HELP = (
     "<code>/active</code> — open signals\n"
     "<code>/diag</code> — diagnostic digest now (add hours, e.g. <code>/diag 48</code>)\n"
     "<code>/whatif</code> — re-grade past signals under each stop rule\n"
+    "<code>/whatif cost</code> — what each max_cost_r would have kept\n"
     "<code>/ai</code> — is the debate layer actually answering?\n"
     "<code>/help</code> — this message"
 )
@@ -68,7 +69,7 @@ class CommandRouter:
         if cmd == "active":
             return self._active()
         if cmd == "whatif":
-            return self._whatif()
+            return self._whatif(arg)
         if cmd == "ai":
             return self._ai()
         if cmd == "diag":
@@ -103,15 +104,26 @@ class CommandRouter:
             f"<code>{esc(st.get('reason') or 'unknown')}</code>"
         )
 
-    def _whatif(self) -> str:
-        """Compare stop-advance rules over the signals already resolved.
+    def _whatif(self, arg: str) -> str:
+        """Re-score resolved signals under a rule that was not the one in force.
 
-        Refetches the candles that decided each trade, so it is slow and costs
-        one request per signal — a command rather than part of the daily card.
+        ``/whatif cost`` prices the max_cost_r gate, which needs only the stop
+        distance already on each record. Bare ``/whatif`` compares the
+        stop-advance rules, which has to refetch the candles behind every
+        signal — slow, one request each, hence a command and not part of the
+        daily card.
         """
-        from wolf.whatif import compare_stop_rules, render
+        from wolf.whatif import (
+            compare_cost_gates, compare_stop_rules, render, render_cost_gates,
+        )
 
         try:
+            if arg.lower().startswith("cost"):
+                report = compare_cost_gates(
+                    self._app.tracker,
+                    round_trip_bps=self._app.settings.round_trip_cost_bps,
+                )
+                return f"<pre>{esc(render_cost_gates(report))}</pre>"
             report = compare_stop_rules(self._app.tracker)
         except Exception:
             log.exception("What-if comparison failed")

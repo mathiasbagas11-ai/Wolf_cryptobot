@@ -17,14 +17,14 @@ import logging
 import math
 import statistics
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from wolf.config import LadderSettings, TrackerSettings
 from wolf.models import Status
 from wolf.tracker import (
-    OUTCOMES_KEY, Tracker, _parse_iso, _partial_pnl, _replay_start_ms, _risk_pct,
-    normalize_ladder,
+    OUTCOMES_KEY, Tracker, _parse_iso, _partial_pnl, _replay_start_ms, _resolved_at,
+    _risk_pct, normalize_ladder, r_multiple_of,
 )
 
 log = logging.getLogger("wolf.whatif")
@@ -246,4 +246,103 @@ def render(report: dict) -> str:
         f"=> {best.rule} beats the live rule ({base.rule}) by {gain:+.3f}R/trade"
         if gain > 0 else f"=> nothing beats the live rule ({base.rule})"
     )
+    return "\n".join(lines)
+
+
+# ── cost gate ───────────────────────────────────────────────────────────────
+#: Thresholds worth pricing. 0.5 is the shipped default; the rest bracket it.
+COST_GATE_STEPS = (0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 999.0)
+
+
+@dataclass
+class GateResult:
+    """What one max_cost_r would have kept, and what that sample returned."""
+
+    threshold: float
+    kept: int
+    share: float
+    mean_r: float
+    cost_r: float
+    net_r: float
+
+    def line(self) -> str:
+        label = "no gate" if self.threshold >= 999 else f"{self.threshold:.2f}R"
+        return (
+            f"{label:>8}  kept={self.kept:<4} ({self.share:>4.0f}%)  "
+            f"meanR={self.mean_r:+.3f}  cost={self.cost_r:.3f}  netR={self.net_r:+.3f}"
+        )
+
+
+def compare_cost_gates(
+    tracker: Tracker,
+    round_trip_bps: float = 20.0,
+    window_hours: Optional[float] = None,
+) -> dict:
+    """Price the max_cost_r gate against signals already resolved.
+
+    Needs no price history: the stop distance and the realised R are both on
+    the record, and the gate is a function of the stop distance alone. So this
+    can use every stored outcome rather than the recent slice a replay reaches.
+
+    Read the whole curve, not the best row. The threshold is being chosen on
+    the same trades it is scored against, so the best row is partly a fit to
+    this sample and will flatter itself. What the curve can honestly show is
+    shape: a net figure that climbs steadily as the gate tightens is telling
+    you something a single winning row is not.
+    """
+    from wolf.models import Signal
+
+    raw = tracker._store.read(OUTCOMES_KEY, default=[]) or []
+    signals = [Signal.from_dict(d) for d in raw if isinstance(d, dict)]
+    signals = [s for s in signals if Status(s.status).is_graded]
+    if window_hours:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+        signals = [s for s in signals if (_resolved_at(s) or cutoff) >= cutoff]
+
+    # Outcomes booked before the scaled-exit fix carry an R the ladder cannot
+    # pay. They are recognisable by exceeding its ceiling, and mixing them in
+    # would price the gate against trades whose returns never happened.
+    ceiling = tracker._ladder.full_run_r
+    rows, inflated = [], 0
+    for sig in signals:
+        risk = _risk_pct(sig)
+        if not risk:
+            continue
+        r = r_multiple_of(sig)
+        if r > ceiling + 1e-9:
+            inflated += 1
+            continue
+        rows.append((r, (round_trip_bps / 100.0) / risk))
+    if not rows:
+        return {"error": "no usable resolved signals", "results": []}
+
+    total = len(rows)
+    results = []
+    for threshold in COST_GATE_STEPS:
+        kept = [(r, c) for r, c in rows if c <= threshold]
+        if not kept:
+            continue
+        mean_r = statistics.fmean(r for r, _ in kept)
+        cost_r = statistics.fmean(c for _, c in kept)
+        results.append(GateResult(
+            threshold=threshold,
+            kept=len(kept),
+            share=round(len(kept) / total * 100, 1),
+            mean_r=round(mean_r, 3),
+            cost_r=round(cost_r, 3),
+            net_r=round(mean_r - cost_r, 3),
+        ))
+    return {"error": "", "sample": total, "excluded_inflated": inflated,
+            "results": results}
+
+
+def render_cost_gates(report: dict) -> str:
+    if report.get("error"):
+        return f"WHATIF cost gate: {report['error']}"
+    lines = [f"WHATIF cost gate | {report['sample']} resolved signals"]
+    if report["excluded_inflated"]:
+        lines.append(f"  ({report['excluded_inflated']} pre-fix outcomes excluded)")
+    lines += [r.line() for r in report["results"]]
+    lines.append("  the threshold is picked on the trades it is scored against;")
+    lines.append("  read the shape of the curve, not the winning row.")
     return "\n".join(lines)
