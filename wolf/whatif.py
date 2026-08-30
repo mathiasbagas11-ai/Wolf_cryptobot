@@ -300,21 +300,35 @@ def compare_cost_gates(
         signals = [s for s in signals if (_resolved_at(s) or cutoff) >= cutoff]
 
     # Outcomes booked before the scaled-exit fix carry an R the ladder cannot
-    # pay. They are recognisable by exceeding its ceiling, and mixing them in
-    # would price the gate against trades whose returns never happened.
+    # pay. Dropping them one by one is worse than keeping them: only the full
+    # runs were inflated, so filtering on the value strips that era's biggest
+    # winners while leaving every one of its losses in place, and the sample
+    # comes back negative by construction.
+    #
+    # The era has to go as a whole, and it dates itself — the newest impossible
+    # outcome is the last one booked before the fix landed, so everything
+    # settled by then is suspect and everything after it is clean.
     ceiling = tracker._ladder.full_run_r
-    rows, inflated = [], 0
+    cutoff = None
     for sig in signals:
+        if r_multiple_of(sig) > ceiling + 1e-9:
+            at = _resolved_at(sig)
+            if at and (cutoff is None or at > cutoff):
+                cutoff = at
+    dropped = 0
+    rows = []
+    for sig in signals:
+        at = _resolved_at(sig)
+        if cutoff is not None and at is not None and at <= cutoff:
+            dropped += 1
+            continue
         risk = _risk_pct(sig)
         if not risk:
             continue
-        r = r_multiple_of(sig)
-        if r > ceiling + 1e-9:
-            inflated += 1
-            continue
-        rows.append((r, (round_trip_bps / 100.0) / risk))
+        rows.append((r_multiple_of(sig), (round_trip_bps / 100.0) / risk))
     if not rows:
-        return {"error": "no usable resolved signals", "results": []}
+        return {"error": "no resolved signals after the accounting fix", "results": []}
+    inflated = dropped
 
     total = len(rows)
     results = []
@@ -333,6 +347,7 @@ def compare_cost_gates(
             net_r=round(mean_r - cost_r, 3),
         ))
     return {"error": "", "sample": total, "excluded_inflated": inflated,
+            "cutoff": cutoff.isoformat(timespec="minutes") if cutoff else "",
             "results": results}
 
 
@@ -341,7 +356,10 @@ def render_cost_gates(report: dict) -> str:
         return f"WHATIF cost gate: {report['error']}"
     lines = [f"WHATIF cost gate | {report['sample']} resolved signals"]
     if report["excluded_inflated"]:
-        lines.append(f"  ({report['excluded_inflated']} pre-fix outcomes excluded)")
+        lines.append(
+            f"  ({report['excluded_inflated']} outcomes dropped: settled on or "
+            f"before {report['cutoff']}, when booking was still wrong)"
+        )
     lines += [r.line() for r in report["results"]]
     lines.append("  the threshold is picked on the trades it is scored against;")
     lines.append("  read the shape of the curve, not the winning row.")

@@ -385,14 +385,14 @@ def test_ai_command_says_so_when_the_layer_is_switched_off(store, fake_client):
 
 
 # ── cost gate sweep ─────────────────────────────────────────────────────────
-def _resolved(store, *, r: float, risk_pct: float, n: int):
+def _resolved(store, *, r: float, risk_pct: float, n: int, hours_ago: float = 3):
     """Append a resolved outcome with an exact R and stop distance."""
     from datetime import timedelta, timezone
     from wolf.models import Signal
     from wolf.tracker import OUTCOMES_KEY
 
     entry = 100.0
-    start = datetime.now(timezone.utc) - timedelta(hours=3)
+    start = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
     rows = store.read(OUTCOMES_KEY, default=[]) or []
     rows.append(Signal(
         symbol=f"AAA{n}USDT", signal_type="SCREENER", direction="LONG",
@@ -433,19 +433,32 @@ def test_the_cost_gate_sweep_prices_each_threshold(store, fake_client):
     assert "read the shape of the curve, not the winning row" in text
 
 
-def test_pre_fix_outcomes_are_kept_out_of_the_sweep(store, fake_client):
-    """An R above the ladder's ceiling could not have been paid, so it is not data."""
+def test_the_whole_pre_fix_era_is_dropped_not_just_its_impossible_rows(store, fake_client):
+    """Filtering on the value alone strips that era's winners and keeps its losses.
+
+    Only full runs were over-booked, so an R-above-the-ceiling test removes the
+    3.0R rows and leaves every -1.0R beside them — which returns a sample that
+    is negative by construction. The era has to go as a whole, and the newest
+    impossible outcome dates the end of it.
+    """
     from wolf.whatif import compare_cost_gates
 
-    for i in range(10):
-        _resolved(store, r=+0.5, risk_pct=2.0, n=i)
-    for i in range(10, 14):
-        _resolved(store, r=+3.0, risk_pct=2.0, n=i)   # the 3.0R booking bug
+    # Buggy era: over-booked winners sitting next to ordinary losses. The
+    # newest impossible row is what dates the era, so the losses settle before
+    # it — as they would around the deploy that ended the bug.
+    for i in range(6, 16):
+        _resolved(store, r=-1.0, risk_pct=2.0, n=i, hours_ago=41)
+    for i in range(6):
+        _resolved(store, r=+3.0, risk_pct=2.0, n=i, hours_ago=40)
+    # After the fix.
+    for i in range(16, 26):
+        _resolved(store, r=+0.5, risk_pct=2.0, n=i, hours_ago=3)
 
     report = compare_cost_gates(Tracker(store, fake_client, TrackerSettings()))
-    assert report["excluded_inflated"] == 4
+    assert report["excluded_inflated"] == 16      # the losses went too
     assert report["sample"] == 10
     assert all(r.mean_r == 0.5 for r in report["results"])
+    assert report["cutoff"]
 
 
 def test_the_cost_sweep_is_reachable_from_telegram(store, fake_client):
