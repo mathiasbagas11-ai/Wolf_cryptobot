@@ -111,12 +111,35 @@ class OpenAICompatLLMClient(LLMClient):
             log.warning("OpenAI-compat call to %s failed: %s", self._base_url, self.last_error)
             return ""
         try:
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"] or ""
+            choice = resp.json()["choices"][0]
+            message = choice.get("message") or {}
+            content = message.get("content") or ""
         except (KeyError, IndexError, ValueError) as exc:
             self.last_error = f"unreadable response: {type(exc).__name__}: {exc}"
             log.warning("OpenAI-compat call to %s failed: %s", self._base_url, self.last_error)
             return ""
+
+        # A 200 that carries nothing usable is the hardest failure to see: the
+        # request was accepted, so there is no status code to blame, and the
+        # caller just gets an empty string. The two ways it happens are worth
+        # telling apart — a model that spent its budget thinking before it
+        # wrote anything, and one that was cut off mid-answer — because the
+        # first needs a different model and the second needs a bigger budget.
+        finish = choice.get("finish_reason")
+        if not content:
+            if message.get("reasoning_content"):
+                self.last_error = (
+                    f"empty content (finish_reason={finish}): the model spent all "
+                    f"{max_tokens} tokens on reasoning before answering"
+                )
+            else:
+                self.last_error = f"empty content (finish_reason={finish})"
+            log.warning("OpenAI-compat call to %s: %s", self._base_url, self.last_error)
+            return ""
+        if finish == "length":
+            self.last_error = f"answer cut off at max_tokens={max_tokens}"
+            log.warning("OpenAI-compat call to %s: %s", self._base_url, self.last_error)
+            return content
         self.last_error = ""
         return content
 
@@ -139,5 +162,13 @@ class OpenAICompatLLMClient(LLMClient):
                     return json.loads(match.group(0))
                 except json.JSONDecodeError:
                     pass
-            log.warning("Arbiter returned non-JSON output from %s", self._base_url)
+            # Quote what did come back. "No JSON" describes every one of these
+            # equally, and the first line of the actual reply usually says
+            # which it is at a glance. A truncation already diagnosed upstream
+            # is the more specific answer and keeps precedence: unparseable is
+            # what being cut off looks like, not a second, separate fault.
+            if not self.last_error:
+                self.last_error = f"reply was not JSON: {text[:160].strip()!r}"
+            log.warning("Arbiter returned non-JSON output from %s: %s",
+                        self._base_url, self.last_error)
             return {}

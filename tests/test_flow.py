@@ -342,3 +342,70 @@ def test_matching_pairs_report_nothing():
     assert DebateRole("deepseek", "deepseek-v4-flash").mismatch() == ""
     assert DebateRole("hermes", "nousresearch/hermes-3-llama-3.1-405b").mismatch() == ""
     assert DebateRole("anthropic", "claude-sonnet-4-5").mismatch() == ""
+
+
+def test_an_empty_answer_names_which_kind_of_empty(monkeypatch):
+    """A 200 carrying nothing usable is the hardest failure to see.
+
+    The request was accepted, so no status code is to blame, and the caller
+    receives an empty string. A model that burned its budget reasoning before
+    writing needs a different model; one cut off mid-answer needs a bigger
+    budget. Both used to arrive as the same silent abstention.
+    """
+    from wolf.ai.openai_compat import OpenAICompatLLMClient
+
+    client = OpenAICompatLLMClient("k", "https://api.deepseek.com/v1", "deepseek-v4-flash")
+    monkeypatch.setattr(
+        "wolf.ai.openai_compat.requests.post",
+        lambda *a, **kw: _ErrResp(200, {"choices": [{
+            "finish_reason": "length",
+            "message": {"content": "", "reasoning_content": "thinking..."},
+        }]}),
+    )
+    assert client.complete("sys", "usr") == ""
+    assert "spent all" in client.last_error and "reasoning" in client.last_error
+
+
+def test_a_truncated_answer_says_so(monkeypatch):
+    from wolf.ai.openai_compat import OpenAICompatLLMClient
+
+    client = OpenAICompatLLMClient("k", "https://api.deepseek.com/v1", "deepseek-v4-flash")
+    monkeypatch.setattr(
+        "wolf.ai.openai_compat.requests.post",
+        lambda *a, **kw: _ErrResp(200, {"choices": [{
+            "finish_reason": "length", "message": {"content": '{"decision": "CONF'},
+        }]}),
+    )
+    client.complete_json("sys", "usr", {}, max_tokens=64)
+    assert "cut off at max_tokens=64" in client.last_error
+
+
+def test_a_non_json_reply_is_quoted_back(monkeypatch):
+    """"No JSON" describes every one of these equally; the reply itself does not."""
+    from wolf.ai.openai_compat import OpenAICompatLLMClient
+
+    client = OpenAICompatLLMClient("k", "https://api.deepseek.com/v1", "deepseek-v4-flash")
+    monkeypatch.setattr(
+        "wolf.ai.openai_compat.requests.post",
+        lambda *a, **kw: _ErrResp(200, {"choices": [{
+            "finish_reason": "stop",
+            "message": {"content": "I cannot provide financial advice."},
+        }]}),
+    )
+    assert client.complete_json("sys", "usr", {}) == {}
+    assert "I cannot provide financial advice." in client.last_error
+
+
+def test_a_json_reply_still_parses_cleanly(monkeypatch):
+    from wolf.ai.openai_compat import OpenAICompatLLMClient
+
+    client = OpenAICompatLLMClient("k", "https://api.deepseek.com/v1", "deepseek-v4-flash")
+    monkeypatch.setattr(
+        "wolf.ai.openai_compat.requests.post",
+        lambda *a, **kw: _ErrResp(200, {"choices": [{
+            "finish_reason": "stop",
+            "message": {"content": '{"decision": "NEUTRAL", "confidence": 40}'},
+        }]}),
+    )
+    assert client.complete_json("sys", "usr", {})["decision"] == "NEUTRAL"
+    assert client.last_error == ""

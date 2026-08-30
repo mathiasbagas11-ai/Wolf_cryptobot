@@ -39,6 +39,12 @@ _ABSTAIN_NO_JSON = "ABSTAIN/NO_JSON"         # arbiter answered, but not with a 
 
 ABSTAIN_REASONS = (_ABSTAIN_NO_ARBITER, _ABSTAIN_ERROR, _ABSTAIN_NO_JSON)
 
+#: The verdict itself is three short fields, but a model that reasons before
+#: answering spends this budget first and returns empty content if it runs out
+#: — which arrives as an abstention, indistinguishable from having no opinion.
+#: Room to think is cheaper than a silent AI layer.
+_ARBITER_MAX_TOKENS = 2048
+
 
 class Decision:
     CONFIRM = "CONFIRM"
@@ -303,7 +309,7 @@ class DebateValidator(SignalValidator):
             "PROPOSED SETUP:\n(startup self-test — reply NEUTRAL with confidence 0)\n\n"
             "Decide: CONFIRM, NEUTRAL, or REJECT.",
             _VERDICT_SCHEMA,
-            max_tokens=128,
+            max_tokens=_ARBITER_MAX_TOKENS,
         )
         if data.get("decision"):
             return {"ok": True, "reason": ""}
@@ -324,7 +330,10 @@ class DebateValidator(SignalValidator):
                 f"BEAR CASE:\n{bear or '(none)'}\n\n"
                 "Decide: CONFIRM, NEUTRAL, or REJECT."
             )
-            data = self._arbiter.complete_json(_ARBITER_SYSTEM, arbiter_prompt, _VERDICT_SCHEMA, max_tokens=512)
+            data = self._arbiter.complete_json(
+                _ARBITER_SYSTEM, arbiter_prompt, _VERDICT_SCHEMA,
+                max_tokens=_ARBITER_MAX_TOKENS,
+            )
         except Exception as exc:  # the AI layer must never break screening
             log.exception("Debate failed for %s — abstaining", candidate.symbol)
             return Verdict(
