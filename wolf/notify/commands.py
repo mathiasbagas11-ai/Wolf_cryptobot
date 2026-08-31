@@ -35,6 +35,7 @@ _HELP = (
     "<code>/diag</code> — diagnostic digest now (add hours, e.g. <code>/diag 48</code>)\n"
     "<code>/whatif</code> — re-grade past signals under each stop rule\n"
     "<code>/whatif cost</code> — what each max_cost_r would have kept\n"
+    "<code>/whatif ladder</code> — re-cut the TP ladder on the same trades\n"
     "<code>/ai</code> — is the debate layer actually answering?\n"
     "<code>/help</code> — this message"
 )
@@ -109,15 +110,22 @@ class CommandRouter:
 
         ``/whatif cost`` prices the max_cost_r gate, which needs only the stop
         distance already on each record. Bare ``/whatif`` compares the
-        stop-advance rules, which has to refetch the candles behind every
-        signal — slow, one request each, hence a command and not part of the
-        daily card.
+        stop-advance rules and ``/whatif ladder`` re-cuts the target geometry;
+        both have to refetch the candles behind every signal — slow, one
+        request each, hence a command and not part of the daily card.
         """
         from wolf.whatif import (
-            compare_cost_gates, compare_stop_rules, render, render_cost_gates,
+            compare_cost_gates, compare_ladder_geometry, compare_stop_rules,
+            render, render_cost_gates, render_ladder,
         )
 
         try:
+            if arg.lower().startswith("ladder"):
+                return (
+                    "<pre>"
+                    + esc(render_ladder(compare_ladder_geometry(self._app.tracker)))
+                    + "</pre>"
+                )
             if arg.lower().startswith("cost"):
                 report = compare_cost_gates(
                     self._app.tracker,

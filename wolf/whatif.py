@@ -84,7 +84,25 @@ def _history(tracker: Tracker, sig) -> Optional[list]:
     return [c for c in candles if c.time >= start_ts]
 
 
-def _regrade_one(probe: Tracker, sig, candles: list) -> Optional[float]:
+@dataclass
+class Replay:
+    """One signal's replayed outcome, and whether the history settled it.
+
+    ``resolved`` matters because the two are not equally trustworthy. A trade
+    the candles carried to a rung or a stop is a measurement; one still open
+    when the history ran out is marked to the last close, which is a guess
+    about a position that was never closed. Comparing geometries makes the
+    distinction load-bearing: a wider ladder takes longer to fill, so it
+    systematically leaves more trades unsettled, and a variant can look better
+    purely because more of its trades were valued mid-move instead of at a
+    stop. The count travels with the result so the reader can see it.
+    """
+
+    r: float
+    resolved: bool
+
+
+def _replay_one(probe: Tracker, sig, candles: list) -> Optional[Replay]:
     """R-multiple this signal would have returned, replayed over ``candles``."""
     created_at = _parse_iso(sig.created_at)
     try:
@@ -100,7 +118,9 @@ def _regrade_one(probe: Tracker, sig, candles: list) -> Optional[float]:
     if not risk:
         return None
     pnl = res.realized_pnl_pct
+    resolved = True
     if pnl is None and res.terminal is None:
+        resolved = False
         # Still open at the end of the history. Dropping it would not be
         # neutral: a stop that never advances is exactly what keeps a trade
         # running, so the unresolved rows are the ones where the rules differ
@@ -117,7 +137,13 @@ def _regrade_one(probe: Tracker, sig, candles: list) -> Optional[float]:
         )
     if pnl is None:
         return None
-    return pnl / risk
+    return Replay(r=pnl / risk, resolved=resolved)
+
+
+def _regrade_one(probe: Tracker, sig, candles: list) -> Optional[float]:
+    """The replayed R alone, for callers that do not track settlement."""
+    replay = _replay_one(probe, sig, candles)
+    return None if replay is None else replay.r
 
 
 def _summarise(rule: str, rs: list[float]) -> RuleResult:
@@ -246,6 +272,261 @@ def render(report: dict) -> str:
         f"=> {best.rule} beats the live rule ({base.rule}) by {gain:+.3f}R/trade"
         if gain > 0 else f"=> nothing beats the live rule ({base.rule})"
     )
+    return "\n".join(lines)
+
+
+# ── ladder geometry ─────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class LadderVariant:
+    """One target geometry, expressed the way the live config expresses it.
+
+    The stop is not part of this. A detector chooses where the stop sits, that
+    distance is 1R, and every rung is placed at a multiple of it — so varying
+    the geometry moves the targets while leaving the entry, the direction and
+    the risk unit exactly as the bot actually took them. That is what makes the
+    columns comparable: the denominator of every R is identical across
+    variants, and no variant invents a trade the other did not take.
+    """
+
+    label: str
+    rr_target: float
+    fractions: tuple[float, ...]
+    allocations: tuple[float, ...]
+
+    def settings(self, live: LadderSettings) -> LadderSettings:
+        """This geometry, carrying the live stop and intrabar conventions.
+
+        Only the targets are under test. Inheriting ``stop_advance`` keeps the
+        comparison about where the rungs go rather than silently re-running the
+        stop-rule question that ``compare_stop_rules`` already answers.
+        """
+        return replace(
+            live,
+            rr_target=self.rr_target,
+            tp_ladder_fractions=self.fractions,
+            tp_allocations=self.allocations,
+        )
+
+    def rungs_for(self, sig) -> list[dict]:
+        """The ladder this geometry would have placed on ``sig``."""
+        risk = abs(sig.entry_price - sig.sl)
+        rungs = []
+        for level, (fraction, allocation) in enumerate(
+            zip(self.fractions, self.allocations), start=1
+        ):
+            r = self.rr_target * fraction
+            offset = r * risk
+            rungs.append({
+                "level": level,
+                "price": sig.entry_price + offset if sig.is_long
+                else sig.entry_price - offset,
+                "allocation": allocation,
+                "r_multiple": r,
+            })
+        return rungs
+
+
+#: The geometries worth pricing, spanning both directions out of the 1:1 that
+#: the ladder actually realises. ``live`` first, so every paired comparison is
+#: measured against the rule in force rather than the worst of the set.
+#:
+#: Two rival explanations for "TP3 never fills", and they imply opposite fixes:
+#: the ladder reaches too far (pull it in — ``rr2.5``, ``rr2.0``, ``2rung``),
+#: or too much size comes off at the near rung to leave a runner worth having
+#: (move it back — ``backload``, ``even``). Guessing between them is what the
+#: replay exists to avoid, so both are on the card.
+LADDER_VARIANTS: tuple[LadderVariant, ...] = (
+    LadderVariant("live", 3.0, (1 / 3, 2 / 3, 1.0), (0.5, 0.3, 0.2)),
+    LadderVariant("rr2.5", 2.5, (1 / 3, 2 / 3, 1.0), (0.5, 0.3, 0.2)),
+    LadderVariant("rr2.0", 2.0, (1 / 3, 2 / 3, 1.0), (0.5, 0.3, 0.2)),
+    LadderVariant("2rung", 2.0, (0.5, 1.0), (0.5, 0.5)),
+    LadderVariant("backload", 3.0, (1 / 3, 2 / 3, 1.0), (0.3, 0.3, 0.4)),
+    LadderVariant("even", 3.0, (1 / 3, 2 / 3, 1.0), (1 / 3, 1 / 3, 1 / 3)),
+)
+
+
+@dataclass
+class GeometryResult:
+    """What one geometry would have returned, and how settled that sample was."""
+
+    label: str
+    full_run_r: float
+    n: int
+    unresolved: int
+    mean_r: float
+    win_rate: float
+    avg_win_r: float
+    avg_loss_r: float
+    breakeven_wr: float
+
+    def line(self) -> str:
+        return (
+            f"{self.label:<9} run={self.full_run_r:.2f}R meanR={self.mean_r:+.3f} "
+            f"wr={self.win_rate:>4.1f} need={self.breakeven_wr:>4.1f} "
+            f"aW={self.avg_win_r:+.2f} aL=-{self.avg_loss_r:.2f} open={self.unresolved}"
+        )
+
+
+def _summarise_geometry(
+    variant: LadderVariant, live: LadderSettings, rs: list[float], unresolved: int
+) -> GeometryResult:
+    """Score one geometry, including the win rate it would have to earn.
+
+    ``breakeven_wr`` is derived from the wins and losses this geometry actually
+    produced, not from its advertised ratio. That is the whole point of the
+    exercise: a 1:3 ladder that banks half at the near rung does not need the
+    win rate a 1:3 ladder implies, and quoting the advertised number is how a
+    system comes to be sold at 1:3 while realising 1:1.
+    """
+    wins = [r for r in rs if r > 0]
+    losses = [-r for r in rs if r < 0]
+    avg_win = statistics.fmean(wins) if wins else 0.0
+    avg_loss = statistics.fmean(losses) if losses else 0.0
+    return GeometryResult(
+        label=variant.label,
+        full_run_r=round(variant.settings(live).full_run_r, 2),
+        n=len(rs),
+        unresolved=unresolved,
+        mean_r=round(statistics.fmean(rs), 3) if rs else 0.0,
+        win_rate=round(len(wins) / len(rs) * 100, 1) if rs else 0.0,
+        avg_win_r=round(avg_win, 3),
+        avg_loss_r=round(avg_loss, 3),
+        breakeven_wr=round(avg_loss / (avg_win + avg_loss) * 100, 1)
+        if (avg_win + avg_loss) else 0.0,
+    )
+
+
+def compare_ladder_geometry(
+    tracker: Tracker,
+    variants: tuple[LadderVariant, ...] = LADDER_VARIANTS,
+    limit: int = 200,
+) -> dict:
+    """Re-cut the target ladder on already-resolved signals and re-grade them.
+
+    Answers the question the aggregate card raises and cannot settle: the
+    system is sold at 1:3 and realises about 1:1, the far rung almost never
+    fills, and it is not obvious whether the fix is a nearer ladder or a
+    heavier runner. Both are re-cut here on the same entries and the same
+    candles, so the answer comes from the trades rather than from an argument.
+
+    Two things this deliberately does not do. It does not move the stop, so
+    every variant carries the identical risk unit and the R columns compare
+    directly. And it does not invent entries — the detector fired where it
+    fired, and only the targets move.
+
+    The honest limit is settlement. A ladder reaching further takes longer to
+    fill, the fetched history is finite, and a trade still open at the end is
+    valued at the last close. That favours the wider geometries, so every row
+    reports how many of its trades were unsettled and the reader is told to
+    distrust a winner that carries many.
+    """
+    raw = tracker._store.read(OUTCOMES_KEY, default=[]) or []
+    from wolf.models import Signal
+
+    signals = [Signal.from_dict(d) for d in raw if isinstance(d, dict)][-limit:]
+    signals = [s for s in signals if Status(s.status).is_graded and s.tp_ladder]
+    signals = [s for s in signals if s.entry_price > 0 and s.sl > 0
+               and abs(s.entry_price - s.sl) > 0]
+    if not signals:
+        return {"error": "no graded signals with a usable risk unit", "results": []}
+
+    histories = []
+    for sig in signals:
+        try:
+            candles = _history(tracker, sig)
+        except Exception:
+            log.exception("History fetch failed for %s", sig.symbol)
+            candles = None
+        if candles:
+            histories.append((sig, candles))
+    if not histories:
+        return {"error": "no signal had price history reaching back to its entry",
+                "results": []}
+
+    live = tracker._ladder
+    probes = {
+        v.label: Tracker(tracker._store, tracker._client, tracker._settings,
+                         ladder=v.settings(live))
+        for v in variants
+    }
+    scored: dict[str, list[float]] = {v.label: [] for v in variants}
+    unresolved: dict[str, int] = {v.label: 0 for v in variants}
+    for sig, candles in histories:
+        # Every variant grades the same signal or none of them do, so the
+        # columns cannot drift apart on membership — the failure that once
+        # accounted for an entire apparent gap between two stop rules.
+        row = {}
+        for v in variants:
+            rungs = v.rungs_for(sig)
+            probe_sig = replace(sig, tp_ladder=rungs, tp=rungs[-1]["price"])
+            row[v.label] = _replay_one(probes[v.label], probe_sig, candles)
+        if any(r is None for r in row.values()):
+            continue
+        for label, replay in row.items():
+            scored[label].append(replay.r)
+            if not replay.resolved:
+                unresolved[label] += 1
+
+    n_scored = len(scored[variants[0].label])
+    if not n_scored:
+        return {"error": "no signal could be re-graded under every geometry",
+                "results": []}
+    base = variants[0].label
+    return {
+        "error": "",
+        "sample": len(signals),
+        "scored": n_scored,
+        "skipped": len(signals) - n_scored,
+        "results": [_summarise_geometry(v, live, scored[v.label], unresolved[v.label])
+                    for v in variants],
+        "paired": [_paired(base, v.label, scored[base], scored[v.label])
+                   for v in variants[1:]],
+    }
+
+
+def render_ladder(report: dict) -> str:
+    if report.get("error"):
+        return f"WHATIF ladder: {report['error']}"
+    lines = [
+        f"WHATIF ladder | scored {report['scored']} of {report['sample']} "
+        f"resolved signals ({report['skipped']} without usable history)",
+        "run=ceiling if every rung fills  need=WR this geometry must earn",
+        "open=trades the history never settled (valued at last close)",
+    ]
+    lines += [r.line() for r in report["results"]]
+    for p in report.get("paired", []):
+        lines.append(
+            f"vs {p['base']:<9} {p['rule']:<9} changed {p['changed']} "
+            f"(+{p['helped']}/-{p['hurt']}) diff={p['mean_diff']:+.4f}R t={p['t']:+.2f}"
+        )
+    results = report["results"]
+    base = results[0]
+    best = max(results, key=lambda r: r.mean_r)
+    gain = best.mean_r - base.mean_r
+    lines.append(
+        f"=> {best.label} beats the live geometry by {gain:+.3f}R/trade"
+        if gain > 0 else "=> nothing beats the live geometry"
+    )
+    # The settlement caveat attaches to whichever row is being read, and the
+    # live column is not exempt: when it wins while holding the most open
+    # positions, its own number is the one marked to the last close, and a
+    # warning that only fired for challengers would stay silent on exactly the
+    # reading most likely to be acted on — "leave it alone".
+    if best.unresolved:
+        if best.unresolved > base.unresolved:
+            lines.append(
+                f"   {best.label} left {best.unresolved - base.unresolved} more "
+                f"trade(s) unsettled than live, which flatters it — untested."
+            )
+        else:
+            lines.append(
+                f"   {best.label} is still holding {best.unresolved} unsettled "
+                f"trade(s), valued at the last close, not closed — untested."
+            )
+    lines.append("  the geometry is picked on the trades it is scored against;")
+    lines.append("  read the shape across variants, not the winning row.")
     return "\n".join(lines)
 
 
