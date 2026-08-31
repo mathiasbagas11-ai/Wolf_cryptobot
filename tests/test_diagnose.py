@@ -392,3 +392,116 @@ def test_a_genuinely_narrow_spread_is_left_alone(store, fake_client, tracker_set
     # SCALP is the whole sample here, so its spread is its own — untouched.
     assert scalp["sd_r"] == diag["overall"]["sd_r"]
     assert scalp["t"] == diag["overall"]["t"]
+
+
+# ── multiplicity control ────────────────────────────────────────────────────
+
+
+def _mixed_strategies(rows, names=("SCALP", "SWING", "MOMENTUM", "TRAP")) -> None:
+    """One bucket per strategy, each with a spread the t-statistic can read."""
+    n = 0
+    for name in names:
+        for i in range(12):
+            r = 1.5 if i % 3 else -1.0
+            _outcome(rows, r=r, strategy=name, n=n,
+                     status=Status.TP_HIT.value if r > 0 else Status.SL_HIT.value)
+            n += 1
+
+
+def test_every_printed_bucket_carries_an_adjusted_p(store, fake_client, tracker_settings):
+    """The correction has to reach the row, not just the module."""
+    rows = []
+    _mixed_strategies(rows)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+
+    for bucket in diag["by_strategy"].values():
+        assert "p_raw" in bucket and "p_adj" in bucket
+        assert bucket["p_adj"] >= bucket["p_raw"] - 1e-9
+        assert isinstance(bucket["fdr_survives"], bool)
+
+
+def test_the_pre_registered_question_stays_out_of_the_family(
+    store, fake_client, tracker_settings
+):
+    """``overall`` was fixed before any data arrived; the buckets are a search.
+
+    Penalising the one question the bot was built to answer for the dozen
+    subgroup splits it never ran would be the wrong correction applied to the
+    wrong hypothesis.
+    """
+    rows = []
+    _mixed_strategies(rows)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert "p_adj" not in diag["overall"]
+
+
+def test_a_wider_family_makes_the_same_bucket_harder_to_believe(
+    store, fake_client, tracker_settings
+):
+    """The finding the whole change exists to deliver.
+
+    An identical SCALP bucket, with identical trades and an identical t, comes
+    out less believable when it was one of four splits than when it was the
+    only one — because it was.
+    """
+    def _scalp_padj(extra_noise_buckets):
+        rows = []
+        n = 0
+        # The bucket under test: a consistent, convincing-looking SCALP sample.
+        for i in range(12):
+            r = 1.5 if i % 3 else -1.0
+            _outcome(rows, r=r, strategy="SCALP", n=n,
+                     status=Status.TP_HIT.value if r > 0 else Status.SL_HIT.value)
+            n += 1
+        # The other splits a reader scans past. Alternating +1/-1 is pure
+        # noise, so these contribute nothing but their own existence — which
+        # is exactly the cost multiplicity control is meant to charge.
+        for b in range(extra_noise_buckets):
+            for i in range(12):
+                r = 1.0 if i % 2 else -1.0
+                _outcome(rows, r=r, strategy=f"NOISE{b}", n=n,
+                         status=Status.TP_HIT.value if r > 0 else Status.SL_HIT.value)
+                n += 1
+        diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+        scalp = diag["by_strategy"]["SCALP"]
+        return scalp["p_adj"], scalp["t"], scalp["p_raw"]
+
+    alone_p, alone_t, alone_raw = _scalp_padj(0)
+    crowded_p, crowded_t, crowded_raw = _scalp_padj(5)
+
+    # The same trades, so the same statistic and the same uncorrected p.
+    assert alone_t == crowded_t
+    assert alone_raw == crowded_raw
+    # But a weaker claim once it is one of several splits that were looked at.
+    assert crowded_p > alone_p
+
+
+def test_a_bucket_with_no_degrees_of_freedom_claims_nothing(
+    store, fake_client, tracker_settings
+):
+    """One trade is not a finding, however extreme."""
+    rows = []
+    _outcome(rows, r=5.0, status=Status.TP_HIT.value, strategy="PREPUMP", n=0)
+    for i in range(12):
+        _outcome(rows, r=1.5 if i % 3 else -1.0, strategy="SCALP", n=i + 1,
+                 status=Status.TP_HIT.value if i % 3 else Status.SL_HIT.value)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+
+    prepump = diag["by_strategy"]["PREPUMP"]
+    assert prepump["n"] == 1
+    assert prepump["p_raw"] == 1.0
+    assert prepump["fdr_survives"] is False
+
+
+def test_the_digest_prints_the_adjusted_p_and_says_what_it_is(
+    store, fake_client, tracker_settings
+):
+    """A correction the reader has to remember to apply is not a correction."""
+    rows = []
+    _mixed_strategies(rows)
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "padj=" in digest
+    assert "fdr " in digest
+    assert "overall is not in the family" in digest

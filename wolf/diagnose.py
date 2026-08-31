@@ -36,6 +36,7 @@ from typing import Iterable, Optional
 
 from wolf.config import LadderSettings, state_is_persistent, volume_mount
 from wolf.models import Signal, Status
+from wolf.stats import DEFAULT_FDR, benjamini_hochberg, t_to_p
 from wolf.tracker import Tracker, _parse_iso, _risk_pct, r_multiple_of
 
 # A verdict needs both a real sample and a real signal-to-noise ratio.
@@ -230,6 +231,30 @@ def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0) -> dict:
     }
 
 
+def _apply_fdr(families: tuple[dict, ...], fdr: float = DEFAULT_FDR) -> None:
+    """Attach false-discovery-rate control across every bucket, in place.
+
+    The family is the set of buckets the digest prints, because that is the set
+    a reader actually scans. Each bucket's t is converted to a two-sided
+    p-value on its own degrees of freedom, the whole family goes through
+    Benjamini-Hochberg together, and each bucket carries away its raw p, its
+    adjusted p and whether it survives.
+
+    A bucket with fewer than two trades has no degrees of freedom and no
+    p-value to adjust; it is scored 1.0, which keeps it in the family — it was
+    still one of the rows on the card — without letting it claim anything.
+    """
+    buckets = [b for family in families for b in family.values()]
+    if not buckets:
+        return
+    raw = [t_to_p(b.get("t", 0.0), b.get("n", 0) - 1) for b in buckets]
+    rejected, adjusted = benjamini_hochberg(raw, fdr)
+    for bucket, p, adj, keep in zip(buckets, raw, adjusted, rejected):
+        bucket["p_raw"] = round(p, 4)
+        bucket["p_adj"] = round(adj, 4)
+        bucket["fdr_survives"] = bool(keep)
+
+
 def diagnose(
     tracker: Tracker,
     *,
@@ -380,6 +405,19 @@ def diagnose(
         if traded else 0.0
     )
 
+    # Multiplicity. Every bucket above carries its own t, and a reader scanning
+    # a dozen of them for the convincing one is running a dozen tests while
+    # judging each at the bar for a single test. At eleven buckets and p<0.05
+    # that manufactures about one apparent finding per digest out of pure
+    # noise. Adjusting them as one family puts the corrected number on the row,
+    # so the correction does not depend on the reader remembering to make it.
+    #
+    # ``overall`` is deliberately excluded. It is the one question the bot was
+    # built to answer, fixed before any data arrived; the buckets are a search
+    # across subgroups. Folding the pre-registered question into the family it
+    # was not part of would penalise it for tests it never ran.
+    _apply_fdr((by_strategy, by_whale_stance, by_onchain_bias))
+
     ladder = _ladder_economics(traded)
 
     flags = []
@@ -461,6 +499,21 @@ def diagnose(
     }
 
 
+def _fdr_col(bucket: dict) -> str:
+    """The bucket's multiplicity-adjusted p, formatted for the row.
+
+    Empty when no adjustment was made, so a digest built before the family
+    existed still renders rather than raising. A surviving bucket is marked
+    ``*`` — the only mark on the card that means "this one cleared the bar the
+    whole table was judged at", which is a different and much rarer claim than
+    the t beside it.
+    """
+    if "p_adj" not in bucket:
+        return ""
+    mark = "*" if bucket.get("fdr_survives") else " "
+    return f"padj={bucket['p_adj']:.3f}{mark} "
+
+
 def render_digest(diag: dict) -> str:
     """Render the diagnostic as a compact fixed-shape text block.
 
@@ -488,6 +541,7 @@ def render_digest(diag: dict) -> str:
         )
         lines.append(
             f"{'':<9} meanR={b['mean_r']:+.3f} sd={b['sd_r']:.2f} t={b['t']:+.2f} "
+            f"{_fdr_col(b)}"
             f"ci95=[{b['ci95'][0]:+.3f},{b['ci95'][1]:+.3f}] 1R={b['median_1r_pct']:.2f}% "
             f"cost={b.get('cost_r', 0):.2f}R netR={b['net_r']:+.3f} => {b['verdict']}"
         )
@@ -504,7 +558,7 @@ def render_digest(diag: dict) -> str:
                 # ("onchain:SUPPORTS_SHORT"), so the columns stay aligned.
                 f"{label + ':' + name:<22} n={b['n']} graded={b['graded']} "
                 f"wr={b['win_rate']:.1f} meanR={b['mean_r']:+.3f} t={b['t']:+.2f} "
-                f"=> {b['verdict']}"
+                f"{_fdr_col(b)}=> {b['verdict']}"
             )
 
     # Cross-tab, printed only when a whale stance actually varies within a
@@ -550,4 +604,13 @@ def render_digest(diag: dict) -> str:
         )
     if diag["flags"]:
         lines.append("flags    " + " ".join(diag["flags"]))
+    n_family = sum(
+        len(diag.get(k) or {})
+        for k in ("by_strategy", "by_whale_stance", "by_onchain_bias")
+    )
+    if n_family:
+        lines.append(
+            f"fdr      padj = p across all {n_family} buckets at FDR "
+            f"{DEFAULT_FDR:.2f} (* = survives); overall is not in the family"
+        )
     return "\n".join(lines)
