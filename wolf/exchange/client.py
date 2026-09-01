@@ -89,6 +89,14 @@ class MarketDataClient:
                 return depth
         return {}
 
+    def get_book_spread(self) -> dict[str, float]:
+        """Top-of-book spread (bps) per symbol from the first venue with one."""
+        for source in self._sources:
+            spread = source.get_book_spread()
+            if spread:
+                return spread
+        return {}
+
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
         for source in self._ordered(symbol):
             trades = source.get_recent_trades(symbol, limit)

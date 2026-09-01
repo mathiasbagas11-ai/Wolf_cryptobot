@@ -61,6 +61,7 @@ def _report_stats(app: Application, window_hours: int) -> None:
             app.tracker,
             window_hours=window_hours,
             round_trip_bps=app.settings.round_trip_cost_bps,
+            taker_fee_bps=app.settings.taker_fee_bps,
             tp1_banks_win=app.settings.tracker.tp1_banks_win,
             state_dir=app.settings.state_dir,
             ai_available=ai_status(app)["available"],

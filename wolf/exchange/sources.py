@@ -114,6 +114,21 @@ class ExchangeSource(ABC):
         """
         return {}
 
+    def get_book_spread(self) -> dict[str, float]:
+        """Top-of-book spread per symbol, in basis points of the mid.
+
+        The other half of the same book ticker :meth:`get_book_depth` reads,
+        and the half that decides what a round trip costs: a taker buys at the
+        ask and sells at the bid, so the full spread is paid once per trade,
+        on top of both fees.
+
+        Kept separate from the depth figure because the two answer different
+        questions and only one of them is a cost. Venues without an
+        all-symbols book ticker return ``{}``, and callers fall back to the
+        configured constant rather than inventing a spread.
+        """
+        return {}
+
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
         """Recent public trades ``[{id, symbol, price, qty, usd, side, time}]``.
 
@@ -200,6 +215,34 @@ class BinanceSource(ExchangeSource):
                 continue
             if depth > 0:
                 out[r["symbol"]] = depth
+        return out
+
+    def get_book_spread(self) -> dict[str, float]:
+        # Same one request as get_book_depth; the payload carries both.
+        return self.parse_book_spread(self._get_json(f"{self._base}/ticker/bookTicker", {}))
+
+    @staticmethod
+    def parse_book_spread(payload) -> dict[str, float]:
+        """Best ask minus best bid, in basis points of the mid, per symbol.
+
+        A crossed or locked book (ask at or below bid) is dropped rather than
+        reported as zero or negative: it means the snapshot caught the venue
+        mid-update, and a zero spread would read as a free round trip.
+        """
+        if not isinstance(payload, list):
+            return {}
+        out: dict[str, float] = {}
+        for r in payload:
+            try:
+                bid = float(r["bidPrice"])
+                ask = float(r["askPrice"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if bid <= 0 or ask <= bid:
+                continue
+            mid = (bid + ask) / 2
+            out[r["symbol"]] = (ask - bid) / mid * 10_000
+
         return out
 
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:

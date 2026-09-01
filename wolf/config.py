@@ -739,6 +739,11 @@ class Settings:
     # looks: targets are ATR multiples, so 1R is often well under 1% and 20bps
     # can be a third of the risk unit.
     round_trip_cost_bps: float = 20.0
+    # Taker fee per side, in bps. Used only where a signal recorded the spread
+    # it actually faced: the round trip is then two fees plus one full spread
+    # (buy the ask, sell the bid), measured rather than assumed. Signals with
+    # no recorded spread keep using round_trip_cost_bps above.
+    taker_fee_bps: float = 5.0
 
     # Refuse a signal whose stop sits so close that the round trip eats more
     # than this fraction of 1R. A stop 0.12% from entry pays 1.67R in fees at
@@ -991,6 +996,7 @@ class Settings:
             tracker_interval_min=_env_int("TRACKER_INTERVAL_MIN", 5),
             stats_report_hours=_env_int("STATS_REPORT_HOURS", 24),
             round_trip_cost_bps=_env_float("ROUND_TRIP_COST_BPS", 20.0),
+            taker_fee_bps=_env_float("TAKER_FEE_BPS", 5.0),
             max_cost_r=_env_float("MAX_COST_R", 0.5),
             max_chase_r=_env_float("MAX_CHASE_R", 0.5),
             api_host=_env_str("API_HOST", "0.0.0.0"),

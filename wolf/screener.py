@@ -665,6 +665,19 @@ class Screener:
             bits.append(f"usdtd_24h={ctx.usdtd_change_24h:+.2f}%")
         return " ".join(bits)
 
+    def _book_spreads(self) -> dict[str, float]:
+        """Top-of-book spread (bps) per symbol, or ``{}`` if unavailable.
+
+        Never raises: a book ticker that fails is a missing measurement, not a
+        reason to skip a scan cycle. The signals emitted meanwhile record no
+        spread and are counted as uncovered.
+        """
+        try:
+            return self._client.get_book_spread() or {}
+        except Exception:
+            log.warning("Book spread unavailable this cycle", exc_info=True)
+            return {}
+
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""
         recorded = []
@@ -678,6 +691,12 @@ class Screener:
         ctx = self._current_context()
         regime = ctx.trend
         weak = self._weak_strategies()
+        # One book-ticker request covers every symbol, so the spread snapshot
+        # is cycle-wide like the rest of the state above. A venue that serves
+        # no book ticker yields {} and every signal this cycle records no
+        # spread, which the diagnostic reports as uncovered rather than
+        # silently charging it the configured constant.
+        spreads = self._book_spreads()
         active_by_strategy, active_by_direction = self._active_counts()
         for symbol in self.current_universe():
             series = self._fetch_series(symbol)
@@ -688,6 +707,7 @@ class Screener:
             candidate = self._best_candidate(symbol, series, context)
             if not candidate:
                 continue
+            candidate.spread_bps = spreads.get(symbol)
             if not self._apply_learning(candidate):
                 continue
             if self._gate_candidate(candidate, regime, weak):
@@ -735,6 +755,9 @@ class Screener:
                 bounce_flagged=candidate.bounce_flagged,
                 risk_scale=candidate.risk_scale,
                 entry_quoted_live=candidate.entry_quoted_live,
+                # What the round trip actually costs on this symbol, as
+                # quoted when the signal fired. See Signal.spread_bps.
+                spread_bps=candidate.spread_bps,
                 # On-chain context as it stood when the signal fired. Recorded
                 # for later analysis, not acted on — the whale veto above is the
                 # only one of these with teeth today, and whether the others

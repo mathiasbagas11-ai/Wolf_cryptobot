@@ -152,6 +152,7 @@ class CommandRouter:
                 self._app.tracker,
                 window_hours=hours,
                 round_trip_bps=self._app.settings.round_trip_cost_bps,
+                taker_fee_bps=self._app.settings.taker_fee_bps,
                 tp1_banks_win=self._app.settings.tracker.tp1_banks_win,
                 state_dir=self._app.settings.state_dir,
                 ai_available=ai_status(self._app)["available"],

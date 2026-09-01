@@ -319,6 +319,7 @@ class Tracker:
         bounce_flagged: bool = False,
         risk_scale: float = 1.0,
         entry_quoted_live: bool = False,
+        spread_bps: Optional[float] = None,
         onchain_bias: str = "",
         whale_stance: str = "",
         whale_net_wallets: int = 0,
@@ -394,6 +395,7 @@ class Tracker:
             bounce_flagged=bounce_flagged,
             risk_scale=risk_scale,
             entry_quoted_live=entry_quoted_live,
+            spread_bps=spread_bps,
         )
 
         dedup_min = self._settings.dedup_for(signal.signal_type)

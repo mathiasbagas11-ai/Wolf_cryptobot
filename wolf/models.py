@@ -243,6 +243,20 @@ class Signal:
     # created_at, rather than from the last closed bar of the timeframe.
     entry_quoted_live: bool = False
 
+    # Top-of-book spread at signal time, in basis points of the mid.
+    #
+    # The cost of a round trip is two fees plus one full spread — a taker buys
+    # the ask and sells the bid — and only the fees are the same on every
+    # symbol. BTC quotes well under a basis point while a coin that has just
+    # rotated into the volume-ranked universe can quote ten, so charging the
+    # whole book one configured constant models a 10-20x range as a point.
+    #
+    # Recorded at signal time because that is the only moment it is knowable:
+    # read off a later snapshot it would describe a market the trade never saw.
+    # ``None`` means the venue served no book ticker, and the reader falls back
+    # to the configured constant rather than to a made-up number.
+    spread_bps: Optional[float] = None
+
     # On-chain context as it stood *at signal time*. Recorded, never acted on:
     # none of these gate anything except whale_coordination, and the point of
     # storing them is to find out whether they should. Reading them off a later

@@ -51,6 +51,10 @@ class SignalCandidate:
     #: Interval the setup was read on — carried through so the signal card can
     #: say how long the trade is meant to be held.
     timeframe: str = "15m"
+    #: Top-of-book spread (bps) as the screener saw it this cycle. Set by the
+    #: Screener, not the detector: it is a property of the venue at that
+    #: moment, not of the setup.
+    spread_bps: Optional[float] = None
     # Populated by Screener after the AI debate runs (monitor mode).
     ai_verdict: str = ""
     ai_confidence: int = 0

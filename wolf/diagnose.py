@@ -231,6 +231,48 @@ def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0) -> dict:
     }
 
 
+def _measured_cost(rows: list, taker_fee_bps: float) -> dict:
+    """Round-trip cost priced from the spread each signal actually faced.
+
+    A round trip is two taker fees plus one full spread — the position is
+    opened at the ask and closed at the bid — and only the fees are the same
+    on every symbol. The configured constant charges the whole book one
+    number, which models a range spanning better than a basis point on BTC to
+    ten on a freshly-rotated alt as a single point.
+
+    Reported *alongside* the constant-based figure rather than replacing it.
+    The sample straddles the change: signals booked before the spread was
+    recorded carry none, and quietly re-pricing the old ones against a number
+    they never saw would move every figure on the card mid-measurement, which
+    is the era break this report has already had to drop a sample over once.
+
+    Cost is averaged per trade rather than taken at the median risk, because
+    expectancy is a mean and it is the mean that ``netR`` subtracts.
+
+    Returns ``{}`` when nothing in the sample carries a spread.
+    """
+    priced = [
+        (o, o.spread_bps, risk)
+        for o in rows
+        if getattr(o, "spread_bps", None) is not None
+        and (risk := _risk_pct(o)) > 0
+    ]
+    if not priced:
+        return {"covered": 0, "sample": len(rows)}
+
+    spreads = [s for _, s, _ in priced]
+    costs = [((2 * taker_fee_bps + s) / 100.0) / risk for _, s, risk in priced]
+    return {
+        "covered": len(priced),
+        "sample": len(rows),
+        "median_spread_bps": round(statistics.median(spreads), 2),
+        "min_spread_bps": round(min(spreads), 2),
+        "max_spread_bps": round(max(spreads), 2),
+        "median_round_trip_bps": round(2 * taker_fee_bps + statistics.median(spreads), 2),
+        "cost_r": round(statistics.fmean(costs), 3),
+    }
+
+
 def _apply_fdr(families: tuple[dict, ...], fdr: float = DEFAULT_FDR) -> None:
     """Attach false-discovery-rate control across every bucket, in place.
 
@@ -260,6 +302,7 @@ def diagnose(
     *,
     window_hours: Optional[float] = None,
     round_trip_bps: float = 20.0,
+    taker_fee_bps: float = 5.0,
     tp1_banks_win: bool = False,
     state_dir: str = "",
     ai_available: Optional[bool] = None,
@@ -478,6 +521,8 @@ def diagnose(
             "round_trip_bps": round_trip_bps,
             "median_1r_pct": round(median_1r, 3),
             "cost_r": round(cost_r, 3),
+            "measured": _measured_cost(traded, taker_fee_bps),
+            "taker_fee_bps": taker_fee_bps,
         },
         "overall": overall,
         "ladder": ladder,
@@ -497,6 +542,34 @@ def diagnose(
             "conclusive_t": CONCLUSIVE_T,
         },
     }
+
+
+def _measured_cost_lines(cost: dict) -> list[str]:
+    """The spread-priced cost, when any of the sample carries a spread.
+
+    Prints the range as well as the middle. A median alone would hide the very
+    thing the measurement was added to expose: that one configured constant is
+    standing in for symbols whose real spreads differ by an order of
+    magnitude.
+    """
+    m = cost.get("measured") or {}
+    covered, sample = m.get("covered", 0), m.get("sample", 0)
+    if not covered:
+        # Say nothing at all only when the field has never been populated;
+        # once collection starts, silence would read as "no difference found".
+        return [] if not sample else [
+            f"spread   no signal in this window recorded a spread "
+            f"(0/{sample}) — cost above is the configured constant"
+        ]
+    return [
+        f"spread   {m['median_spread_bps']:.2f}bps median "
+        f"[{m['min_spread_bps']:.2f}..{m['max_spread_bps']:.2f}] "
+        f"over {covered}/{sample} signals",
+        f"         + 2x{cost['taker_fee_bps']:g}bps taker => "
+        f"{m['median_round_trip_bps']:.2f}bps round trip, "
+        f"measured cost={m['cost_r']:.3f}R "
+        f"(assumed {cost['cost_r']:.3f}R)",
+    ]
 
 
 def _fdr_col(bucket: dict) -> str:
@@ -528,6 +601,7 @@ def render_digest(diag: dict) -> str:
         f"sample   traded={s['traded']} graded={s['graded']} flat={s['flat']} "
         f"invalid={s['invalidated']} unpriced={s['unpriced']}",
         f"cost     {c['round_trip_bps']:g}bps / 1R={c['median_1r_pct']:.2f}% => {c['cost_r']:.3f}R",
+        *_measured_cost_lines(c),
         f"overall  meanR={o['mean_r']:+.3f} sdR={o['sd_r']:.2f} n={o['n']} se={o['se_r']:.3f} "
         f"t={o['t']:+.2f} ci95=[{o['ci95'][0]:+.3f},{o['ci95'][1]:+.3f}]",
         f"         netR={o['net_r']:+.3f}  => {o['verdict']}",
