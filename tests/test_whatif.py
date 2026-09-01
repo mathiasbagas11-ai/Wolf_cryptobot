@@ -104,7 +104,9 @@ def test_the_comparison_scores_both_rules_on_the_same_trades(store, fake_client)
     scores = {r.rule: r.mean_r for r in report["results"]}
     assert scores["breakeven"] == 1.1
     assert scores["ladder"] == 1.3
-    assert "ladder beats the live rule (breakeven) by +0.200R/trade" in render(report)
+    # One trade cannot clear a corrected bar, so the card reports the ranking
+    # and refuses the verdict — measured, as always, against the live rule.
+    assert "ladder has the best mean (+0.200R/trade vs breakeven)" in render(report)
 
 
 def test_an_empty_history_says_so_rather_than_reporting_zero(store, fake_client):
@@ -163,7 +165,7 @@ def test_the_endpoint_renders_the_comparison(store, fake_client):
     client = TestClient(create_app(app_obj))
     body = client.get("/whatif/stops").text
     assert "breakeven" in body and "ladder" in body
-    assert "ladder beats the live rule (breakeven) by +0.200R/trade" in body
+    assert "ladder has the best mean (+0.200R/trade vs breakeven)" in body
 
 
 # ── Telegram commands ───────────────────────────────────────────────────────
@@ -188,7 +190,7 @@ def test_whatif_is_reachable_as_a_telegram_command(store, fake_client):
     _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
     reply = CommandRouter(_router_app(store, fake_client)).handle("/whatif")
     assert "breakeven" in reply and "ladder" in reply
-    assert "ladder beats the live rule (breakeven) by +0.200R/trade" in reply
+    assert "ladder has the best mean (+0.200R/trade vs breakeven)" in reply
 
 
 def test_diag_is_reachable_as_a_telegram_command(store, fake_client):
@@ -324,7 +326,7 @@ def test_the_headline_measures_against_the_rule_in_force(store, fake_client):
 
     text = render(report)
     gain = round(scores["ladder"] - scores["breakeven"], 3)
-    assert f"beats the live rule (breakeven) by {gain:+.3f}R/trade" in text
+    assert f"{gain:+.3f}R/trade vs breakeven" in text
     # The gap to the rule nobody is running must not appear as the headline.
     assert f"{scores['ladder'] - scores['none']:+.3f}R/trade" not in text
 

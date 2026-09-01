@@ -22,6 +22,7 @@ from typing import Optional
 
 from wolf.config import LadderSettings, TrackerSettings
 from wolf.models import Status
+from wolf.stats import DEFAULT_FDR, benjamini_hochberg, t_to_p
 from wolf.tracker import (
     OUTCOMES_KEY, Tracker, _parse_iso, _partial_pnl, _replay_start_ms, _resolved_at,
     _risk_pct, normalize_ladder, r_multiple_of,
@@ -210,14 +211,16 @@ def compare_stop_rules(
     n_scored = len(next(iter(scored.values()))) if scored else 0
     if not n_scored:
         return {"error": "no signal could be re-graded under every rule", "results": []}
+    paired = [_paired(rules[0], rule, scored[rules[0]], scored[rule])
+              for rule in rules[1:]]
+    _adjust_paired(paired)
     return {
         "error": "",
         "sample": len(signals),
         "scored": n_scored,
         "skipped": len(signals) - n_scored,
         "results": [_summarise(rule, scored[rule]) for rule in rules],
-        "paired": [_paired(rules[0], rule, scored[rules[0]], scored[rule])
-                   for rule in rules[1:]],
+        "paired": paired,
     }
 
 
@@ -240,12 +243,44 @@ def _paired(base: str, rule: str, a: list[float], b: list[float]) -> dict:
     return {
         "base": base,
         "rule": rule,
+        "n": len(diffs),
         "changed": len(changed),
         "helped": sum(1 for d in changed if d > 0),
         "hurt": sum(1 for d in changed if d < 0),
         "mean_diff": round(mean, 4),
         "t": round(mean / se, 2) if se else 0.0,
     }
+
+
+def _adjust_paired(paired: list[dict], fdr: float = DEFAULT_FDR) -> None:
+    """Control the false discovery rate across the whole comparison table.
+
+    Every row on one of these cards is a separate test against the same
+    baseline, and a reader picking the best-looking row is choosing a maximum
+    while judging it at the bar for a single comparison. Six ladder variants
+    make five such tests, which is a 23% chance of at least one row clearing
+    p<0.05 with nothing behind it.
+
+    Correcting here rather than leaving it to the reader for the same reason
+    the digest does: a rule that depends on being remembered is not a control.
+    The rows are paired against a common base and therefore not independent,
+    which Benjamini-Hochberg tolerates -- it holds under positive dependence,
+    which is the direction shared-baseline comparisons lean.
+    """
+    if not paired:
+        return
+    raw = [t_to_p(row.get("t", 0.0), row.get("n", 0) - 1) for row in paired]
+    rejected, adjusted = benjamini_hochberg(raw, fdr)
+    for row, p_adj, keep in zip(paired, adjusted, rejected):
+        row["p_adj"] = round(p_adj, 4)
+        row["fdr_survives"] = bool(keep)
+
+
+def _padj(row: dict) -> str:
+    """The row's multiplicity-adjusted p, or nothing when unadjusted."""
+    if "p_adj" not in row:
+        return ""
+    return f"padj={row['p_adj']:.3f}{'*' if row.get('fdr_survives') else ''}"
 
 
 def render(report: dict) -> str:
@@ -259,7 +294,8 @@ def render(report: dict) -> str:
     for p in report.get("paired", []):
         lines.append(
             f"vs {p['base']:<9} {p['rule']}: changed {p['changed']} trade(s) "
-            f"(+{p['helped']}/-{p['hurt']}) diff={p['mean_diff']:+.4f}R t={p['t']:+.2f}"
+            f"(+{p['helped']}/-{p['hurt']}) diff={p['mean_diff']:+.4f}R "
+            f"t={p['t']:+.2f} {_padj(p)}"
         )
     # Measured against the rule in force, not against the worst of the set.
     # Best-minus-worst credited "ladder" with +0.130R by subtracting "none",
@@ -268,10 +304,22 @@ def render(report: dict) -> str:
     base = results[0]
     best = max(results, key=lambda r: r.mean_r)
     gain = best.mean_r - base.mean_r
-    lines.append(
-        f"=> {best.rule} beats the live rule ({base.rule}) by {gain:+.3f}R/trade"
-        if gain > 0 else f"=> nothing beats the live rule ({base.rule})"
+    survivor = next(
+        (p for p in report.get("paired", [])
+         if p["rule"] == best.rule and p.get("fdr_survives")), None
     )
+    if gain <= 0:
+        lines.append(f"=> nothing beats the live rule ({base.rule})")
+    elif survivor is not None:
+        lines.append(
+            f"=> {best.rule} beats the live rule ({base.rule}) "
+            f"by {gain:+.3f}R/trade, and survives the comparison"
+        )
+    else:
+        lines.append(
+            f"=> {best.rule} has the best mean ({gain:+.3f}R/trade vs "
+            f"{base.rule}), but does not survive the comparison"
+        )
     return "\n".join(lines)
 
 
@@ -474,6 +522,9 @@ def compare_ladder_geometry(
         return {"error": "no signal could be re-graded under every geometry",
                 "results": []}
     base = variants[0].label
+    paired = [_paired(base, v.label, scored[base], scored[v.label])
+              for v in variants[1:]]
+    _adjust_paired(paired)
     return {
         "error": "",
         "sample": len(signals),
@@ -481,8 +532,7 @@ def compare_ladder_geometry(
         "skipped": len(signals) - n_scored,
         "results": [_summarise_geometry(v, live, scored[v.label], unresolved[v.label])
                     for v in variants],
-        "paired": [_paired(base, v.label, scored[base], scored[v.label])
-                   for v in variants[1:]],
+        "paired": paired,
     }
 
 
@@ -499,16 +549,34 @@ def render_ladder(report: dict) -> str:
     for p in report.get("paired", []):
         lines.append(
             f"vs {p['base']:<9} {p['rule']:<9} changed {p['changed']} "
-            f"(+{p['helped']}/-{p['hurt']}) diff={p['mean_diff']:+.4f}R t={p['t']:+.2f}"
+            f"(+{p['helped']}/-{p['hurt']}) diff={p['mean_diff']:+.4f}R "
+            f"t={p['t']:+.2f} {_padj(p)}"
         )
     results = report["results"]
     base = results[0]
     best = max(results, key=lambda r: r.mean_r)
     gain = best.mean_r - base.mean_r
-    lines.append(
-        f"=> {best.label} beats the live geometry by {gain:+.3f}R/trade"
-        if gain > 0 else "=> nothing beats the live geometry"
+    survivor = next(
+        (p for p in report.get("paired", [])
+         if p["rule"] == best.label and p.get("fdr_survives")), None
     )
+    if gain <= 0:
+        lines.append("=> nothing beats the live geometry")
+    elif survivor is not None:
+        lines.append(
+            f"=> {best.label} beats the live geometry by {gain:+.3f}R/trade, "
+            f"and survives the {len(report.get('paired', []))}-way comparison"
+        )
+    else:
+        # The best mean on a card of six is a maximum, and a maximum is
+        # positive under a null. Saying "beats" without the qualifier is how
+        # a table of noise turns into a change.
+        lines.append(
+            f"=> {best.label} has the best mean ({gain:+.3f}R/trade vs live), "
+            f"but no variant survives the "
+            f"{len(report.get('paired', []))}-way comparison — this is a "
+            f"ranking, not a finding"
+        )
     # The settlement caveat attaches to whichever row is being read, and the
     # live column is not exempt: when it wins while holding the most open
     # positions, its own number is the one marked to the last close, and a
