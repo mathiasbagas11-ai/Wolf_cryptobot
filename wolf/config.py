@@ -25,8 +25,23 @@ except Exception:  # pragma: no cover - dotenv missing is non-fatal
 
 
 def _env_str(name: str, default: str = "") -> str:
+    """An environment string, trimmed, falling back when unset or blank.
+
+    Trimming is not cosmetic. Several of these values are truthiness-tested to
+    pick between alternatives — ``_first(flow_thread_id, news_thread_id)`` is
+    the routing chain — and a variable holding only spaces is truthy. Pasted
+    into a deployment's variable editor, a stray space or newline therefore
+    wins the chain, is sent to the provider, is rejected, and the message
+    falls back to the main channel with only a log line to say so.
+
+    ``_env_int`` and ``_env_csv`` have always trimmed; this one had not, and
+    the inconsistency was the whole bug.
+    """
     val = os.environ.get(name)
-    return val if val is not None else default
+    if val is None:
+        return default
+    val = val.strip()
+    return val if val else default
 
 
 def _env_int(name: str, default: int) -> int:
@@ -245,7 +260,16 @@ class TelegramSettings:
 
 
 def _first(*values: str) -> str:
+    """First non-blank value, trimmed — the routing chain's only rule.
+
+    Blank means blank after trimming: a thread id of "  " is not a route, it
+    is a typo, and treating it as one lets it beat the real topic behind it in
+    the chain. ``_env_str`` already trims what comes from the environment;
+    trimming here as well means the invariant holds however the settings were
+    built, including straight from a dataclass in a test.
+    """
     for v in values:
+        v = (v or "").strip()
         if v:
             return v
     return ""

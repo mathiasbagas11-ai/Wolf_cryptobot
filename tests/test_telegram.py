@@ -462,3 +462,50 @@ def test_a_fully_routed_deployment_adds_no_line(monkeypatch):
 
     n.notify_startup({"sources": ["binance"], "detectors": ["SCALP"], "unrouted": ""})
     assert "Into this channel" not in sent[0][0]
+
+
+def test_a_thread_id_of_only_whitespace_does_not_win_the_routing_chain(monkeypatch):
+    """The bug: a stray space in a variable editor silently reroutes to General.
+
+    ``_first`` picks the first truthy value, and "  " is truthy. So a
+    FLOW_THREAD_ID holding nothing but a space beat a perfectly good
+    NEWS_THREAD_ID, was sent to Telegram, was rejected, and every Flow digest
+    fell back to the main channel — with only a log line to say why.
+    """
+    from wolf.config import TelegramSettings, _env_str
+
+    monkeypatch.setenv("FLOW_THREAD_ID", "   ")
+    monkeypatch.setenv("NEWS_THREAD_ID", "42")
+    assert _env_str("FLOW_THREAD_ID") == ""
+    assert _env_str("NEWS_THREAD_ID") == "42"
+
+    s = TelegramSettings(bot_token="t", chat_id="c",
+                         flow_thread_id=_env_str("FLOW_THREAD_ID"),
+                         news_thread_id=_env_str("NEWS_THREAD_ID"))
+    assert s.route_flow() == "42"
+
+
+def test_a_padded_thread_id_is_trimmed_rather_than_sent_as_is(monkeypatch):
+    """Telegram rejects "42\\n"; the id was right and the whitespace was not."""
+    from wolf.config import _env_str
+
+    monkeypatch.setenv("NEWS_THREAD_ID", " 42\n")
+    assert _env_str("NEWS_THREAD_ID") == "42"
+
+
+def test_a_blank_value_falls_back_to_the_default(monkeypatch):
+    """Set-but-empty must read as unset, the way _env_int already treats it."""
+    from wolf.config import _env_str
+
+    monkeypatch.setenv("SOME_SETTING", "  ")
+    assert _env_str("SOME_SETTING", "fallback") == "fallback"
+
+
+def test_the_routing_chain_ignores_a_blank_id_however_it_was_built():
+    """Not only from the environment: the invariant holds at the dataclass too."""
+    from wolf.config import TelegramSettings
+
+    s = TelegramSettings(bot_token="t", chat_id="c",
+                         flow_thread_id="  ", news_thread_id="42")
+    assert s.route_flow() == "42"
+    assert "Flow Intelligence" not in s.unrouted_destinations()
