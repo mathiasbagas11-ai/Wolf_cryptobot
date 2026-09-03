@@ -74,6 +74,9 @@ class TelegramNotifier:
         self._timeout = timeout
         self._tz = tz
         self._session = session or requests.Session()
+        #: Thread ids already reported as unusable, so a rejected topic is
+        #: announced once rather than on every message it misroutes.
+        self._announced_fallbacks: set[str] = set()
         self._risk = risk
         self._account = account
         self._risk_pct = risk_pct
@@ -96,8 +99,33 @@ class TelegramNotifier:
             log.warning(
                 "thread=%s invalid (%s) — falling back to main channel", thread_id, desc
             )
+            self._announce_fallback(thread_id, desc)
             ok, _desc, _mid = self._post(text, "")
         return ok
+
+    def _announce_fallback(self, thread_id: str, desc: str) -> None:
+        """Say once, in the channel it is landing in, why it is landing there.
+
+        The retry keeps a message from being lost, which is right, and makes
+        the misrouting invisible, which is not: a recurring digest whose topic
+        the provider rejects simply becomes the main channel's feed, and the
+        only account of it is a log line. Every reading of "why is this here"
+        then has to be a guess.
+
+        Once per thread id per process, matching what the startup probe does
+        for a configured topic — reported once instead of on every message.
+        The startup probe cannot cover this case anyway: a topic can be closed,
+        deleted, or the bot removed from it long after boot.
+        """
+        if thread_id in self._announced_fallbacks:
+            return
+        self._announced_fallbacks.add(thread_id)
+        self._post(
+            f"⚠️ <b>Topic unavailable</b> — thread <code>{esc(thread_id)}</code> "
+            f"rejected: <code>{esc(desc or 'unknown')}</code>\n"
+            f"Messages routed there are landing here until it is fixed.",
+            "",
+        )
 
     @staticmethod
     def _is_bad_thread(description: str) -> bool:

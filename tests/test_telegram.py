@@ -509,3 +509,51 @@ def test_the_routing_chain_ignores_a_blank_id_however_it_was_built():
                          flow_thread_id="  ", news_thread_id="42")
     assert s.route_flow() == "42"
     assert "Flow Intelligence" not in s.unrouted_destinations()
+
+
+def test_a_rejected_topic_is_announced_once_in_the_channel_it_lands_in(monkeypatch):
+    """The retry must not make the misrouting invisible.
+
+    Falling back keeps the message from being lost, which is right. Saying
+    nothing turns a rejected topic into a permanent, unexplained reroute — a
+    recurring digest quietly becomes the main channel's feed and every reading
+    of "why is this here" has to be a guess.
+    """
+    from wolf.config import TelegramSettings
+    from wolf.notify.telegram import TelegramNotifier
+
+    posts: list[tuple[str, str]] = []
+
+    n = TelegramNotifier(TelegramSettings(bot_token="t", chat_id="c",
+                                          news_thread_id="42"))
+
+    def fake_post(text, thread_id=""):
+        posts.append((text, thread_id))
+        if thread_id:
+            return False, "Bad Request: message thread not found", None
+        return True, "", 1
+
+    monkeypatch.setattr(n, "_post", fake_post)
+
+    assert n.send("first digest", "42") is True
+    notice = [t for t, thread in posts if "Topic unavailable" in t]
+    assert len(notice) == 1
+    assert "42" in notice[0]
+    assert "message thread not found" in notice[0]
+
+    # A second message through the same broken topic must not repeat the notice.
+    n.send("second digest", "42")
+    assert len([t for t, _ in posts if "Topic unavailable" in t]) == 1
+
+
+def test_a_working_topic_announces_nothing(monkeypatch):
+    from wolf.config import TelegramSettings
+    from wolf.notify.telegram import TelegramNotifier
+
+    posts: list[tuple[str, str]] = []
+    n = TelegramNotifier(TelegramSettings(bot_token="t", chat_id="c"))
+    monkeypatch.setattr(n, "_post",
+                        lambda text, thread_id="": (posts.append((text, thread_id)), (True, "", 1))[1])
+
+    n.send("digest", "42")
+    assert not any("Topic unavailable" in t for t, _ in posts)
