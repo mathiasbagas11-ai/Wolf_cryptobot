@@ -21,8 +21,18 @@ from wolf.scheduler import build_scheduler
 log = logging.getLogger("wolf.main")
 
 
-def _risk_gates_label(risk) -> str:
-    """One-line summary of the active risk gates for the startup message."""
+def _risk_gates_label(settings) -> str:
+    """One-line summary of the active risk gates for the startup message.
+
+    Every gate that decides whether a signal is emitted belongs here, and the
+    cost gate belongs here most of all: it is the one with the largest effect
+    on volume, and the only way to tell it is set is to read the number it was
+    set to. A ``MAX_COST_R`` that never reached the container leaves the code
+    default in force, the setups it was meant to reject keep arriving, and the
+    intent and the reality agree nowhere on the card. Same failure the AI
+    label already guards against, one setting over.
+    """
+    risk = settings.risk
     parts = []
     if risk.regime_filter_enabled:
         mode = "hard" if risk.regime_hard_block else "monitor"
@@ -36,6 +46,14 @@ def _risk_gates_label(risk) -> str:
     ap_mode = "hard" if risk.autopause_hard_block else "monitor"
     parts.append(
         f"autopause<{risk.autopause_min_expectancy_r:+.2f}R/{risk.autopause_min_trades}({ap_mode})"
+    )
+    # Quoted with the minimum risk unit it implies, because that is the form
+    # the number can be checked in: it reads straight against the 1R column
+    # the diagnostic already prints for every strategy.
+    max_cost_r = settings.max_cost_r
+    floor = (settings.round_trip_cost_bps / 100.0) / max_cost_r if max_cost_r else 0.0
+    parts.append(
+        f"cost≤{max_cost_r:.2f}R(1R≥{floor:.2f}%)" if floor else "cost(off)"
     )
     return " · ".join(parts)
 
@@ -135,7 +153,7 @@ def main() -> None:
         # client abstains on every signal while the card still reads MONITOR.
         # That is how a run of 29/29 ABSTAIN went unnoticed.
         "ai_mode": _ai_mode_label(ai),
-        "risk_gates": _risk_gates_label(settings.risk),
+        "risk_gates": _risk_gates_label(settings),
         "state": _state_label(application),
     })
 

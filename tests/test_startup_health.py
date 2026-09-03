@@ -139,3 +139,35 @@ def test_diagnostic_is_quiet_when_state_sits_on_the_volume(tmp_path):
         diag = _diag("/data/state_data", tmp_path)
     assert "STATE_NOT_PERSISTED" not in diag["flags"]
     assert diag["state_persistent"] is True
+
+
+def test_the_startup_card_names_the_cost_gate_and_the_risk_unit_it_implies():
+    """The gate with the largest effect on volume must be on the boot card.
+
+    A MAX_COST_R that never reached the container leaves the code default in
+    force, and the setups the new threshold was meant to reject keep arriving
+    with nothing on any card to say which threshold applied. The boot message
+    fires on every deploy, so it is the earliest place the discrepancy can
+    surface.
+    """
+    from wolf.config import Settings
+    from wolf.main import _risk_gates_label
+
+    tight = _risk_gates_label(Settings(max_cost_r=0.15, round_trip_cost_bps=20.0))
+    loose = _risk_gates_label(Settings(max_cost_r=0.5, round_trip_cost_bps=20.0))
+
+    # Quoted as the minimum risk unit, the form it can be checked in against
+    # the 1R column the diagnostic prints per strategy.
+    assert "cost≤0.15R(1R≥1.33%)" in tight
+    assert "cost≤0.50R(1R≥0.40%)" in loose
+    assert tight != loose
+
+
+def test_the_startup_card_still_names_the_other_gates():
+    """Adding the cost gate must not displace the ones already reported."""
+    from wolf.config import Settings
+    from wolf.main import _risk_gates_label
+
+    label = _risk_gates_label(Settings())
+    assert "autopause" in label
+    assert "drawdown" in label
