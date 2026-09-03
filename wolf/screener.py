@@ -692,7 +692,10 @@ class Screener:
             self._record_spread_status(f"ERROR/{type(exc).__name__}: {exc}"[:200])
             return {}
         if not spreads:
-            self._record_spread_status("EMPTY: no venue served a book ticker")
+            tried = ", ".join(getattr(self._client, "source_names", []) or ["?"])
+            self._record_spread_status(
+                f"EMPTY: no venue served a book ticker (tried {tried})"
+            )
             return {}
         universe = set(self.current_universe())
         matched = len(universe & set(spreads))
@@ -703,7 +706,10 @@ class Screener:
                 f"(venue names e.g. {sample})"[:200]
             )
             return {}
-        self._record_spread_status(f"OK: {matched}/{len(universe)} symbols priced")
+        venue = getattr(self._client, "last_spread_source", "") or "?"
+        self._record_spread_status(
+            f"OK: {matched}/{len(universe)} symbols priced by {venue}"
+        )
         return spreads
 
     def _record_spread_status(self, status: str) -> None:

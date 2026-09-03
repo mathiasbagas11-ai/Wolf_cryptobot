@@ -36,6 +36,8 @@ class MarketDataClient:
         self._futures = futures  # provides open-interest change (Binance)
         self._funding_sources = list(funding_sources) if funding_sources else []
         self._preferred: dict[str, str] = {}  # symbol -> source name that last worked
+        #: Venue that last served a book spread, for the diagnostic to name.
+        self.last_spread_source = ""
         self._lock = threading.Lock()
 
     @property
@@ -90,10 +92,19 @@ class MarketDataClient:
         return {}
 
     def get_book_spread(self) -> dict[str, float]:
-        """Top-of-book spread (bps) per symbol from the first venue with one."""
+        """Top-of-book spread (bps) per symbol from the first venue with one.
+
+        Which venue answered is remembered, because it is the difference
+        between two very different situations. Klines fall through to whichever
+        source is reachable, so the bot runs normally on OKX or Bybit while
+        Binance is unreachable — and a spread that only Binance could serve
+        then comes back empty with nothing else looking wrong.
+        """
+        self.last_spread_source = ""
         for source in self._sources:
             spread = source.get_book_spread()
             if spread:
+                self.last_spread_source = source.name
                 return spread
         return {}
 
