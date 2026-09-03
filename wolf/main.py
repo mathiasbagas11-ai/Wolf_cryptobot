@@ -155,6 +155,10 @@ def main() -> None:
         "ai_mode": _ai_mode_label(ai),
         "risk_gates": _risk_gates_label(settings),
         "state": _state_label(application),
+        # What has no topic of its own and therefore lands here. A recurring
+        # digest falling back to the main channel is how the main channel
+        # becomes that digest's feed.
+        "unrouted": ", ".join(settings.telegram.unrouted_destinations()),
     })
 
     # Run an initial tracking pass so restarts resolve overdue signals promptly.

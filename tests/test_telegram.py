@@ -379,3 +379,86 @@ def test_stats_card_flags_small_samples():
     text = sess.calls[0]["text"]
     # A 0% win rate off one trade must not read as a verdict on the strategy.
     assert "small sample" in text and "⚠️" in text
+
+
+# ── routing is reported, not left to be discovered by spam ──────────────────
+
+
+def test_flow_intelligence_falls_back_to_the_news_topic():
+    """The Flow digest belongs with News, not in the main channel.
+
+    It is the noisiest recurring message the bot sends, so where it lands is
+    the difference between a channel and a feed.
+    """
+    from wolf.config import TelegramSettings
+
+    s = TelegramSettings(bot_token="t", chat_id="c", news_thread_id="42")
+    assert s.route_flow() == "42"
+    assert s.route_news() == "42"
+
+
+def test_an_explicit_flow_topic_wins_over_the_news_one():
+    from wolf.config import TelegramSettings
+
+    s = TelegramSettings(bot_token="t", chat_id="c",
+                         news_thread_id="42", flow_thread_id="99")
+    assert s.route_flow() == "99"
+
+
+def test_the_flow_topic_is_validated_like_every_other_routed_one():
+    """It was posted to but never probed, so a stale id could fail in silence."""
+    from wolf.config import TelegramSettings
+
+    s = TelegramSettings(bot_token="t", chat_id="c", flow_thread_id="99")
+    assert ("Flow Intelligence", "99") in s.configured_threads()
+
+
+def test_what_lands_in_the_main_channel_is_named():
+    """A missing topic id is otherwise invisible until the channel fills up."""
+    from wolf.config import TelegramSettings
+
+    s = TelegramSettings(bot_token="t", chat_id="c")
+    unrouted = s.unrouted_destinations()
+    assert "Flow Intelligence" in unrouted
+    assert "News" in unrouted
+
+
+def test_routing_one_topic_quiets_the_ones_that_fall_back_to_it():
+    """The report follows the fallback chains rather than the raw fields.
+
+    Setting only NEWS_THREAD_ID moves both the News digest and the Flow
+    report, so neither should still be listed as landing here.
+    """
+    from wolf.config import TelegramSettings
+
+    s = TelegramSettings(bot_token="t", chat_id="c", news_thread_id="42")
+    unrouted = s.unrouted_destinations()
+    assert "News" not in unrouted
+    assert "Flow Intelligence" not in unrouted
+    assert "Whale Report" in unrouted        # still has no topic of its own
+
+
+def test_the_startup_card_says_what_is_landing_in_this_channel(monkeypatch):
+    from wolf.config import TelegramSettings
+    from wolf.notify.telegram import TelegramNotifier
+
+    sent: list[tuple[str, str]] = []
+    n = TelegramNotifier(TelegramSettings(bot_token="t", chat_id="c"))
+    monkeypatch.setattr(n, "send", lambda text, thread="": sent.append((text, thread)))
+
+    n.notify_startup({"sources": ["binance"], "detectors": ["SCALP"],
+                      "unrouted": "News, Flow Intelligence"})
+    assert "Into this channel: News, Flow Intelligence" in sent[0][0]
+
+
+def test_a_fully_routed_deployment_adds_no_line(monkeypatch):
+    """A line that always prints is a line nobody reads."""
+    from wolf.config import TelegramSettings
+    from wolf.notify.telegram import TelegramNotifier
+
+    sent: list[tuple[str, str]] = []
+    n = TelegramNotifier(TelegramSettings(bot_token="t", chat_id="c"))
+    monkeypatch.setattr(n, "send", lambda text, thread="": sent.append((text, thread)))
+
+    n.notify_startup({"sources": ["binance"], "detectors": ["SCALP"], "unrouted": ""})
+    assert "Into this channel" not in sent[0][0]

@@ -208,8 +208,40 @@ class TelegramSettings:
             ("Whale Report", self.whale_thread_id),
             ("Hot Ecosystem", self.radar_thread_id),
             ("BTC/ETH/SOL", self.majors_thread_id),
+            # Routed since flow_thread_id existed, validated only now: a topic
+            # that is posted to but never probed is exactly the one whose
+            # stale id fails silently on every message.
+            ("Flow Intelligence", self.flow_thread_id),
         ]
         return [(label, tid) for label, tid in labels if tid]
+
+    def unrouted_destinations(self) -> list[str]:
+        """Message types that land in the main channel for want of a topic.
+
+        Built from the route methods rather than the raw fields, so the
+        fallback chains are told truthfully: Flow Intelligence lands in News
+        when only ``NEWS_THREAD_ID`` is set, and reaches the main channel only
+        when neither it nor ``FLOW_THREAD_ID`` is.
+
+        The fallback exists so nothing is ever dropped, which is right for a
+        signal and costly for a recurring digest — an unrouted Flow report
+        turns the main channel into its feed. Naming them at boot is the
+        difference between choosing that and discovering it.
+        """
+        routes = [
+            ("New Signal", self.route_new_signal()),
+            ("Signal Entry", self.route_entry()),
+            ("Trade Report", self.route_trade_report()),
+            ("Market Update", self.route_market_update()),
+            ("News", self.route_news()),
+            ("Flow Intelligence", self.route_flow()),
+            ("Whale Report", self.route_whale()),
+            ("Hot Ecosystem", self.route_radar()),
+            ("BTC/ETH/SOL", self.route_majors()),
+            ("Stats", self.route_stats()),
+            ("System", self.route_system()),
+        ]
+        return [label for label, tid in routes if not tid]
 
 
 def _first(*values: str) -> str:

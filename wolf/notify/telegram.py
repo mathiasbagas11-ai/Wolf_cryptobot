@@ -227,6 +227,13 @@ class TelegramNotifier:
     def notify_startup(self, info: dict) -> None:
         sources = " → ".join(info.get("sources", [])) or "—"
         detectors = ", ".join(info.get("detectors", [])) or "—"
+        # Named only when something actually lands here: a line that always
+        # prints is a line nobody reads, and on a fully routed deployment
+        # there is nothing to say.
+        unrouted = (
+            f"📬 Into this channel: {esc(str(info['unrouted']))}\n"
+            if info.get("unrouted") else ""
+        )
         text = (
             f"🐺 <b>Wolf Crypto Tracker — ONLINE</b>\n{DIVIDER}\n"
             f"📡 Sources: {esc(sources)}\n"
@@ -236,6 +243,7 @@ class TelegramNotifier:
             f"🛡 Risk gates: {info.get('risk_gates', '—')}\n"
             f"🧠 AI debate: {esc(str(info.get('ai_mode', 'OFF')))}\n"
             f"💾 State: {esc(str(info.get('state', '—')))}\n"
+            f"{unrouted}"
             f"{self._stamp()}"
         )
         self.send(text, self._settings.route_system())
