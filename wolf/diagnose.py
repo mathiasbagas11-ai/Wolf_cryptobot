@@ -327,6 +327,39 @@ def _measured_cost(rows: list, taker_fee_bps: float) -> dict:
     }
 
 
+def _mean_gap(a: list[float], b: list[float]) -> Optional[dict]:
+    """Welch's two-sample t for the gap between two populations of R.
+
+    Welch rather than Student because the two sides have no reason to share a
+    variance and usually do not share a size either — a layer that confirms
+    twice as often as it rejects gives one bucket half the other's noise, and
+    pooling them would report a precision neither side has.
+
+    Returns ``None`` when either side is too small to have a variance, which is
+    the honest answer: a gap computed from one observation is a difference of
+    two numbers, not a measurement.
+    """
+    if len(a) < 2 or len(b) < 2:
+        return None
+    na, nb = len(a), len(b)
+    ma, mb = statistics.fmean(a), statistics.fmean(b)
+    va, vb = statistics.variance(a) / na, statistics.variance(b) / nb
+    se = math.sqrt(va + vb)
+    if se <= 0:
+        return None
+    denom = va * va / (na - 1) + vb * vb / (nb - 1)
+    df = ((va + vb) ** 2 / denom) if denom > 0 else 0.0
+    return {
+        "n": na + nb,
+        "n_a": na,
+        "n_b": nb,
+        "df": int(df),
+        "gap_r": round(ma - mb, 3),
+        "se_r": round(se, 3),
+        "t": round((ma - mb) / se, 2),
+    }
+
+
 def _apply_fdr(families: tuple[dict, ...], fdr: float = DEFAULT_FDR) -> None:
     """Attach false-discovery-rate control across every bucket, in place.
 
@@ -343,7 +376,14 @@ def _apply_fdr(families: tuple[dict, ...], fdr: float = DEFAULT_FDR) -> None:
     buckets = [b for family in families for b in family.values()]
     if not buckets:
         return
-    raw = [t_to_p(b.get("t", 0.0), b.get("n", 0) - 1) for b in buckets]
+    # Most buckets are one-sample tests on their own n, so n-1 is the default.
+    # A two-sample contrast carries its own Welch degrees of freedom and says
+    # so explicitly, because n-1 would overstate them and thin every p-value in
+    # the family — the one direction this correction must not err in.
+    raw = [
+        t_to_p(b.get("t", 0.0), int(b.get("df", b.get("n", 0) - 1)))
+        for b in buckets
+    ]
     rejected, adjusted = benjamini_hochberg(raw, fdr)
     for bucket, p, adj, keep in zip(buckets, raw, adjusted, rejected):
         bucket["p_raw"] = round(p, 4)
@@ -434,20 +474,16 @@ def diagnose(
         })
         by_strategy[name] = summary
 
-    # On-chain dimensions: is any of the collected data actually predictive?
-    #
-    # Same statistics as by_strategy, because the question is the same one — does
-    # this population's mean R differ from zero by enough to act on. Today only
-    # the whale gate acts on any of it; these buckets are what should decide
-    # whether the others earn a gate too, or whether the whale threshold is set
-    # anywhere near right.
-    #
-    # NO_DATA stays its own bucket: a collector that was off is not a finding,
-    # and folding it into NEUTRAL would dilute whatever real effect exists.
-    def _onchain_buckets(key: str) -> dict[str, dict]:
+    def _buckets_by(label_of) -> dict[str, dict]:
+        """Split the traded sample on one label and summarise each side.
+
+        Every dimension gets the same statistics as ``by_strategy``, because
+        the question is always the same one — does this population's mean R
+        differ from zero by enough to act on.
+        """
         buckets: dict[str, dict] = {}
-        for label in sorted({(getattr(o, key, "") or "NO_DATA") for o in traded}):
-            rows = [o for o in traded if (getattr(o, key, "") or "NO_DATA") == label]
+        for label in sorted({label_of(o) for o in traded}):
+            rows = [o for o in traded if label_of(o) == label]
             graded_rows = [o for o in rows if Status(o.status).is_graded]
             _, bucket_cost_r = _cost_r(rows)
             summary = _summarise([r_multiple_of(o) for o in rows], bucket_cost_r, sample_sd)
@@ -459,8 +495,45 @@ def diagnose(
             buckets[label] = summary
         return buckets
 
+    # On-chain dimensions: is any of the collected data actually predictive?
+    # Today only the whale gate acts on any of it; these buckets are what
+    # should decide whether the others earn a gate too, or whether the whale
+    # threshold is set anywhere near right.
+    #
+    # NO_DATA stays its own bucket: a collector that was off is not a finding,
+    # and folding it into NEUTRAL would dilute whatever real effect exists.
+    def _onchain_buckets(key: str) -> dict[str, dict]:
+        return _buckets_by(lambda o: getattr(o, key, "") or "NO_DATA")
+
     by_whale_stance = _onchain_buckets("whale_stance")
     by_onchain_bias = _onchain_buckets("onchain_bias")
+
+    # Does the AI layer's verdict carry any information?
+    #
+    # This bucket exists because of the decision to keep the layer out of the
+    # signal path. A live veto blinds itself: the signals it drops never become
+    # outcomes, so a REJECT can never be checked against what the trade would
+    # have done. In monitor mode every verdict is attached to a trade that ran
+    # anyway, which makes this the only arrangement where the question is
+    # answerable at all — and leaving it unmeasured would waste the only
+    # advantage the arrangement buys.
+    #
+    # ABSTAIN and NO_AI stay separate for the same reason NO_DATA does: an
+    # abstention is a failure of the layer, never an opinion it held, and a
+    # switched-off layer never tried. Folding either into NEUTRAL would label a
+    # missing verdict as a considered one.
+    by_ai_verdict = _buckets_by(lambda o: o.ai_verdict or "NO_AI")
+
+    # Each bucket above is measured against zero, which on a system whose
+    # overall mean is negative answers a question nobody asked: every bucket
+    # will read negative because every bucket pays the same costs. What decides
+    # whether the verdict is worth anything is the *gap* between the two
+    # opinionated buckets, so that contrast is computed directly rather than
+    # left to a reader eyeballing two rows that were never compared.
+    ai_edge = _mean_gap(
+        [r_multiple_of(o) for o in traded if o.ai_verdict == "CONFIRM"],
+        [r_multiple_of(o) for o in traded if o.ai_verdict == "REJECT"],
+    )
 
     # Whale stance crossed with strategy, because the one-dimensional split
     # cannot tell a real effect from a bookkeeping artefact. If the strategies
@@ -514,7 +587,15 @@ def diagnose(
     # built to answer, fixed before any data arrived; the buckets are a search
     # across subgroups. Folding the pre-registered question into the family it
     # was not part of would penalise it for tests it never ran.
-    _apply_fdr((by_strategy, by_whale_stance, by_onchain_bias))
+    # The AI buckets and the contrast drawn from them are rows on the same
+    # card, so they join the same family rather than getting a private bar.
+    # This raises the threshold every other bucket has to clear, which is the
+    # point: the reader who scans the strategy rows is now scanning the AI rows
+    # too, and the correction has to know that.
+    families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict]
+    if ai_edge is not None:
+        families.append({"ai_edge": ai_edge})
+    _apply_fdr(tuple(families))
 
     ladder = _ladder_economics(traded)
 
@@ -600,6 +681,8 @@ def diagnose(
         "by_whale_stance": by_whale_stance,
         "whale_by_strategy": whale_by_strategy,
         "by_onchain_bias": by_onchain_bias,
+        "by_ai_verdict": by_ai_verdict,
+        "ai_edge": ai_edge,
         "status_counts": status_counts,
         "ai_verdicts": ai_verdicts,
         "ai_abstain_reasons": abstain_reasons,
@@ -717,11 +800,16 @@ def render_digest(diag: dict) -> str:
             f"ci95=[{b['ci95'][0]:+.3f},{b['ci95'][1]:+.3f}] 1R={b['median_1r_pct']:.2f}% "
             f"cost={b.get('cost_r', 0):.2f}R netR={b['net_r']:+.3f} => {b['verdict']}"
         )
-    # On-chain evidence. Printed only once a bucket exists, so a deployment with
-    # the collectors off does not carry three lines of NO_DATA forever.
-    for label, buckets in (("whale", diag.get("by_whale_stance") or {}),
-                           ("onchain", diag.get("by_onchain_bias") or {})):
-        real = {k: v for k, v in buckets.items() if k != "NO_DATA"}
+    # On-chain and AI evidence. Each block is printed only once a bucket with a
+    # real label exists, so a deployment with the collectors off does not carry
+    # three lines of NO_DATA forever, and one with the AI switched off does not
+    # carry a NO_AI row that answers nothing.
+    for label, sentinel, buckets in (
+        ("whale", "NO_DATA", diag.get("by_whale_stance") or {}),
+        ("onchain", "NO_DATA", diag.get("by_onchain_bias") or {}),
+        ("ai", "NO_AI", diag.get("by_ai_verdict") or {}),
+    ):
+        real = {k: v for k, v in buckets.items() if k != sentinel}
         if not real:
             continue
         for name, b in buckets.items():
@@ -732,6 +820,18 @@ def render_digest(diag: dict) -> str:
                 f"wr={b['win_rate']:.1f} meanR={b['mean_r']:+.3f} t={b['t']:+.2f} "
                 f"{_fdr_col(b)}=> {b['verdict']}"
             )
+
+    # The contrast the AI rows exist to support. Printed on its own line rather
+    # than left as a subtraction for the reader, because the two means it draws
+    # from carry standard errors that do not appear on either row and the gap
+    # is far noisier than either mean.
+    gap = diag.get("ai_edge")
+    if gap:
+        lines.append(
+            f"{'ai:CONFIRM-REJECT':<22} gap={gap['gap_r']:+.3f}R "
+            f"se={gap['se_r']:.3f} t={gap['t']:+.2f} df={gap['df']} "
+            f"{_fdr_col(gap)}(n={gap['n_a']}v{gap['n_b']})"
+        )
 
     # Cross-tab, printed only when a whale stance actually varies within a
     # strategy — that is the only case where it can separate a whale effect
@@ -788,8 +888,8 @@ def render_digest(diag: dict) -> str:
         lines.append("flags    " + " ".join(diag["flags"]))
     n_family = sum(
         len(diag.get(k) or {})
-        for k in ("by_strategy", "by_whale_stance", "by_onchain_bias")
-    )
+        for k in ("by_strategy", "by_whale_stance", "by_onchain_bias", "by_ai_verdict")
+    ) + (1 if diag.get("ai_edge") else 0)
     if n_family:
         lines.append(
             f"fdr      padj = p across all {n_family} buckets at FDR "

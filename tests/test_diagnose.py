@@ -13,7 +13,8 @@ from wolf.tracker import OUTCOMES_KEY, Tracker
 
 
 def _outcome(store_list, *, r: float, status: str, strategy: str = "SCALP",
-             risk_pct: float = 1.0, symbol: str = "BTCUSDT", n: int = 0) -> None:
+             risk_pct: float = 1.0, symbol: str = "BTCUSDT", n: int = 0,
+             ai_verdict: str = "") -> None:
     """Append a resolved outcome with an exact R-multiple and risk distance."""
     entry = 100.0
     sl = entry * (1 - risk_pct / 100)
@@ -23,6 +24,7 @@ def _outcome(store_list, *, r: float, status: str, strategy: str = "SCALP",
         entry_price=entry, tp=entry * 1.05, sl=sl, strategy=strategy,
         tp_ladder=[{"level": 1, "price": entry * 1.01}, {"level": 2, "price": entry * 1.02}],
         status=status, pnl_pct=r * risk_pct, r_multiple=r,
+        ai_verdict=ai_verdict,
         activated_at=start.isoformat(),
         exit_time=(start + timedelta(hours=1)).isoformat(),
         resolved_at=(start + timedelta(hours=1)).isoformat(),
@@ -703,3 +705,155 @@ def test_total_failure_still_reads_as_total_failure(
     assert "AI_NEVER_DECIDES" in flags
     assert "NO_ARBITER: no client" in flags
     assert "AI_DEGRADED" not in flags      # one fault, named once
+
+
+# ── does the AI's verdict carry anything? ───────────────────────────────────
+
+
+def _ai_labelled(rows, verdicts, r_by_verdict) -> None:
+    """Twelve trades per verdict, each verdict paying its own R pattern."""
+    n = 0
+    for verdict in verdicts:
+        good, bad = r_by_verdict[verdict]
+        for i in range(12):
+            r = good if i % 3 else bad
+            _outcome(rows, r=r, ai_verdict=verdict, n=n,
+                     status=Status.TP_HIT.value if r > 0 else Status.SL_HIT.value)
+            n += 1
+
+
+def test_the_ai_verdict_becomes_a_bucket_like_any_other(
+    store, fake_client, tracker_settings
+):
+    """The layer runs in monitor mode precisely so this is answerable."""
+    rows = []
+    _ai_labelled(rows, ("CONFIRM", "NEUTRAL", "REJECT"),
+                 {"CONFIRM": (1.5, -1.0), "NEUTRAL": (1.0, -1.0),
+                  "REJECT": (0.5, -1.0)})
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+
+    buckets = diag["by_ai_verdict"]
+    assert set(buckets) == {"CONFIRM", "NEUTRAL", "REJECT"}
+    assert all(b["n"] == 12 for b in buckets.values())
+    # Same statistics as every other bucket, correction included.
+    assert all("p_adj" in b and "fdr_survives" in b for b in buckets.values())
+
+
+def test_an_abstention_is_never_folded_into_an_opinion(
+    store, fake_client, tracker_settings
+):
+    """ABSTAIN is a failure of the layer and NO_AI is a layer switched off.
+
+    Merging either into NEUTRAL would report a missing verdict as a considered
+    one, which is the whole reason the bucket exists.
+    """
+    rows = []
+    _ai_labelled(rows, ("NEUTRAL", "ABSTAIN"),
+                 {"NEUTRAL": (1.0, -1.0), "ABSTAIN": (1.0, -1.0)})
+    n = len(rows)
+    for i in range(6):
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, n=n + i)  # no verdict
+
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    buckets = diag["by_ai_verdict"]
+    assert buckets["NEUTRAL"]["n"] == 12
+    assert buckets["ABSTAIN"]["n"] == 12
+    assert buckets["NO_AI"]["n"] == 6
+
+
+def test_the_confirm_reject_gap_is_measured_not_left_to_the_reader(
+    store, fake_client, tracker_settings
+):
+    """Each bucket against zero answers a question nobody asked.
+
+    On a system whose overall mean is negative every bucket reads negative,
+    because every bucket pays the same costs. The gap between the two
+    opinionated buckets is the quantity that decides whether the verdict is
+    worth anything.
+    """
+    rows = []
+    _ai_labelled(rows, ("CONFIRM", "REJECT"),
+                 {"CONFIRM": (1.5, -1.0), "REJECT": (0.2, -1.0)})
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+
+    gap = diag["ai_edge"]
+    assert gap["n_a"] == 12 and gap["n_b"] == 12
+    # CONFIRM won more per winner, so the gap is positive.
+    assert gap["gap_r"] > 0
+    # Welch degrees of freedom, not n-1 of the pooled count.
+    assert 0 < gap["df"] < gap["n"] - 1
+    assert "p_adj" in gap
+
+
+def test_a_gap_needs_two_sides_that_can_have_a_variance(
+    store, fake_client, tracker_settings
+):
+    """One CONFIRM against a pile of REJECTs is a subtraction, not a finding."""
+    rows = []
+    _outcome(rows, r=5.0, status=Status.TP_HIT.value, ai_verdict="CONFIRM", n=0)
+    for i in range(12):
+        _outcome(rows, r=1.0 if i % 2 else -1.0, ai_verdict="REJECT", n=i + 1,
+                 status=Status.TP_HIT.value if i % 2 else Status.SL_HIT.value)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert diag["ai_edge"] is None
+
+
+def test_the_ai_rows_widen_the_family_they_joined(
+    store, fake_client, tracker_settings
+):
+    """A reader now scans the AI rows too, and the correction has to know.
+
+    The same strategy bucket, with the same trades and the same t, is a weaker
+    claim once the card also carries verdict rows that were looked at.
+    """
+    def _scalp_padj(with_verdicts):
+        rows = []
+        n = 0
+        for i in range(12):
+            r = 1.5 if i % 3 else -1.0
+            _outcome(rows, r=r, strategy="SCALP", n=n,
+                     status=Status.TP_HIT.value if i % 3 else Status.SL_HIT.value)
+            n += 1
+        if with_verdicts:
+            for verdict in ("CONFIRM", "NEUTRAL", "REJECT"):
+                for i in range(12):
+                    r = 1.0 if i % 2 else -1.0
+                    _outcome(rows, r=r, strategy="SCALP", ai_verdict=verdict, n=n,
+                             status=Status.TP_HIT.value if i % 2 else Status.SL_HIT.value)
+                    n += 1
+        diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+        return diag["by_ai_verdict"], diag["by_strategy"]["SCALP"]["p_adj"]
+
+    _, alone = _scalp_padj(False)
+    buckets, crowded = _scalp_padj(True)
+    assert len(buckets) == 4  # three verdicts plus NO_AI
+    assert crowded > alone
+
+
+def test_a_switched_off_ai_prints_no_verdict_rows(
+    store, fake_client, tracker_settings
+):
+    """A NO_AI row on its own answers nothing and would carry forever."""
+    rows = []
+    for i in range(12):
+        _outcome(rows, r=1.5 if i % 3 else -1.0, n=i,
+                 status=Status.TP_HIT.value if i % 3 else Status.SL_HIT.value)
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "ai:NO_AI" not in digest
+
+
+def test_the_digest_prints_the_verdict_rows_and_the_gap(
+    store, fake_client, tracker_settings
+):
+    rows = []
+    _ai_labelled(rows, ("CONFIRM", "REJECT"),
+                 {"CONFIRM": (1.5, -1.0), "REJECT": (0.2, -1.0)})
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "ai:CONFIRM" in digest
+    assert "ai:REJECT" in digest
+    assert "ai:CONFIRM-REJECT" in digest
+    assert "gap=" in digest and "df=" in digest

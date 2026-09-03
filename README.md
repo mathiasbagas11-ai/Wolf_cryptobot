@@ -154,6 +154,27 @@ concur   mean_open=7.29 max_open=8 eff_n_floor=31
 flags    STATE_NOT_PERSISTED AI_NEVER_DECIDES TP1_BANKS_WIN_OFF
 ```
 
+### Is the AI's verdict worth anything?
+
+The debate layer runs in monitor mode: it annotates a signal and never blocks
+one. That is not timidity, it is what makes the layer measurable at all. A live
+veto blinds itself — the signals it drops never become outcomes, so a `REJECT`
+can never be checked against what the trade would have done.
+
+`by_ai_verdict` is the payoff. It splits the traded sample on the verdict the
+layer returned and runs the same statistics as every other bucket, and
+`ai:CONFIRM-REJECT` reports the gap between the two opinionated buckets with
+Welch's t. The gap is the number that matters: on a system whose overall mean is
+negative every bucket reads negative, because every bucket pays the same costs.
+
+`ABSTAIN` and `NO_AI` stay their own buckets. An abstention is a failure of the
+layer, never an opinion it held, and a switched-off layer never tried — folding
+either into `NEUTRAL` would report a missing verdict as a considered one.
+
+All of it joins the same Benjamini-Hochberg family as the strategy and on-chain
+rows, which raises the bar every other row has to clear. That is the point: a
+reader scanning the card is now scanning these rows too.
+
 ### Why auto-pause gates on a confidence bound
 
 An earlier version compared average PnL **percent** against a threshold at a
