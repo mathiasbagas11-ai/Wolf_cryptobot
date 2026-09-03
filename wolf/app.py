@@ -233,6 +233,7 @@ def build_application(settings: Settings | None = None) -> Application:
             bear=_role_client(settings.ai.bear, "bear"),
             arbiter=_role_client(settings.ai.arbiter, "arbiter"),
             chart_candles=settings.ai.chart_candles,
+            arbiter_max_tokens=settings.ai.arbiter_max_tokens,
         )
         # The arbiter alone returns the structured verdict, so without it the
         # layer cannot decide anything — it abstains on every signal while

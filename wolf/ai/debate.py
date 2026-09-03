@@ -43,6 +43,11 @@ ABSTAIN_REASONS = (_ABSTAIN_NO_ARBITER, _ABSTAIN_ERROR, _ABSTAIN_NO_JSON)
 #: answering spends this budget first and returns empty content if it runs out
 #: — which arrives as an abstention, indistinguishable from having no opinion.
 #: Room to think is cheaper than a silent AI layer.
+#:
+#: The default only applies when no budget is passed in. It is configurable
+#: (``DEBATE_ARBITER_MAX_TOKENS``) because the fix for a reasoning model that
+#: overruns it is either more room or a different model, and which one works is
+#: found by trying — a redeploy per attempt is a poor way to run that search.
 _ARBITER_MAX_TOKENS = 2048
 
 
@@ -261,12 +266,14 @@ class DebateValidator(SignalValidator):
         bear: Optional[LLMClient] = None,
         arbiter: Optional[LLMClient] = None,
         chart_candles: int = 0,
+        arbiter_max_tokens: int = _ARBITER_MAX_TOKENS,
     ) -> None:
         fallback = client or NullLLMClient()
         self._bull = bull or fallback
         self._bear = bear or fallback
         self._arbiter = arbiter or fallback
         self._chart_candles = chart_candles
+        self._arbiter_max_tokens = arbiter_max_tokens
 
     @property
     def available(self) -> bool:
@@ -309,7 +316,7 @@ class DebateValidator(SignalValidator):
             "PROPOSED SETUP:\n(startup self-test — reply NEUTRAL with confidence 0)\n\n"
             "Decide: CONFIRM, NEUTRAL, or REJECT.",
             _VERDICT_SCHEMA,
-            max_tokens=_ARBITER_MAX_TOKENS,
+            max_tokens=self._arbiter_max_tokens,
         )
         if data.get("decision"):
             return {"ok": True, "reason": ""}
@@ -332,7 +339,7 @@ class DebateValidator(SignalValidator):
             )
             data = self._arbiter.complete_json(
                 _ARBITER_SYSTEM, arbiter_prompt, _VERDICT_SCHEMA,
-                max_tokens=_ARBITER_MAX_TOKENS,
+                max_tokens=self._arbiter_max_tokens,
             )
         except Exception as exc:  # the AI layer must never break screening
             log.exception("Debate failed for %s — abstaining", candidate.symbol)

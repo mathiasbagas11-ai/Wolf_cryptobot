@@ -221,3 +221,66 @@ def test_all_debate_roles_default_to_one_provider(monkeypatch):
     monkeypatch.setenv("AI_DEBATE_ENABLED", "true")
     ai = Settings.from_env().ai
     assert ai.bull.provider == ai.bear.provider == ai.arbiter.provider == "deepseek"
+
+
+# ── the arbiter's token budget is reachable without a redeploy ──────────────
+
+
+class _BudgetSpy(LLMClient):
+    """Records the budget every call was actually made with."""
+
+    def __init__(self) -> None:
+        self.budgets: list[int] = []
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
+        return "case"
+
+    def complete_json(self, system, user, schema, *, max_tokens: int = 1024) -> dict:
+        self.budgets.append(max_tokens)
+        return {"decision": "NEUTRAL", "confidence": 0, "rationale": "ok"}
+
+
+def test_the_configured_budget_reaches_the_arbiter_call():
+    """A setting that never reaches the API call is the failure mode here.
+
+    The budget only matters at the moment the request is sent, so wiring it as
+    far as the validator and no further would read as configurable while every
+    call still used the default.
+    """
+    spy = _BudgetSpy()
+    DebateValidator(arbiter=spy, arbiter_max_tokens=777).validate(_candidate())
+    assert spy.budgets == [777]
+
+
+def test_the_boot_probe_uses_the_same_budget_as_a_live_verdict():
+    """Otherwise the probe stops testing the path it exists to test.
+
+    A probe on the default budget would pass while every real signal abstained
+    at the configured one — the exact silence the self-test was added to break.
+    """
+    spy = _BudgetSpy()
+    validator = DebateValidator(arbiter=spy, arbiter_max_tokens=777)
+    validator.selftest()
+    validator.validate(_candidate())
+    assert spy.budgets == [777, 777]
+
+
+def test_the_budget_defaults_to_the_module_constant():
+    from wolf.ai.debate import _ARBITER_MAX_TOKENS
+
+    spy = _BudgetSpy()
+    DebateValidator(arbiter=spy).validate(_candidate())
+    assert spy.budgets == [_ARBITER_MAX_TOKENS]
+
+
+def test_the_budget_is_settable_from_the_environment(monkeypatch):
+    from wolf.config import Settings
+
+    monkeypatch.setenv("DEBATE_ARBITER_MAX_TOKENS", "4096")
+    assert Settings.from_env().ai.arbiter_max_tokens == 4096
+    monkeypatch.delenv("DEBATE_ARBITER_MAX_TOKENS")
+    assert Settings.from_env().ai.arbiter_max_tokens == 2048

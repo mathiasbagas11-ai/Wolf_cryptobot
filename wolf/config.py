@@ -740,6 +740,22 @@ class AISettings:
     bull: DebateRole = DebateRole("deepseek", "deepseek-v4-flash")
     bear: DebateRole = DebateRole("deepseek", "deepseek-v4-flash")
     arbiter: DebateRole = DebateRole("deepseek", "deepseek-v4-flash")
+    # Token budget for the arbiter's structured verdict.
+    #
+    # The verdict is three short fields, so this is not sized for the answer —
+    # it is sized for whatever the model does before writing one. A model that
+    # reasons first spends this budget on reasoning and returns empty content
+    # if it runs out, which arrives as an ABSTAIN and is indistinguishable on
+    # the card from an AI that simply had no opinion.
+    #
+    # Exposed as an env var because the two remedies for that failure are
+    # different and only one of them is a code change: a model that reasons
+    # needs either more room here or replacing outright (DEBATE_ARBITER_MODEL),
+    # and finding out which is a matter of trying. Both faults name themselves
+    # verbatim in the abstain reason — "spent all N tokens on reasoning" versus
+    # "answer cut off at max_tokens=N" — so the card says which one is in play
+    # before the budget is touched.
+    arbiter_max_tokens: int = 2048
     # If a REJECT verdict at/above this confidence should veto the signal.
     veto_enabled: bool = True
     veto_min_confidence: int = 70
@@ -1045,6 +1061,7 @@ class Settings:
                 provider=_env_str("DEBATE_ARBITER_PROVIDER", "deepseek"),
                 model=_env_str("DEBATE_ARBITER_MODEL", "deepseek-v4-flash"),
             ),
+            arbiter_max_tokens=_env_int("DEBATE_ARBITER_MAX_TOKENS", 2048),
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),
             chart_candles=_env_int("AI_CHART_CANDLES", 20),

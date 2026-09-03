@@ -154,6 +154,33 @@ concur   mean_open=7.29 max_open=8 eff_n_floor=31
 flags    STATE_NOT_PERSISTED AI_NEVER_DECIDES TP1_BANKS_WIN_OFF
 ```
 
+### When the AI abstains, which fault is it?
+
+Every failure in the debate layer degrades to `ABSTAIN` so it can never break
+screening — which also means it can never be *seen*, because an abstention looks
+identical to an AI with no opinion. The digest therefore prints the provider's
+own sentence, and the two budget faults are worded apart on purpose:
+
+| Abstain reason | What happened | Remedy |
+|---|---|---|
+| `NO_ARBITER` | no usable client for the arbiter role | set the provider's API key |
+| `ERROR` | a role raised — network, auth, SDK | provider-side |
+| `NO_JSON: spent all N tokens on reasoning` | the model reasoned until the budget ran out and never wrote an answer | a different model, or a bigger budget |
+| `NO_JSON: answer cut off at max_tokens=N` | it started answering and was truncated | a bigger budget |
+
+The knobs, all env vars:
+
+| Variable | Default | |
+|---|---|---|
+| `DEBATE_ARBITER_PROVIDER` | `deepseek` | `deepseek`, `groq`, `hermes`/`openrouter`, `anthropic` |
+| `DEBATE_ARBITER_MODEL` | `deepseek-v4-flash` | OpenRouter needs `vendor/model`; every other provider needs a bare name, and a mismatch is named at boot |
+| `DEBATE_ARBITER_MAX_TOKENS` | `2048` | sized for whatever the model does *before* the verdict, not for the verdict |
+
+`/ai` fires one live call through the same path and reports what came back, so a
+change is confirmed in seconds rather than in tomorrow's digest — a broken layer
+abstains rather than failing, so without the probe a fix cannot be verified until
+the abstentions it caused have aged out of the window.
+
 ### What the cost figures do and do not contain
 
 Two costs are reported side by side, and they are **not the same sum**:
