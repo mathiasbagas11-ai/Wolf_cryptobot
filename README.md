@@ -175,6 +175,29 @@ All of it joins the same Benjamini-Hochberg family as the strategy and on-chain
 rows, which raises the bar every other row has to clear. That is the point: a
 reader scanning the card is now scanning these rows too.
 
+### The hypothesis registry
+
+`wolf/hypotheses.json` records every change that has been proposed, measured and
+closed out, with the evidence that settled it. `/tested` renders it in Telegram.
+
+That work is worth almost nothing while it lives only in a conversation: a
+rejected idea nobody can point at gets proposed again a week later, re-measured
+on a sample that has barely moved, and rejected again — at the cost of the only
+scarce resource here, which is trades.
+
+Three properties, each ruling out an obvious alternative:
+
+* **A file in the repository, not state.** State is wiped when the container
+  restarts, which is exactly the failure this guards against.
+* **Edited by commit, never at runtime.** Every status change carries an author,
+  a date and a diff.
+* **Every entry names its evidence.** A status with no measurement behind it is
+  a rumour, and rumours get re-litigated.
+
+`OPEN` is part of the vocabulary and is distinct from `INCONCLUSIVE`: the second
+was measured and did not separate anything, the first has not been measured yet.
+That difference is what decides whether spending the sample again is worth it.
+
 ### Why auto-pause gates on a confidence bound
 
 An earlier version compared average PnL **percent** against a threshold at a

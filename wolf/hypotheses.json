@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "drop-breakeven-stop",
+      "question": "Does removing the breakeven stop pay for itself?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "/whatif over n=66: 26 trades worse, 4 better, t=-2.85",
+      "note": "The stop is not cutting runners short. It is banking trades that would otherwise have round-tripped, which is most of them."
+    },
+    {
+      "id": "stop-advance-ladder",
+      "question": "Should STOP_ADVANCE trail up the ladder instead of halting at breakeven?",
+      "status": "INCONCLUSIVE",
+      "settled_on": "2026-09-02",
+      "evidence": "/whatif: +0.015R, and only 8 of 66 trades were touched at all",
+      "note": "Not adopted. Too few trades reach a second rung for the rule to have anything to act on. Worth re-running only if an exit-geometry re-cut raises rung fill."
+    },
+    {
+      "id": "entry-selectivity-for-win-rate",
+      "question": "Can a tighter entry filter raise the win rate to what the ladder needs?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "Breakeven WR 56.3% vs 52.8% actual; resolving a 4.5pp move needs n_eff>=493 against n_eff~44",
+      "note": "Not a lever twice over: unmeasurable at this sample, and a tighter entry usually cuts avgWin, which raises the very bar it was meant to clear."
+    },
+    {
+      "id": "cost-model-refinement",
+      "question": "Is the net-negative verdict an artefact of the 20bps cost assumption?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "netR turns positive only below a 7.3bps round trip, which is under Binance's published taker fee on its own",
+      "note": "The verdict does not depend on the assumption. Halving the modelled cost moves netR from -0.100 to -0.021 and it stays negative. Better cost measurement is still worth having, but it will not rescue anything."
+    },
+    {
+      "id": "vibe-trading-import",
+      "question": "Is there anything in HKUDS/Vibe-Trading worth importing?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "Reviewed: the factor zoo is cross-sectional daily equity, the crypto engine is leverage and liquidation, trailing_stop is an eToro API passthrough",
+      "note": "One thing was worth taking and has been taken: the BH-FDR procedure, reimplemented without numpy in wolf/stats.py. Nothing else touches exit geometry or cost."
+    },
+    {
+      "id": "quantmind-import",
+      "question": "Is there anything in LLMQuant/QuantMind worth importing?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "grep for backtest, sharpe, slippage and stop_loss returns nothing; the dependency footprint is large",
+      "note": "One idea worth stealing without the import: separate sentiment from materiality in wolf/news/signal.py. Six lines of schema, no dependency."
+    },
+    {
+      "id": "llm-in-signal-path",
+      "question": "Should the AI layer veto signals rather than only annotate them?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "Design, not measurement: a live veto has no counterfactual, because a dropped signal never becomes an outcome",
+      "note": "Monitor mode is the only arrangement in which the layer's verdict can be scored at all. The by_ai_verdict bucket and the CONFIRM-REJECT gap on the digest are what that arrangement buys; spending it on a veto would blind the measurement permanently."
+    },
+    {
+      "id": "exit-geometry-recut",
+      "question": "Does widening the TP ratio from 1.01 to 1.4 lower the required win rate enough to matter?",
+      "status": "OPEN",
+      "evidence": "Arithmetic: the breakeven bar falls 9.4pp, the largest of the three levers on offer",
+      "note": "Blocked on sample composition settling after the MAX_COST_R gate change. Measured with /whatif ladder. Read open= first (a wider ladder leaves more trades unsettled and marks them to last close, which flatters wide variants), then padj rather than t, then the shape of the curve across variants rather than the winning row."
+    },
+    {
+      "id": "news-sentiment-vs-materiality",
+      "question": "Should the news signal carry materiality separately from sentiment?",
+      "status": "OPEN",
+      "evidence": "Untested. Taken from a QuantMind review as the one idea there worth keeping",
+      "note": "A six-line schema change in wolf/news/signal.py, no new dependency. Cheap, but it is a strategy input, so it waits for the ~350-trade nominal sample like every other strategy change."
+    }
+  ]
+}

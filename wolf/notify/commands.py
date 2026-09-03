@@ -37,6 +37,7 @@ _HELP = (
     "<code>/whatif cost</code> — what each max_cost_r would have kept\n"
     "<code>/whatif ladder</code> — re-cut the TP ladder on the same trades\n"
     "<code>/ai</code> — is the debate layer actually answering?\n"
+    "<code>/tested</code> — what has already been tried, and what settled it\n"
     "<code>/help</code> — this message"
 )
 
@@ -75,6 +76,8 @@ class CommandRouter:
             return self._ai()
         if cmd == "diag":
             return self._diag(arg)
+        if cmd in ("tested", "hypotheses"):
+            return self._tested()
         if getattr(self._app, "analyze", None) is not None and not arg and cmd.isalnum():
             return self._app.analyze.analyze(cmd)  # bare ticker shortcut
         return "❓ Unknown command. Try <code>/help</code>."
@@ -162,6 +165,24 @@ class CommandRouter:
             log.exception("Diagnostics digest failed")
             return "⚠️ Diagnostics failed — see logs."
         return f"<pre>{esc(digest)}</pre>"
+
+    def _tested(self) -> str:
+        """The register of questions already settled.
+
+        Reachable from Telegram because that is where the idea gets proposed
+        again. A registry only ever pays off at the moment somebody is about to
+        re-run a test, and at that moment nobody is going to open the repo.
+        """
+        from wolf.hypotheses import RegistryError, load, render
+
+        try:
+            return f"<pre>{esc(render(load()))}</pre>"
+        except RegistryError as exc:
+            # Named rather than swallowed: a registry that renders as empty
+            # reads as "nothing has been tried", which is the one wrong answer
+            # this command can give.
+            log.warning("Hypothesis registry unreadable: %s", exc)
+            return f"⚠️ Hypothesis registry unreadable — {esc(str(exc))}"
 
     def _calc(self, arg: str) -> str:
         parts = arg.split()
