@@ -49,6 +49,14 @@ DEGENERATE_SD_FRACTION = 0.25
 # One-sided 95% bound, matching the auto-pause gate.
 CI_Z = 1.96
 
+# Share of the signals the AI layer actually ran on that it may fail before the
+# failures are called out. Every abstention is a fault, so the honest floor is
+# zero; this is set where an occasional transient stops being occasional. Above
+# it the abstentions are systematic enough to bias the verdict sample as well
+# as thin it — the signals the layer fails on are not a random subset of the
+# signals it sees, so what survives is not a fair sample of its opinions.
+AI_DEGRADED_ABSTAIN_RATE = 0.10
+
 # Verdicts
 INCONCLUSIVE = "INCONCLUSIVE"
 EDGE_POSITIVE = "EDGE_POSITIVE"
@@ -229,6 +237,35 @@ def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0) -> dict:
         "net_r": round(net, 3),
         "verdict": verdict,
     }
+
+
+def _abstain_reasons(outcomes: list) -> dict[str, int]:
+    """Why the AI layer failed, counted, most common first.
+
+    Every abstention is a fault. ``Decision.ABSTAIN`` is documented as "AI
+    layer unavailable / errored" and is set at exactly three places, all of
+    them failure paths: no usable arbiter, a role that raised, or an arbiter
+    that answered without a verdict. An AI that looked and had no opinion
+    returns NEUTRAL instead. So a count of abstentions is a count of failures,
+    and the count alone does not say which.
+
+    The provider's own sentence is kept, not just the class of fault:
+    "NO_JSON" says the arbiter did not return a verdict, and only the message
+    says whether that was an expired key, a spent balance, or a model
+    answering in prose — three different remedies, two of which are not code
+    changes at all.
+    """
+    reasons: dict[str, int] = {}
+    for o in outcomes:
+        head, _, rest = (o.ai_rationale or "").partition(":")
+        head = head.strip()
+        if not head.startswith("ABSTAIN/"):
+            continue
+        key = head.split("/", 1)[1]
+        if rest.strip():
+            key = f"{key}: {rest.strip()}"
+        reasons[key] = reasons.get(key, 0) + 1
+    return dict(sorted(reasons.items(), key=lambda kv: -kv[1]))
 
 
 def _spread_status(tracker) -> str:
@@ -487,28 +524,31 @@ def diagnose(
     # still inside the container, so it is wiped exactly like a relative path.
     if state_dir and not state_is_persistent(state_dir):
         flags.append("STATE_NOT_PERSISTED")
+    # Failures of the AI layer, counted over the signals it actually ran on.
+    # NO_AI is excluded deliberately: a layer that is switched off never tried,
+    # which is a configuration choice and not a fault, and folding it in here
+    # would make a disabled AI read as a broken one.
+    ai_ran = sum(v for k, v in ai_verdicts.items() if k != "NO_AI")
+    ai_abstained = ai_verdicts.get("ABSTAIN", 0)
+    ai_failure_rate = (ai_abstained / ai_ran) if ai_ran else 0.0
+    abstain_reasons = _abstain_reasons(traded)
+    # The flag carries only the leading fault: the full ranked list is printed
+    # on the ai block above it, and a flags line long enough to wrap is a line
+    # that gets skimmed past.
+    detail = next(
+        (f"{k} x{v}" for k, v in abstain_reasons.items()), ""
+    )
+
     if traded and abstain_rate >= 0.99:
-        # Name the fault, not just the symptom. Every one of these degrades to
-        # ABSTAIN precisely so it cannot break screening, which also means it
-        # cannot be seen: a rejected key, a spent balance and a model that
-        # cannot return JSON all read as an AI with no opinion.
-        reasons: dict[str, int] = {}
-        for o in traded:
-            head, _, rest = (o.ai_rationale or "").partition(":")
-            if head.strip().startswith("ABSTAIN/"):
-                # Keep the provider's own sentence, not just the class of fault.
-                # "NO_JSON" says the arbiter did not return a verdict; only the
-                # message says whether that was an expired key, a spent balance
-                # or a model answering in prose — three different remedies, and
-                # two of them are not code changes at all.
-                key = head.strip().split("/", 1)[1]
-                if rest.strip():
-                    key = f"{key}: {rest.strip()}"
-                reasons[key] = reasons.get(key, 0) + 1
-        detail = " | ".join(
-            f"{k} x{v}" for k, v in sorted(reasons.items(), key=lambda kv: -kv[1])[:2]
-        )
         flags.append(f"AI_NEVER_DECIDES({detail})" if detail else "AI_NEVER_DECIDES")
+    elif ai_failure_rate > AI_DEGRADED_ABSTAIN_RATE:
+        # The old card only spoke at total failure, so a layer failing on half
+        # its signals counted the abstentions and never said why — the same
+        # silence that let a 29/29 run go unnoticed, one degree quieter.
+        flags.append(
+            f"AI_DEGRADED({ai_abstained}/{ai_ran}={ai_failure_rate:.0%}"
+            + (f" {detail}" if detail else "") + ")"
+        )
     if ai_available is False:
         flags.append("AI_CLIENT_UNAVAILABLE")
     unpriced = status_counts.get(Status.EXPIRED.value, 0)
@@ -562,6 +602,8 @@ def diagnose(
         "by_onchain_bias": by_onchain_bias,
         "status_counts": status_counts,
         "ai_verdicts": ai_verdicts,
+        "ai_abstain_reasons": abstain_reasons,
+        "ai_failure_rate": round(ai_failure_rate, 3),
         "concurrency": _concurrency(traded),
         "flags": flags,
         "state_dir": state_dir,
@@ -732,6 +774,16 @@ def render_digest(diag: dict) -> str:
         lines.append(
             "ai       " + " ".join(f"{k}={v}" for k, v in sorted(diag["ai_verdicts"].items()))
         )
+        # Printed whenever anything abstained, at any rate. An abstention is a
+        # failure of the layer, never an opinion it held, so the count is only
+        # half a sentence: it says how often the AI failed and not once what
+        # went wrong. Two of the three faults are fixed outside this codebase.
+        reasons = diag.get("ai_abstain_reasons") or {}
+        if reasons:
+            rate = diag.get("ai_failure_rate", 0.0)
+            lines.append(f"         abstained on {rate:.0%} of the signals it ran on:")
+            for reason, count in list(reasons.items())[:3]:
+                lines.append(f"           x{count} {reason}")
     if diag["flags"]:
         lines.append("flags    " + " ".join(diag["flags"]))
     n_family = sum(

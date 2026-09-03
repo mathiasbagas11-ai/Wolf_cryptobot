@@ -283,11 +283,17 @@ def test_a_silent_ai_names_the_fault_that_silenced_it(store, fake_client, tracke
             else "ABSTAIN/ERROR: Timeout"
         )
     diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    digest = render_digest(diag)
+
+    # The flag names the leading fault, so a flags line stays scannable.
     flag = next(f for f in diag["flags"] if f.startswith("AI_NEVER_DECIDES"))
-    assert flag == (
-        "AI_NEVER_DECIDES(NO_JSON: HTTP 402: Insufficient Balance x9 | ERROR: Timeout x3)"
-    )
-    assert flag in render_digest(diag)
+    assert flag == "AI_NEVER_DECIDES(NO_JSON: HTTP 402: Insufficient Balance x9)"
+    assert flag in digest
+
+    # Every fault is on the card, ranked — which is what actually keeps the
+    # three apart without opening a container log.
+    assert "x9 NO_JSON: HTTP 402: Insufficient Balance" in digest
+    assert "x3 ERROR: Timeout" in digest
 
 
 def test_a_silent_ai_with_no_reason_recorded_still_flags(store, fake_client, tracker_settings):
@@ -584,3 +590,116 @@ def test_a_collector_that_never_ran_says_so(store, fake_client, tracker_settings
         diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
     )
     assert "collector: collector has not reported yet" in digest
+
+
+# ── the AI layer's failures are named, not just counted ─────────────────────
+
+
+def _ai_outcome(rows, *, verdict, rationale="", n=0):
+    entry = 100.0
+    start = datetime.now(timezone.utc) - timedelta(hours=6)
+    rows.append(Signal(
+        symbol=f"AI{n}", signal_type="SCREENER", direction="LONG",
+        entry_price=entry, tp=entry * 1.05, sl=entry * 0.99, strategy="SCALP",
+        status=Status.TP_HIT.value, pnl_pct=1.0, r_multiple=1.0,
+        ai_verdict=verdict, ai_rationale=rationale,
+        activated_at=start.isoformat(),
+        exit_time=(start + timedelta(hours=1)).isoformat(),
+        resolved_at=(start + timedelta(hours=1)).isoformat(),
+    ).to_dict())
+
+
+def _half_failing(rows):
+    """Nine verdicts, ten abstentions — today's shape, roughly."""
+    for i in range(10):
+        _ai_outcome(rows, verdict="ABSTAIN",
+                    rationale="ABSTAIN/NO_JSON: Insufficient Balance", n=i)
+    for i in range(9):
+        _ai_outcome(rows, verdict="CONFIRM", rationale="looks good", n=100 + i)
+
+
+def test_a_partly_failing_layer_now_says_why(store, fake_client, tracker_settings):
+    """The gap this closes: reasons used to appear only at total failure.
+
+    A layer failing on half its signals counted the abstentions and never said
+    what went wrong — the same silence that let a 29/29 run go unnoticed, one
+    degree quieter.
+    """
+    rows = []
+    _half_failing(rows)
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "abstained on 53% of the signals it ran on" in digest
+    assert "NO_JSON: Insufficient Balance" in digest
+    assert "AI_DEGRADED(10/19=53%" in digest
+
+
+def test_an_abstention_is_reported_as_a_failure_not_an_opinion(
+    store, fake_client, tracker_settings
+):
+    """Decision.ABSTAIN is "AI layer unavailable / errored" — never a verdict.
+
+    An AI that looked and had no opinion returns NEUTRAL, so every abstention
+    counted here is a fault and the rate is a failure rate.
+    """
+    rows = []
+    _half_failing(rows)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert round(diag["ai_failure_rate"], 3) == round(10 / 19, 3)
+    assert diag["ai_abstain_reasons"] == {"NO_JSON: Insufficient Balance": 10}
+
+
+def test_the_faults_are_ranked_so_the_common_one_leads(
+    store, fake_client, tracker_settings
+):
+    rows = []
+    for i in range(6):
+        _ai_outcome(rows, verdict="ABSTAIN", rationale="ABSTAIN/ERROR: timeout", n=i)
+    _ai_outcome(rows, verdict="ABSTAIN", rationale="ABSTAIN/NO_ARBITER", n=50)
+    for i in range(3):
+        _ai_outcome(rows, verdict="CONFIRM", n=100 + i)
+
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert list(diag["ai_abstain_reasons"]) == ["ERROR: timeout", "NO_ARBITER"]
+
+
+def test_a_healthy_layer_adds_no_flag_and_no_noise(
+    store, fake_client, tracker_settings
+):
+    """A clean run must not grow two extra lines and a scary flag."""
+    rows = []
+    for i in range(20):
+        _ai_outcome(rows, verdict="CONFIRM", rationale="fine", n=i)
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "abstained on" not in digest
+    assert "AI_DEGRADED" not in digest
+
+
+def test_a_switched_off_layer_is_not_reported_as_a_broken_one(
+    store, fake_client, tracker_settings
+):
+    """NO_AI means the layer never tried — a configuration choice, not a fault."""
+    rows = []
+    for i in range(12):
+        _ai_outcome(rows, verdict="", n=i)      # no verdict at all => NO_AI
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert diag["ai_failure_rate"] == 0.0
+    assert not any(f.startswith("AI_DEGRADED") for f in diag["flags"])
+
+
+def test_total_failure_still_reads_as_total_failure(
+    store, fake_client, tracker_settings
+):
+    """The louder flag is kept for the case it was written for."""
+    rows = []
+    for i in range(12):
+        _ai_outcome(rows, verdict="ABSTAIN",
+                    rationale="ABSTAIN/NO_ARBITER: no client", n=i)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    flags = " ".join(diag["flags"])
+    assert "AI_NEVER_DECIDES" in flags
+    assert "NO_ARBITER: no client" in flags
+    assert "AI_DEGRADED" not in flags      # one fault, named once
