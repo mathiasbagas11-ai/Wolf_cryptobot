@@ -154,6 +154,34 @@ concur   mean_open=7.29 max_open=8 eff_n_floor=31
 flags    STATE_NOT_PERSISTED AI_NEVER_DECIDES TP1_BANKS_WIN_OFF
 ```
 
+### What the cost figures do and do not contain
+
+Two costs are reported side by side, and they are **not the same sum**:
+
+| Figure | Contains | Source |
+|---|---|---|
+| `cost` / `assumed` | taker both sides **+ slippage** | `ROUND_TRIP_COST_BPS`, a constant |
+| `spread` / `measured` | taker both sides **+ recorded spread** | `TAKER_FEE_BPS` + `/ticker/bookTicker` per signal |
+
+The measured figure has no slippage term at all, because the ledger is paper:
+no order is ever filled, so there is no realised price to compare a quote
+against. At ordinary spreads it therefore lands *below* the assumption every
+time, and a reader comparing the two straight would conclude costs are cheaper
+than modelled when one component is simply absent.
+
+So the digest names each figure for what it holds — `fee+spread` rather than
+`round trip` — and prints the difference as `slippage_residual_bps`:
+
+```
+spread   4.00bps median [4.00..4.00] over 4/4 signals
+         + 2x5bps taker => 14.00bps fee+spread, measured cost=0.140R
+         assumed 20bps => 0.200R, incl. 6.00bps slippage the book cannot price (paper ledger, no fill)
+```
+
+A **negative** residual is not a smaller allowance, it is a deficit: fees and
+spread alone have overrun the constant, so `netR` is understating the cost
+outright. That case is worded as such rather than as slippage.
+
 ### Is the AI's verdict worth anything?
 
 The debate layer runs in monitor mode: it annotates a signal and never blocks

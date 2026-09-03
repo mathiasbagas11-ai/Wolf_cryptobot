@@ -794,11 +794,19 @@ class Settings:
     # slippage), used to report expectancy net of costs. It matters more than it
     # looks: targets are ATR multiples, so 1R is often well under 1% and 20bps
     # can be a third of the risk unit.
+    #
+    # The slippage half of this is an allowance, not a measurement, and it
+    # cannot become one here: the ledger is paper, so no order is ever filled
+    # and there is no realised price to compare a quote against. That is why
+    # the diagnostic reports the measured figure as "fee+spread" and names the
+    # residual separately rather than calling both numbers a round trip.
     round_trip_cost_bps: float = 20.0
     # Taker fee per side, in bps. Used only where a signal recorded the spread
-    # it actually faced: the round trip is then two fees plus one full spread
-    # (buy the ask, sell the bid), measured rather than assumed. Signals with
-    # no recorded spread keep using round_trip_cost_bps above.
+    # it actually faced: fees and spread are then two fees plus one full spread
+    # (buy the ask, sell the bid), measured rather than assumed. This is a
+    # strictly smaller sum than round_trip_cost_bps above, which also carries
+    # slippage — the two are not interchangeable. Signals with no recorded
+    # spread keep using round_trip_cost_bps.
     taker_fee_bps: float = 5.0
 
     # Refuse a signal whose stop sits so close that the round trip eats more

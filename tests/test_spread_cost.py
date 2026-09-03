@@ -80,7 +80,7 @@ def _diag(store, fake_client, tracker_settings, rows, **kw):
     return diagnose(Tracker(store, fake_client, tracker_settings), **kw)
 
 
-def test_the_round_trip_is_two_fees_plus_one_spread(store, fake_client, tracker_settings):
+def test_the_measured_cost_is_two_fees_plus_one_spread(store, fake_client, tracker_settings):
     """A taker buys the ask and sells the bid, so the spread is paid once."""
     rows = []
     for i in range(4):
@@ -89,7 +89,7 @@ def test_the_round_trip_is_two_fees_plus_one_spread(store, fake_client, tracker_
               taker_fee_bps=5.0)["cost"]["measured"]
 
     assert m["median_spread_bps"] == 4.0
-    assert m["median_round_trip_bps"] == 14.0        # 2x5 + 4
+    assert m["median_fee_spread_bps"] == 14.0        # 2x5 + 4
     assert m["cost_r"] == pytest.approx(0.14)        # 14bps over a 1.00% risk unit
 
 
@@ -171,7 +171,7 @@ def test_the_digest_prints_the_measured_cost_beside_the_assumed_one(
     )
     assert "spread" in digest
     assert "0.50..30.00" in digest
-    assert "round trip" in digest
+    assert "fee+spread" in digest
     assert "assumed" in digest
 
 
@@ -185,3 +185,83 @@ def test_an_uncovered_window_says_so_rather_than_going_quiet(
     digest = render_digest(_diag(store, fake_client, tracker_settings, rows))
     assert "no signal in this window recorded a spread" in digest
     assert "0/3" in digest
+
+
+# ── the measured figure and the assumed one are not the same sum ────────────
+
+
+def test_the_measurement_carries_no_slippage_and_the_card_says_so(
+    store, fake_client, tracker_settings
+):
+    """The bug this pair of lines exists to stop.
+
+    ``round_trip_cost_bps`` is documented as fees both sides *plus slippage*.
+    What is measured is fees plus spread, with no slippage term at all — a
+    paper ledger has no fill to price one from. At ordinary spreads the
+    measured figure therefore lands below the assumption every single time, and
+    a reader comparing them straight concludes costs are cheaper than modelled
+    when one component is simply absent.
+    """
+    rows = []
+    for i in range(4):
+        _outcome(rows, r=1.0, spread_bps=4.0, risk_pct=1.0, n=i)
+    cost = _diag(store, fake_client, tracker_settings, rows,
+                 round_trip_bps=20.0, taker_fee_bps=5.0)["cost"]
+
+    # 20 assumed - (2x5 fees + 4 spread) = 6bps of unobservable slippage.
+    assert cost["measured"]["slippage_residual_bps"] == 6.0
+    assert cost["measured"]["cost_r"] < cost["cost_r"]  # and it reads cheaper
+
+
+def test_the_digest_names_what_separates_the_two_figures(
+    store, fake_client, tracker_settings
+):
+    rows = []
+    for i in range(4):
+        _outcome(rows, r=1.0, spread_bps=4.0, risk_pct=1.0, n=i)
+    digest = render_digest(_diag(store, fake_client, tracker_settings, rows,
+                                 round_trip_bps=20.0, taker_fee_bps=5.0))
+
+    assert "fee+spread" in digest       # what was measured
+    assert "slippage" in digest         # what was not
+    assert "6.00bps" in digest          # and how much of it the constant carries
+    # Never under one word that implies the two numbers are the same quantity.
+    assert "round trip" not in digest
+
+
+def test_a_spread_that_overruns_the_constant_is_called_out_as_too_small(
+    store, fake_client, tracker_settings
+):
+    """A negative residual is not a smaller slippage allowance — it is a deficit.
+
+    Once fees and spread alone exceed the constant, ``netR`` is understating
+    the cost outright, and reading the line as "slippage is negative" would
+    invert what it means.
+    """
+    rows = []
+    for i in range(4):
+        _outcome(rows, r=1.0, spread_bps=40.0, risk_pct=1.0, n=i)
+    diag = _diag(store, fake_client, tracker_settings, rows,
+                 round_trip_bps=20.0, taker_fee_bps=5.0)
+
+    assert diag["cost"]["measured"]["slippage_residual_bps"] == -30.0
+    digest = render_digest(diag)
+    assert "overrun" in digest and "too small" in digest
+    assert "incl." not in digest  # never phrased as an allowance
+
+
+def test_the_assumption_is_quoted_in_its_own_units_beside_the_measurement(
+    store, fake_client, tracker_settings
+):
+    """The bps constant, not just the R it converts to.
+
+    The two costs differ in bps for one reason (a missing component) and in R
+    for another (each is divided by a different risk unit). Printing only the R
+    figures leaves the reader unable to tell those apart.
+    """
+    rows = []
+    for i in range(4):
+        _outcome(rows, r=1.0, spread_bps=4.0, risk_pct=1.0, n=i)
+    digest = render_digest(_diag(store, fake_client, tracker_settings, rows,
+                                 round_trip_bps=20.0, taker_fee_bps=5.0))
+    assert "assumed 20bps" in digest

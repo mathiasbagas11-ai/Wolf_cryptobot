@@ -285,14 +285,24 @@ def _spread_status(tracker) -> str:
     return f"{status} @ {at}" if status and at else status
 
 
-def _measured_cost(rows: list, taker_fee_bps: float) -> dict:
-    """Round-trip cost priced from the spread each signal actually faced.
+def _measured_cost(rows: list, taker_fee_bps: float, round_trip_bps: float) -> dict:
+    """Fee-and-spread cost priced from the spread each signal actually faced.
 
-    A round trip is two taker fees plus one full spread — the position is
-    opened at the ask and closed at the bid — and only the fees are the same
-    on every symbol. The configured constant charges the whole book one
-    number, which models a range spanning better than a basis point on BTC to
-    ten on a freshly-rotated alt as a single point.
+    Two taker fees plus one full spread — the position is opened at the ask and
+    closed at the bid — and only the fees are the same on every symbol. The
+    configured constant charges the whole book one number, which models a range
+    spanning better than a basis point on BTC to ten on a freshly-rotated alt as
+    a single point.
+
+    **This is not the same quantity as the constant it sits beside.**
+    ``round_trip_cost_bps`` is documented as taker fees both sides *plus
+    slippage*; what is measured here has no slippage term in it at all, because
+    a paper ledger has no fill to price one from. Two spreads under 10bps
+    therefore make the measured figure land below the assumption every time,
+    and a reader comparing them straight would conclude costs are cheaper than
+    modelled when in fact one component is simply absent. The difference is
+    returned as ``slippage_residual_bps`` and printed, so the comparison states
+    what separates the two numbers instead of implying nothing does.
 
     Reported *alongside* the constant-based figure rather than replacing it.
     The sample straddles the change: signals booked before the spread was
@@ -316,13 +326,22 @@ def _measured_cost(rows: list, taker_fee_bps: float) -> dict:
 
     spreads = [s for _, s, _ in priced]
     costs = [((2 * taker_fee_bps + s) / 100.0) / risk for _, s, risk in priced]
+    median_spread = statistics.median(spreads)
+    fee_spread = 2 * taker_fee_bps + median_spread
     return {
         "covered": len(priced),
         "sample": len(rows),
-        "median_spread_bps": round(statistics.median(spreads), 2),
+        "median_spread_bps": round(median_spread, 2),
         "min_spread_bps": round(min(spreads), 2),
         "max_spread_bps": round(max(spreads), 2),
-        "median_round_trip_bps": round(2 * taker_fee_bps + statistics.median(spreads), 2),
+        # Named for what it contains. It was called a "round trip", which is
+        # what the assumption is also called, and two different quantities
+        # under one name is how the missing component stayed invisible.
+        "median_fee_spread_bps": round(fee_spread, 2),
+        # What the assumption carries and this measurement does not. Negative
+        # means the observed fees and spread have already overrun the constant,
+        # so the constant is not merely missing slippage — it is too small.
+        "slippage_residual_bps": round(round_trip_bps - fee_spread, 2),
         "cost_r": round(statistics.fmean(costs), 3),
     }
 
@@ -407,6 +426,10 @@ def diagnose(
     ``round_trip_bps`` is the assumed all-in cost of a trade (taker fees both
     sides plus slippage). It is converted into R using the median risk distance,
     because that is the unit the strategies actually target.
+
+    ``taker_fee_bps`` prices the separate, *measured* figure reported beside it,
+    which is fees plus the recorded spread and carries no slippage term. The two
+    are different sums and the digest says so; see :func:`_measured_cost`.
     """
     outcomes = tracker.outcomes()
     if window_hours and window_hours > 0:
@@ -660,7 +683,7 @@ def diagnose(
             "round_trip_bps": round_trip_bps,
             "median_1r_pct": round(median_1r, 3),
             "cost_r": round(cost_r, 3),
-            "measured": _measured_cost(traded, taker_fee_bps),
+            "measured": _measured_cost(traded, taker_fee_bps, round_trip_bps),
             "taker_fee_bps": taker_fee_bps,
             # The gate as the running process has it, not as the operator
             # believes they set it. An env var that never reached the
@@ -727,6 +750,15 @@ def _measured_cost_lines(cost: dict) -> list[str]:
     thing the measurement was added to expose: that one configured constant is
     standing in for symbols whose real spreads differ by an order of
     magnitude.
+
+    The two figures are named for what each one contains, and the difference
+    between them is spelled out. Printed side by side under one word — "round
+    trip" for both — the measured number reads as a cheaper version of the
+    assumed one, when the truthful reading is that it is a *different sum*: the
+    constant carries a slippage allowance and the measurement has no slippage
+    term at all. On a paper ledger there is no fill to price one from, so the
+    honest move is to say what is missing rather than to invent a number for it
+    or to let the comparison imply nothing is.
     """
     m = cost.get("measured") or {}
     covered, sample = m.get("covered", 0), m.get("sample", 0)
@@ -741,14 +773,28 @@ def _measured_cost_lines(cost: dict) -> list[str]:
             f"(0/{sample}) — cost above is the configured constant",
             f"         collector: {why}",
         ]
+    residual = m["slippage_residual_bps"]
+    if residual >= 0:
+        gap = (
+            f"incl. {residual:.2f}bps slippage the book cannot price "
+            f"(paper ledger, no fill)"
+        )
+    else:
+        # The constant is not merely missing a component; the observed fees and
+        # spread already exceed it, so netR is understating the cost outright.
+        gap = (
+            f"but fees+spread overrun it by {-residual:.2f}bps — "
+            f"constant too small, before any slippage"
+        )
     return [
         f"spread   {m['median_spread_bps']:.2f}bps median "
         f"[{m['min_spread_bps']:.2f}..{m['max_spread_bps']:.2f}] "
         f"over {covered}/{sample} signals",
         f"         + 2x{cost['taker_fee_bps']:g}bps taker => "
-        f"{m['median_round_trip_bps']:.2f}bps round trip, "
-        f"measured cost={m['cost_r']:.3f}R "
-        f"(assumed {cost['cost_r']:.3f}R)",
+        f"{m['median_fee_spread_bps']:.2f}bps fee+spread, "
+        f"measured cost={m['cost_r']:.3f}R",
+        f"         assumed {cost['round_trip_bps']:g}bps => "
+        f"{cost['cost_r']:.3f}R, {gap}",
     ]
 
 
