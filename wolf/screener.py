@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 from wolf.config import RiskSettings
@@ -34,6 +35,9 @@ from wolf.regime_composite import MarketContext
 from wolf.tracker import Tracker
 
 log = logging.getLogger("wolf.screener")
+
+#: Where the last book-spread fetch outcome is stored, for the digest to read.
+SPREAD_STATUS_KEY = "spread_status"
 
 # Reversal setups intentionally fade the trend, so the regime filter exempts
 # them — only trend-following detectors are gated for fighting the tape.
@@ -671,12 +675,46 @@ class Screener:
         Never raises: a book ticker that fails is a missing measurement, not a
         reason to skip a scan cycle. The signals emitted meanwhile record no
         spread and are counted as uncovered.
+
+        The outcome is written to the store rather than only logged. A digest
+        that reports "0 of 36 signals recorded a spread" states the symptom and
+        cannot state the fault, and the three candidates — the venue served
+        nothing, the request failed, or the symbols came back under names the
+        universe does not use — have three different remedies. Only one of them
+        is a code change, and none of them is visible from the card without
+        this. Same reasoning as naming the ABSTAIN causes rather than counting
+        them.
         """
         try:
-            return self._client.get_book_spread() or {}
-        except Exception:
+            spreads = self._client.get_book_spread() or {}
+        except Exception as exc:
             log.warning("Book spread unavailable this cycle", exc_info=True)
+            self._record_spread_status(f"ERROR/{type(exc).__name__}: {exc}"[:200])
             return {}
+        if not spreads:
+            self._record_spread_status("EMPTY: no venue served a book ticker")
+            return {}
+        universe = set(self.current_universe())
+        matched = len(universe & set(spreads))
+        if not matched:
+            sample = ", ".join(sorted(spreads)[:3])
+            self._record_spread_status(
+                f"UNMATCHED: {len(spreads)} symbols served, none in the universe "
+                f"(venue names e.g. {sample})"[:200]
+            )
+            return {}
+        self._record_spread_status(f"OK: {matched}/{len(universe)} symbols priced")
+        return spreads
+
+    def _record_spread_status(self, status: str) -> None:
+        """Persist the last spread-fetch outcome for the digest to report."""
+        try:
+            self._tracker._store.write(SPREAD_STATUS_KEY, {
+                "status": status,
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            })
+        except Exception:  # never let bookkeeping break a scan cycle
+            log.debug("Could not record spread status", exc_info=True)
 
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""

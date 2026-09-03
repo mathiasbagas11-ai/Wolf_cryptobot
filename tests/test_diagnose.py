@@ -505,3 +505,82 @@ def test_the_digest_prints_the_adjusted_p_and_says_what_it_is(
     assert "padj=" in digest
     assert "fdr " in digest
     assert "overall is not in the family" in digest
+
+
+# ── the gate and the collector report themselves ────────────────────────────
+
+
+def test_the_card_reports_the_gate_actually_in_force(
+    store, fake_client, tracker_settings
+):
+    """An env var that never reached the container is otherwise invisible.
+
+    The threshold is believed deployed, the code default stays in force, every
+    signal it was meant to reject keeps arriving, and no figure on the card
+    contradicts the intention.
+    """
+    rows = []
+    for i in range(6):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, risk_pct=0.85, n=i)
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows),
+                 round_trip_bps=20.0, max_cost_r=0.15)
+    )
+    assert "max_cost_r=0.15" in digest
+    # 20bps at a 0.15R ceiling means anything under a 1.33% risk unit is out,
+    # which the 1R column on each strategy row can be read straight against.
+    assert "rejects 1R < 1.33%" in digest
+
+
+def test_a_loose_gate_and_a_tight_one_print_different_floors(
+    store, fake_client, tracker_settings
+):
+    """The number is derived, so a stale default cannot masquerade as the new one."""
+    rows = []
+    _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=0)
+    tracker = _tracker_with(store, fake_client, tracker_settings, rows)
+
+    loose = render_digest(diagnose(tracker, round_trip_bps=20.0, max_cost_r=0.5))
+    tight = render_digest(diagnose(tracker, round_trip_bps=20.0, max_cost_r=0.15))
+    assert "rejects 1R < 0.40%" in loose
+    assert "rejects 1R < 1.33%" in tight
+
+
+def test_an_unset_gate_prints_no_line_rather_than_a_wrong_one(
+    store, fake_client, tracker_settings
+):
+    """A caller that does not know the gate must not invent one."""
+    rows = []
+    _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=0)
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "max_cost_r" not in digest
+
+
+def test_an_uncovered_spread_names_the_fault_not_just_the_symptom(
+    store, fake_client, tracker_settings
+):
+    """"0 of 36 recorded a spread" is a symptom with three different remedies."""
+    rows = []
+    for i in range(3):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=i)
+    store.write("spread_status", {
+        "status": "UNMATCHED: 2100 symbols served, none in the universe "
+                  "(venue names e.g. BTC-USDT)",
+        "at": "2026-09-03T04:00:00+00:00",
+    })
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "collector:" in digest
+    assert "UNMATCHED" in digest
+
+
+def test_a_collector_that_never_ran_says_so(store, fake_client, tracker_settings):
+    rows = []
+    _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=0)
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "collector: collector has not reported yet" in digest

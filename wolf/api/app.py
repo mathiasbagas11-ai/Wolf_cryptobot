@@ -152,6 +152,7 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             window_hours=window_hours,
             round_trip_bps=app_obj.settings.round_trip_cost_bps,
             taker_fee_bps=app_obj.settings.taker_fee_bps,
+            max_cost_r=app_obj.settings.max_cost_r,
             tp1_banks_win=app_obj.settings.tracker.tp1_banks_win,
             state_dir=app_obj.settings.state_dir,
             ai_available=ai_status(app_obj)["available"],

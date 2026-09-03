@@ -231,6 +231,23 @@ def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0) -> dict:
     }
 
 
+def _spread_status(tracker) -> str:
+    """The screener's own last word on why the book ticker did or did not answer.
+
+    Counting uncovered signals states a symptom. "The venue served nothing",
+    "the request failed" and "the symbols came back under other names" are
+    three different faults behind that one symptom, two of which are not code
+    changes at all.
+    """
+    try:
+        row = tracker._store.read("spread_status", default=None) or {}
+    except Exception:
+        return ""
+    status = str(row.get("status") or "")
+    at = str(row.get("at") or "")
+    return f"{status} @ {at}" if status and at else status
+
+
 def _measured_cost(rows: list, taker_fee_bps: float) -> dict:
     """Round-trip cost priced from the spread each signal actually faced.
 
@@ -303,6 +320,7 @@ def diagnose(
     window_hours: Optional[float] = None,
     round_trip_bps: float = 20.0,
     taker_fee_bps: float = 5.0,
+    max_cost_r: Optional[float] = None,
     tp1_banks_win: bool = False,
     state_dir: str = "",
     ai_available: Optional[bool] = None,
@@ -523,6 +541,18 @@ def diagnose(
             "cost_r": round(cost_r, 3),
             "measured": _measured_cost(traded, taker_fee_bps),
             "taker_fee_bps": taker_fee_bps,
+            # The gate as the running process has it, not as the operator
+            # believes they set it. An env var that never reached the
+            # container leaves the code default in force and nothing on the
+            # card contradicts the intention — which is how a threshold can be
+            # "deployed" for days while every signal it was meant to reject
+            # still arrives.
+            "max_cost_r": max_cost_r,
+            "min_1r_pct": (
+                round((round_trip_bps / 100.0) / max_cost_r, 3)
+                if max_cost_r else None
+            ),
+            "spread_status": _spread_status(tracker),
         },
         "overall": overall,
         "ladder": ladder,
@@ -544,6 +574,27 @@ def diagnose(
     }
 
 
+def _gate_lines(cost: dict) -> list[str]:
+    """The cost gate as the running process holds it.
+
+    Printed beside the strategy rows it decides, because the failure this
+    catches is silent by construction: an environment variable that never
+    reached the container leaves the code default in force, every signal the
+    new threshold was meant to reject keeps arriving, and no figure on the
+    card says which threshold was actually applied. Reporting the derived
+    minimum 1R as well makes the check a glance — compare it to the 1R column
+    on each strategy row and a gate that is not biting is obvious.
+    """
+    max_cost_r = cost.get("max_cost_r")
+    if max_cost_r is None:
+        return []
+    floor = cost.get("min_1r_pct")
+    return [
+        f"gate     max_cost_r={max_cost_r:g} => rejects 1R < "
+        f"{floor:.2f}%" if floor else f"gate     max_cost_r={max_cost_r:g}"
+    ]
+
+
 def _measured_cost_lines(cost: dict) -> list[str]:
     """The spread-priced cost, when any of the sample carries a spread.
 
@@ -557,9 +608,13 @@ def _measured_cost_lines(cost: dict) -> list[str]:
     if not covered:
         # Say nothing at all only when the field has never been populated;
         # once collection starts, silence would read as "no difference found".
-        return [] if not sample else [
+        if not sample:
+            return []
+        why = cost.get("spread_status") or "collector has not reported yet"
+        return [
             f"spread   no signal in this window recorded a spread "
-            f"(0/{sample}) — cost above is the configured constant"
+            f"(0/{sample}) — cost above is the configured constant",
+            f"         collector: {why}",
         ]
     return [
         f"spread   {m['median_spread_bps']:.2f}bps median "
@@ -601,6 +656,7 @@ def render_digest(diag: dict) -> str:
         f"sample   traded={s['traded']} graded={s['graded']} flat={s['flat']} "
         f"invalid={s['invalidated']} unpriced={s['unpriced']}",
         f"cost     {c['round_trip_bps']:g}bps / 1R={c['median_1r_pct']:.2f}% => {c['cost_r']:.3f}R",
+        *_gate_lines(c),
         *_measured_cost_lines(c),
         f"overall  meanR={o['mean_r']:+.3f} sdR={o['sd_r']:.2f} n={o['n']} se={o['se_r']:.3f} "
         f"t={o['t']:+.2f} ci95=[{o['ci95'][0]:+.3f},{o['ci95'][1]:+.3f}]",
