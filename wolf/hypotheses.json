@@ -95,6 +95,13 @@
       "settled_on": "2026-09-04",
       "evidence": "Depth raised (lookback 50->300, candle_limit 250->1000) AND the live MAX_COST_R gate applied inside the engine, which previously applied no gates at all",
       "note": "Depth alone would have made things worse: an ungated backtest accumulates the tiny-1R population the gate now rejects, so the deeper the history the more of a dead strategy it describes. /whatif history is deliberately NOT deepened \u2014 its 1000x15m reach is ~10.4 days, which rolls the pre-gate era out of the sample on its own."
+    },
+    {
+      "id": "whale-veto-direction",
+      "question": "Is the whale veto filtering the wrong side?",
+      "status": "OPEN",
+      "evidence": "Diag buckets across two cards: whale:WITH meanR -0.575/-0.536 vs AGAINST +0.667/+0.688, t about -2.2 to -2.5, padj 0.19-0.41 \u2014 nothing survives. The two cards overlap ~75% in window, so they are close to one observation, not two",
+      "note": "UNANSWERABLE AS POSED with the current architecture. The veto drops candidates before record_signal, so the setups it refused have no outcomes and no arrangement of recorded data reaches them. /whatif whale scores what the veto already allowed and says so. Settling this properly needs the veto moved to monitor mode \u2014 annotate and record instead of drop \u2014 which is a strategy change and waits for the 350-trade sample."
     }
   ]
 }

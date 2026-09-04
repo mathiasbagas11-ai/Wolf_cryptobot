@@ -36,6 +36,7 @@ _HELP = (
     "<code>/whatif</code> — re-grade past signals under each stop rule\n"
     "<code>/whatif cost</code> — what each max_cost_r would have kept\n"
     "<code>/whatif ladder</code> — re-cut the TP ladder on the same trades\n"
+    "<code>/whatif whale</code> — what each whale-veto policy would have kept\n"
     "<code>/ai</code> — is the debate layer actually answering?\n"
     "<code>/tested</code> — what has already been tried, and what settled it\n"
     "<code>/help</code> — this message"
@@ -135,6 +136,13 @@ class CommandRouter:
                     + esc(render_ladder(compare_ladder_geometry(self._app.tracker)))
                     + "</pre>"
                 )
+            if arg.lower().startswith("whale"):
+                from wolf.whatif import render_whale, whale_report
+
+                return "<pre>" + esc(render_whale(whale_report(
+                    self._app.tracker,
+                    round_trip_bps=self._app.settings.round_trip_cost_bps,
+                ))) + "</pre>"
             if arg.lower().startswith("cost"):
                 report = compare_cost_gates(
                     self._app.tracker,

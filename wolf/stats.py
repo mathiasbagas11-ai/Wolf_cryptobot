@@ -18,6 +18,8 @@ not depend on the reader remembering to apply it.
 from __future__ import annotations
 
 import math
+import statistics
+from typing import Optional
 
 #: Benjamini-Hochberg operates on the family of tests actually looked at, so
 #: the rate is a property of the report rather than of any one bucket.
@@ -144,3 +146,36 @@ def benjamini_hochberg(
     for rank in range(cutoff):
         rejected[order[rank]] = True
     return rejected, adjusted
+
+
+def mean_gap(a: list[float], b: list[float]) -> Optional[dict]:
+    """Welch's two-sample t for the gap between two populations of R.
+
+    Welch rather than Student because the two sides have no reason to share a
+    variance and usually do not share a size either — a layer that confirms
+    twice as often as it rejects gives one bucket half the other's noise, and
+    pooling them would report a precision neither side has.
+
+    Returns ``None`` when either side is too small to have a variance, which is
+    the honest answer: a gap computed from one observation is a difference of
+    two numbers, not a measurement.
+    """
+    if len(a) < 2 or len(b) < 2:
+        return None
+    na, nb = len(a), len(b)
+    ma, mb = statistics.fmean(a), statistics.fmean(b)
+    va, vb = statistics.variance(a) / na, statistics.variance(b) / nb
+    se = math.sqrt(va + vb)
+    if se <= 0:
+        return None
+    denom = va * va / (na - 1) + vb * vb / (nb - 1)
+    df = ((va + vb) ** 2 / denom) if denom > 0 else 0.0
+    return {
+        "n": na + nb,
+        "n_a": na,
+        "n_b": nb,
+        "df": int(df),
+        "gap_r": round(ma - mb, 3),
+        "se_r": round(se, 3),
+        "t": round((ma - mb) / se, 2),
+    }

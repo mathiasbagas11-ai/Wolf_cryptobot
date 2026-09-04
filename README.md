@@ -204,6 +204,32 @@ change is confirmed in seconds rather than in tomorrow's digest — a broken lay
 abstains rather than failing, so without the probe a fix cannot be verified until
 the abstentions it caused have aged out of the window.
 
+### Whale-veto policies, and the trades that are not there
+
+`/whatif whale` scores each veto policy over the recorded book: what it would
+have kept, what that book's mean and net R would have been, and — for each
+policy — Welch's two-sample t between the trades it kept and the trades it
+would have dropped.
+
+**It is not the ladder card with different rows.** A geometry re-cut re-scores
+*the same trade*: every variant holds every signal, the market move is common
+to both columns and cancels, and a paired t is right. A veto does not re-score
+anything — it decides which trades exist, so two policies hold different
+subsets, nothing cancels, and a paired statistic would claim a pairing that
+isn't there. Policies selecting identical trades collapse into one row, because
+two names for one test would report a finding twice and enter it into the
+correction twice.
+
+**And the decisive evidence is missing by construction.**
+`Screener._whale_vetoed` runs before `record_signal`, so a candidate the live
+veto rejected never became a signal, never got an outcome, and cannot appear on
+this card. Every policy is scored only on trades the current veto already
+allowed. That is precisely the self-blinding the AI layer was kept out of the
+signal path to avoid — arriving through a gate that was never held to the same
+rule. The card prints the caveat every time, because the reading the numbers
+most invite ("the veto is filtering the wrong side") is exactly the one they
+cannot support.
+
 ### The backtest runs the bot that is actually deployed
 
 `wolf/backtest/engine.py` replays the live detectors over history — under the

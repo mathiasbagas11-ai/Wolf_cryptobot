@@ -22,7 +22,7 @@ from typing import Optional
 
 from wolf.config import LadderSettings, TrackerSettings
 from wolf.models import Status
-from wolf.stats import DEFAULT_FDR, benjamini_hochberg, t_to_p
+from wolf.stats import DEFAULT_FDR, benjamini_hochberg, mean_gap, t_to_p
 from wolf.tracker import (
     OUTCOMES_KEY, Tracker, _parse_iso, _partial_pnl, _replay_start_ms, _resolved_at,
     _risk_pct, normalize_ladder, r_multiple_of,
@@ -712,4 +712,159 @@ def render_cost_gates(report: dict) -> str:
     lines += [r.line() for r in report["results"]]
     lines.append("  the threshold is picked on the trades it is scored against;")
     lines.append("  read the shape of the curve, not the winning row.")
+    return "\n".join(lines)
+
+
+# ── whale veto policies ─────────────────────────────────────────────────────
+#
+# This card is not the ladder card with different rows, and the difference is
+# load-bearing. A geometry re-cut re-scores *the same trade*: every variant
+# holds every signal, the market move is common to both columns and cancels,
+# and a paired t on the differences is the right test. A veto does not re-score
+# anything — it decides which trades exist. Two policies therefore hold
+# different subsets, nothing cancels, and a paired statistic would be claiming
+# a pairing that is not there.
+#
+# So each policy is scored against the trades it would have dropped, with
+# Welch's two-sample t on two disjoint populations. That is the question a veto
+# actually poses: did the excluded set do worse than the set that was kept?
+
+#: What each policy refuses, as a set of ``whale_stance`` labels. ``live`` is
+#: the record as it stands — whatever the deployed veto already let through.
+_WHALE_POLICIES: tuple[tuple[str, frozenset], ...] = (
+    ("live", frozenset()),
+    ("drop WITH", frozenset({"WITH"})),
+    ("drop AGAINST", frozenset({"AGAINST"})),
+    ("drop NEUTRAL", frozenset({"NEUTRAL"})),
+    ("only AGAINST", frozenset({"WITH", "NEUTRAL", "NO_DATA"})),
+)
+
+
+def _stance_of(o) -> str:
+    return (getattr(o, "whale_stance", "") or "NO_DATA")
+
+
+def whale_report(tracker, *, round_trip_bps: float = 20.0, window_hours: float = 0.0) -> dict:
+    """Score each whale-veto policy over the signals that were actually recorded.
+
+    **The decisive evidence is missing by construction, and the card says so.**
+    ``Screener._whale_vetoed`` runs before ``record_signal``, so a candidate the
+    live veto rejected never became a signal, never got an outcome and cannot
+    appear here. Every policy below is therefore scored only on the trades the
+    current veto already allowed — which is exactly the self-blinding this
+    project refused to accept from the AI layer, arriving through a gate that
+    was never held to the same rule.
+
+    What that leaves answerable is still worth having: among the trades that did
+    run, did the ones a given stance labelled do worse than the rest? That is a
+    real question with a real answer, and it is the one a reader should take
+    from this card. What it cannot say is whether the strongly-opposed setups
+    the veto removes were worth taking — no arrangement of the recorded data
+    reaches them.
+    """
+    rows = [o for o in tracker.outcomes() if o.status != Status.INVALIDATED.value]
+    if window_hours and window_hours > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+        rows = [
+            o for o in rows
+            if (ts := (_parse_iso(o.resolved_at or o.exit_time or "") if
+                       (o.resolved_at or o.exit_time) else None)) is not None
+            and ts >= cutoff
+        ]
+    if len(rows) < 2:
+        return {"error": "not enough recorded signals to score a veto policy",
+                "results": []}
+
+    def _cost_r(subset: list) -> float:
+        # Each policy's own risk unit, because dropping a stance changes the
+        # mix of stop distances and therefore what a round trip costs in R.
+        risks = [r for r in (_risk_pct(o) for o in subset) if r > 0]
+        median = statistics.median(risks) if risks else 0.0
+        return ((round_trip_bps / 100.0) / median) if median else 0.0
+
+    results = []
+    contrasts = []
+    # Policies that select the same trades are one test, not two. With only
+    # WITH and AGAINST in the book, "drop WITH" and "only AGAINST" keep exactly
+    # the same rows — printing both would report one finding twice and, worse,
+    # enter it into the correction twice, raising the bar every other row has to
+    # clear on the strength of a duplicate. ``live`` is first, so it wins ties
+    # and a policy that refuses nothing present collapses into it.
+    seen: set[frozenset] = set()
+    for label, refused in _WHALE_POLICIES:
+        kept = [o for o in rows if _stance_of(o) not in refused]
+        dropped = [o for o in rows if _stance_of(o) in refused]
+        if not kept:
+            continue
+        signature = frozenset(id(o) for o in kept)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        kept_r = [r_multiple_of(o) for o in kept]
+        cost = _cost_r(kept)
+        mean_r = statistics.fmean(kept_r)
+        results.append({
+            "label": label,
+            "kept": len(kept),
+            "dropped": len(dropped),
+            "mean_r": round(mean_r, 3),
+            "net_r": round(mean_r - cost, 3),
+            "cost_r": round(cost, 3),
+        })
+        gap = mean_gap(kept_r, [r_multiple_of(o) for o in dropped]) if dropped else None
+        if gap:
+            gap["label"] = label
+            contrasts.append(gap)
+
+    if contrasts:
+        raw = [t_to_p(c["t"], int(c["df"])) for c in contrasts]
+        rejected, adjusted = benjamini_hochberg(raw, DEFAULT_FDR)
+        for c, p, adj, keep in zip(contrasts, raw, adjusted, rejected):
+            c["p_raw"], c["p_adj"], c["fdr_survives"] = round(p, 4), round(adj, 4), bool(keep)
+
+    counts: dict[str, int] = {}
+    for o in rows:
+        counts[_stance_of(o)] = counts.get(_stance_of(o), 0) + 1
+    return {"error": "", "sample": len(rows), "results": results,
+            "contrasts": contrasts, "stance_counts": counts}
+
+
+def render_whale(report: dict) -> str:
+    if report.get("error"):
+        return f"WHATIF whale: {report['error']}"
+    lines = [
+        f"WHATIF whale | {report['sample']} recorded signals",
+        "kept=trades the policy would have taken  gap=kept minus dropped",
+    ]
+    lines.append(
+        "stance   " + " ".join(f"{k}={v}" for k, v in sorted(report["stance_counts"].items()))
+    )
+    for r in report["results"]:
+        lines.append(
+            f"{r['label']:<13} kept={r['kept']:<3} drop={r['dropped']:<3} "
+            f"meanR={r['mean_r']:+.3f} cost={r['cost_r']:.2f}R netR={r['net_r']:+.3f}"
+        )
+    for c in report["contrasts"]:
+        mark = "*" if c.get("fdr_survives") else " "
+        lines.append(
+            f"vs dropped    {c['label']:<13} gap={c['gap_r']:+.3f}R se={c['se_r']:.3f} "
+            f"t={c['t']:+.2f} df={c['df']} padj={c.get('p_adj', 1.0):.3f}{mark} "
+            f"(n={c['n_a']}v{c['n_b']})"
+        )
+    survivor = next((c for c in report["contrasts"] if c.get("fdr_survives")), None)
+    lines.append(
+        f"=> {survivor['label']} survives the {len(report['contrasts'])}-way comparison"
+        if survivor else
+        "=> no policy separates from the trades it would have dropped"
+    )
+    # The caveat is the point of the card, not a footnote to it. Printed last
+    # because it qualifies every row above, and printed every time because the
+    # reading it guards against — "the veto is filtering the wrong side" — is
+    # the one the numbers most invite and the one they cannot support.
+    lines.append(
+        "BLIND SPOT: the live veto drops candidates before they are recorded, so "
+        "the setups it actually refused are absent here. This scores only what "
+        "the veto already allowed; it cannot say whether the strongly-opposed "
+        "setups were worth taking."
+    )
     return "\n".join(lines)

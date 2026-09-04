@@ -36,7 +36,7 @@ from typing import Iterable, Optional
 
 from wolf.config import LadderSettings, state_is_persistent, volume_mount
 from wolf.models import Signal, Status
-from wolf.stats import DEFAULT_FDR, benjamini_hochberg, t_to_p
+from wolf.stats import DEFAULT_FDR, benjamini_hochberg, mean_gap, t_to_p
 from wolf.tracker import Tracker, _parse_iso, _risk_pct, r_multiple_of
 
 # A verdict needs both a real sample and a real signal-to-noise ratio.
@@ -346,39 +346,6 @@ def _measured_cost(rows: list, taker_fee_bps: float, round_trip_bps: float) -> d
     }
 
 
-def _mean_gap(a: list[float], b: list[float]) -> Optional[dict]:
-    """Welch's two-sample t for the gap between two populations of R.
-
-    Welch rather than Student because the two sides have no reason to share a
-    variance and usually do not share a size either — a layer that confirms
-    twice as often as it rejects gives one bucket half the other's noise, and
-    pooling them would report a precision neither side has.
-
-    Returns ``None`` when either side is too small to have a variance, which is
-    the honest answer: a gap computed from one observation is a difference of
-    two numbers, not a measurement.
-    """
-    if len(a) < 2 or len(b) < 2:
-        return None
-    na, nb = len(a), len(b)
-    ma, mb = statistics.fmean(a), statistics.fmean(b)
-    va, vb = statistics.variance(a) / na, statistics.variance(b) / nb
-    se = math.sqrt(va + vb)
-    if se <= 0:
-        return None
-    denom = va * va / (na - 1) + vb * vb / (nb - 1)
-    df = ((va + vb) ** 2 / denom) if denom > 0 else 0.0
-    return {
-        "n": na + nb,
-        "n_a": na,
-        "n_b": nb,
-        "df": int(df),
-        "gap_r": round(ma - mb, 3),
-        "se_r": round(se, 3),
-        "t": round((ma - mb) / se, 2),
-    }
-
-
 def _apply_fdr(families: tuple[dict, ...], fdr: float = DEFAULT_FDR) -> None:
     """Attach false-discovery-rate control across every bucket, in place.
 
@@ -553,7 +520,7 @@ def diagnose(
     # whether the verdict is worth anything is the *gap* between the two
     # opinionated buckets, so that contrast is computed directly rather than
     # left to a reader eyeballing two rows that were never compared.
-    ai_edge = _mean_gap(
+    ai_edge = mean_gap(
         [r_multiple_of(o) for o in traded if o.ai_verdict == "CONFIRM"],
         [r_multiple_of(o) for o in traded if o.ai_verdict == "REJECT"],
     )
