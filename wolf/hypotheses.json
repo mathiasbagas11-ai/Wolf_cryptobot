@@ -99,9 +99,10 @@
     {
       "id": "whale-veto-direction",
       "question": "Is the whale veto filtering the wrong side?",
-      "status": "OPEN",
-      "evidence": "/whatif whale over 408 all-era signals: drop WITH gap +0.413R, nominal t=3.46 padj=0.002. Charged the observed mean_open of ~3.3 for overlap that falls to t=1.9, p=0.06 before BH \u2014 it does not survive. drop AGAINST separates from nothing (padj 0.448)",
-      "note": "UNANSWERABLE AS POSED. The veto drops candidates before record_signal, so the setups it refused have no outcomes. Three things stand between the pooled number and belief: the independence discount (now applied), era pooling (the 408 spans pre- and post-gate; meanR +0.207 against +0.03 in the recent window), and the strategy confound (now checked within strategies). Settling it properly needs the veto in monitor mode \u2014 annotate and record instead of drop \u2014 which is a strategy change and waits for the sample. Note this is the one queued item whose cost grows while it waits: every day the veto runs, the data needed to judge it is discarded."
+      "status": "INCONCLUSIVE",
+      "evidence": "/whatif whale 168 (one era, overlap-discounted): drop WITH gap +0.349R, t=+0.89, padj=0.528 at eff_n=28 from n=165 with mean_open=5.83. The all-era undiscounted version read padj=0.002 and was an artefact of both. Direction survives the strategy confound \u2014 the gap reappears in 3 of 3 comparable strategies (SCALP +0.251 n=59v40, MOMENTUM +0.209 n=17v7, PREDUMP +0.906 but only n=2 on one side) \u2014 so it is not a strategy mix relabelled",
+      "note": "Direction consistent, magnitude unresolvable. Worth noting what it would buy even taken at face value: netR -0.116 to -0.003, i.e. breakeven, not profit \u2014 and dropping WITH RAISES cost per trade from 0.14R to 0.18R because those trades carry wider stops, eating 26% of the gross gain. Still UNANSWERABLE as posed: the veto drops candidates before record_signal, so the strongly-opposed setups it refuses have no outcomes. Settling it needs the veto in monitor mode, which is a strategy change. This remains the one queued item whose cost grows while it waits.",
+      "settled_on": "2026-09-04"
     }
   ]
 }
