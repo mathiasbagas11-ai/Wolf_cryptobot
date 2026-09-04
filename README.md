@@ -220,6 +220,23 @@ isn't there. Policies selecting identical trades collapse into one row, because
 two names for one test would report a finding twice and enter it into the
 correction twice.
 
+**The gap is charged for overlap.** Positions held side by side in a
+correlated market are not independent samples, so `mean_gap` scales the
+standard error by `sqrt(mean_open)` and divides the degrees of freedom by it —
+the same worst case `eff_n_floor` reports. It belongs in the statistic rather
+than beside it: a card printing the discount on one line and an undiscounted t
+on the next invites the reader to believe the wrong one, and the wrong one is
+always the more exciting. On the live book that moved a `drop WITH` contrast
+from t=3.4 to t=1.9. The undiscounted figure travels as `nom_t`, so the size of
+the discount is visible rather than taken on trust.
+
+**And the gap is recomputed inside each strategy**, because a one-dimensional
+split cannot tell a whale effect from a bookkeeping artefact: if the strategies
+that lose are also the ones whales agree with, "trading with whales loses" is
+those strategies losing, re-labelled. A real effect survives inside the
+strategies; a mix artefact appears across them and vanishes within. The card
+says how many strategies reproduced the pooled gap.
+
 **And the decisive evidence is missing by construction.**
 `Screener._whale_vetoed` runs before `record_signal`, so a candidate the live
 veto rejected never became a signal, never got an outcome, and cannot appear on

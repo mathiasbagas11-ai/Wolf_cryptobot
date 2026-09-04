@@ -184,3 +184,126 @@ def test_a_stance_that_is_present_still_gets_its_own_row(
 
     assert "drop NEUTRAL" in labels
     assert "only AGAINST" in labels   # now distinct from "drop WITH"
+
+
+# ── the discount, and the confound that decides whether any of it means anything ──
+
+
+def _overlapping(rows) -> list:
+    """Make every trade run concurrently, so mean_open is high."""
+    start = datetime.now(timezone.utc) - timedelta(hours=6)
+    for r in rows:
+        r["activated_at"] = start.isoformat()
+        r["exit_time"] = (start + timedelta(hours=5)).isoformat()
+        r["resolved_at"] = r["exit_time"]
+    return rows
+
+
+def test_the_contrast_is_charged_for_positions_held_side_by_side(
+    store, fake_client, tracker_settings
+):
+    """The defect this fixes: a gap quoted on the nominal count.
+
+    The digest prints eff_n_floor two lines below saying the sample is a third
+    the size, and leaves the reader to reconcile them — which on the one row
+    anybody would act on is not a reconciliation anyone performs.
+    """
+    report = whale_report(
+        _tracker(store, fake_client, tracker_settings, _overlapping(_book(each=20)))
+    )
+    gap = next(c for c in report["contrasts"] if c["label"] == "drop WITH")
+
+    assert report["overlap"] > 1.0
+    assert abs(gap["t"]) < abs(gap["t_nominal"])     # the discount bites
+    assert gap["eff_n"] < gap["n"]
+    assert gap["se_r"] > gap["se_nominal"]
+
+
+def test_no_overlap_leaves_the_statistic_alone(store, fake_client, tracker_settings):
+    """Sequential trades are what the nominal count already assumes."""
+    from wolf.stats import mean_gap
+
+    a, b = [1.0, 0.5, 1.2, 0.8], [-1.0, -0.5, -1.2, -0.8]
+    assert mean_gap(a, b, 1.0)["t"] == mean_gap(a, b, 0.4)["t"]  # never inflates
+
+
+def test_the_within_strategy_gap_separates_a_stance_from_a_strategy_mix(
+    store, fake_client, tracker_settings
+):
+    """The confound the codebase already names, applied to the contrast.
+
+    Here WITH and the losing strategy are the *same trades*: PREDUMP always
+    loses and is always WITH, SCALP always wins and is never WITH. The pooled
+    gap looks decisive and reproduces inside neither strategy, because there is
+    nothing to compare within either one.
+    """
+    rows = []
+    n = 0
+    for i in range(10):
+        _outcome(rows, r=-1.0 if i % 4 else 0.5, stance="WITH", n=n); n += 1
+        rows[-1]["strategy"] = "PREDUMP"
+        _outcome(rows, r=1.0 if i % 4 else -1.0, stance="AGAINST", n=n); n += 1
+        rows[-1]["strategy"] = "SCALP"
+
+    report = whale_report(_tracker(store, fake_client, tracker_settings, rows))
+    pooled = next(c for c in report["contrasts"] if c["label"] == "drop WITH")
+    assert pooled["gap_r"] > 0                       # looks like a whale effect
+
+    # But no strategy can reproduce it: each holds only one stance.
+    assert all(row["gap"] is None for row in report["by_strategy"])
+    assert "too few on one side to compare" in render_whale(report)
+
+
+def test_a_real_stance_effect_survives_inside_the_strategies(
+    store, fake_client, tracker_settings
+):
+    """The other side of the same check — an effect present within each strategy."""
+    rows = []
+    n = 0
+    for strategy in ("SCALP", "PREDUMP"):
+        for i in range(10):
+            _outcome(rows, r=-1.0 if i % 4 else 0.5, stance="WITH", n=n)
+            rows[-1]["strategy"] = strategy
+            n += 1
+            _outcome(rows, r=1.0 if i % 4 else -1.0, stance="AGAINST", n=n)
+            rows[-1]["strategy"] = strategy
+            n += 1
+
+    report = whale_report(_tracker(store, fake_client, tracker_settings, rows))
+    inside = [r["gap"] for r in report["by_strategy"] if r["gap"]]
+    assert len(inside) == 2
+    assert all(g["gap_r"] > 0 for g in inside)
+    assert "reappears inside 2 of 2 strategies" in render_whale(report)
+
+
+def test_a_window_reads_one_era_instead_of_pooling_them_all(
+    store, fake_client, tracker_settings
+):
+    """The cost gate changed which trades exist, so an unwindowed card pools bots."""
+    rows = _book(each=6)
+    old = datetime.now(timezone.utc) - timedelta(days=20)
+    for r in rows[:6]:
+        r["resolved_at"] = old.isoformat()
+        r["exit_time"] = r["resolved_at"]
+
+    everything = whale_report(_tracker(store, fake_client, tracker_settings, rows))
+    recent = whale_report(
+        _tracker(store, fake_client, tracker_settings, rows), window_hours=48
+    )
+    assert recent["sample"] < everything["sample"]
+    assert "window=48h" in render_whale(recent)
+    assert "all eras" in render_whale(everything)
+
+
+def test_the_window_is_reachable_from_telegram(store, fake_client, tracker_settings):
+    from wolf.notify.commands import CommandRouter
+
+    app = SimpleNamespace(
+        analyze=None, account=None, learning=None,
+        tracker=_tracker(store, fake_client, tracker_settings, _book()),
+        settings=Settings(), screener=SimpleNamespace(_validator=None),
+    )
+    router = CommandRouter(app)
+    assert "window=48h" in router.handle("/whatif whale 48")
+    assert "all eras" in router.handle("/whatif whale")
+    assert "Usage" in router.handle("/whatif whale banyak")

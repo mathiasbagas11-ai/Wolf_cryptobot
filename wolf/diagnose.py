@@ -106,7 +106,7 @@ def _no_edge_win_rate(sig: Signal, tp1_banks_win: bool) -> Optional[float]:
     return p_tp1 * (d_tp1 / d_last) * 100
 
 
-def _concurrency(outcomes: Iterable[Signal]) -> dict:
+def concurrency(outcomes: Iterable[Signal]) -> dict:
     """How many positions were open at once, as a check on independence.
 
     Trades running side by side in a correlated market share most of their move,
@@ -520,9 +520,16 @@ def diagnose(
     # whether the verdict is worth anything is the *gap* between the two
     # opinionated buckets, so that contrast is computed directly rather than
     # left to a reader eyeballing two rows that were never compared.
+    # Charged the same independence discount the concurrency line reports. The
+    # contrast used to be quoted on the nominal count while eff_n_floor sat two
+    # lines below saying the sample was a third that size — and the reader was
+    # left to reconcile them, which on the one row anybody would act on is not
+    # a reconciliation anyone performs.
+    overlap = concurrency(traded)["mean_open"]
     ai_edge = mean_gap(
         [r_multiple_of(o) for o in traded if o.ai_verdict == "CONFIRM"],
         [r_multiple_of(o) for o in traded if o.ai_verdict == "REJECT"],
+        overlap,
     )
 
     # Whale stance crossed with strategy, because the one-dimensional split
@@ -677,7 +684,7 @@ def diagnose(
         "ai_verdicts": ai_verdicts,
         "ai_abstain_reasons": abstain_reasons,
         "ai_failure_rate": round(ai_failure_rate, 3),
-        "concurrency": _concurrency(traded),
+        "concurrency": concurrency(traded),
         "flags": flags,
         "state_dir": state_dir,
         "state_persistent": state_is_persistent(state_dir) if state_dir else None,
@@ -843,7 +850,8 @@ def render_digest(diag: dict) -> str:
         lines.append(
             f"{'ai:CONFIRM-REJECT':<22} gap={gap['gap_r']:+.3f}R "
             f"se={gap['se_r']:.3f} t={gap['t']:+.2f} df={gap['df']} "
-            f"{_fdr_col(gap)}(n={gap['n_a']}v{gap['n_b']})"
+            f"{_fdr_col(gap)}(n={gap['n_a']}v{gap['n_b']} "
+            f"eff={gap['eff_n']} nom_t={gap['t_nominal']:+.2f})"
         )
 
     # Cross-tab, printed only when a whale stance actually varies within a

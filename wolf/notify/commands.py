@@ -139,9 +139,18 @@ class CommandRouter:
             if arg.lower().startswith("whale"):
                 from wolf.whatif import render_whale, whale_report
 
+                # An unwindowed card pools every era the bot has ever run, and
+                # the cost gate changed which trades exist at all. Accepts an
+                # hour count so one era can be read on its own.
+                rest = arg.split(maxsplit=1)[1].strip() if len(arg.split()) > 1 else ""
+                try:
+                    hours = float(rest) if rest else 0.0
+                except ValueError:
+                    return "⚠️ Usage: <code>/whatif whale</code> or <code>/whatif whale 48</code>"
                 return "<pre>" + esc(render_whale(whale_report(
                     self._app.tracker,
                     round_trip_bps=self._app.settings.round_trip_cost_bps,
+                    window_hours=hours,
                 ))) + "</pre>"
             if arg.lower().startswith("cost"):
                 report = compare_cost_gates(

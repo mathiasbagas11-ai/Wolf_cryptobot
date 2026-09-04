@@ -100,8 +100,8 @@
       "id": "whale-veto-direction",
       "question": "Is the whale veto filtering the wrong side?",
       "status": "OPEN",
-      "evidence": "Diag buckets across two cards: whale:WITH meanR -0.575/-0.536 vs AGAINST +0.667/+0.688, t about -2.2 to -2.5, padj 0.19-0.41 \u2014 nothing survives. The two cards overlap ~75% in window, so they are close to one observation, not two",
-      "note": "UNANSWERABLE AS POSED with the current architecture. The veto drops candidates before record_signal, so the setups it refused have no outcomes and no arrangement of recorded data reaches them. /whatif whale scores what the veto already allowed and says so. Settling this properly needs the veto moved to monitor mode \u2014 annotate and record instead of drop \u2014 which is a strategy change and waits for the 350-trade sample."
+      "evidence": "/whatif whale over 408 all-era signals: drop WITH gap +0.413R, nominal t=3.46 padj=0.002. Charged the observed mean_open of ~3.3 for overlap that falls to t=1.9, p=0.06 before BH \u2014 it does not survive. drop AGAINST separates from nothing (padj 0.448)",
+      "note": "UNANSWERABLE AS POSED. The veto drops candidates before record_signal, so the setups it refused have no outcomes. Three things stand between the pooled number and belief: the independence discount (now applied), era pooling (the 408 spans pre- and post-gate; meanR +0.207 against +0.03 in the recent window), and the strategy confound (now checked within strategies). Settling it properly needs the veto in monitor mode \u2014 annotate and record instead of drop \u2014 which is a strategy change and waits for the sample. Note this is the one queued item whose cost grows while it waits: every day the veto runs, the data needed to judge it is discarded."
     }
   ]
 }

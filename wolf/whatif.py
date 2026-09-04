@@ -22,6 +22,7 @@ from typing import Optional
 
 from wolf.config import LadderSettings, TrackerSettings
 from wolf.models import Status
+from wolf.diagnose import concurrency
 from wolf.stats import DEFAULT_FDR, benjamini_hochberg, mean_gap, t_to_p
 from wolf.tracker import (
     OUTCOMES_KEY, Tracker, _parse_iso, _partial_pnl, _replay_start_ms, _resolved_at,
@@ -782,6 +783,11 @@ def whale_report(tracker, *, round_trip_bps: float = 20.0, window_hours: float =
         median = statistics.median(risks) if risks else 0.0
         return ((round_trip_bps / 100.0) / median) if median else 0.0
 
+    # Positions held side by side in a correlated market are not independent
+    # samples, so the contrast is charged the same discount the digest's
+    # concurrency line reports rather than the nominal count.
+    overlap = concurrency(rows)["mean_open"]
+
     results = []
     contrasts = []
     # Policies that select the same trades are one test, not two. With only
@@ -811,7 +817,9 @@ def whale_report(tracker, *, round_trip_bps: float = 20.0, window_hours: float =
             "net_r": round(mean_r - cost, 3),
             "cost_r": round(cost, 3),
         })
-        gap = mean_gap(kept_r, [r_multiple_of(o) for o in dropped]) if dropped else None
+        gap = mean_gap(
+            kept_r, [r_multiple_of(o) for o in dropped], overlap
+        ) if dropped else None
         if gap:
             gap["label"] = label
             contrasts.append(gap)
@@ -826,15 +834,49 @@ def whale_report(tracker, *, round_trip_bps: float = 20.0, window_hours: float =
     for o in rows:
         counts[_stance_of(o)] = counts.get(_stance_of(o), 0) + 1
     return {"error": "", "sample": len(rows), "results": results,
-            "contrasts": contrasts, "stance_counts": counts}
+            "contrasts": contrasts, "stance_counts": counts,
+            "overlap": round(overlap, 2), "window_hours": window_hours,
+            "by_strategy": _stance_by_strategy(rows, overlap)}
+
+
+def _stance_by_strategy(rows: list, overlap: float) -> list[dict]:
+    """The WITH-versus-rest gap computed *inside* each strategy.
+
+    The check ``whale_by_strategy`` exists for, applied to the contrast rather
+    than to the buckets. A one-dimensional split cannot tell a whale effect from
+    a bookkeeping artefact: if the strategies that lose are also the ones whales
+    happen to agree with, "trading with whales loses" is those strategies
+    losing, re-labelled. The pooled gap would show it either way.
+
+    Only the within-strategy version separates them. An effect that is real
+    survives inside the strategies; one that is a mix artefact appears across
+    them and vanishes within.
+    """
+    out = []
+    for strategy in sorted({(o.strategy or "?") for o in rows}):
+        subset = [o for o in rows if (o.strategy or "?") == strategy]
+        with_r = [r_multiple_of(o) for o in subset if _stance_of(o) == "WITH"]
+        rest_r = [r_multiple_of(o) for o in subset if _stance_of(o) != "WITH"]
+        gap = mean_gap(rest_r, with_r, overlap)
+        out.append({
+            "strategy": strategy,
+            "n": len(subset),
+            "n_with": len(with_r),
+            "gap": gap,
+        })
+    return out
 
 
 def render_whale(report: dict) -> str:
     if report.get("error"):
         return f"WHATIF whale: {report['error']}"
+    win = report.get("window_hours") or 0
     lines = [
-        f"WHATIF whale | {report['sample']} recorded signals",
+        f"WHATIF whale | {report['sample']} recorded signals | "
+        f"window={f'{win:g}h' if win else 'all eras'}",
         "kept=trades the policy would have taken  gap=kept minus dropped",
+        f"gap is charged mean_open={report.get('overlap', 1.0):g} for overlap; "
+        f"nom_t is the same test undiscounted",
     ]
     lines.append(
         "stance   " + " ".join(f"{k}={v}" for k, v in sorted(report["stance_counts"].items()))
@@ -849,7 +891,20 @@ def render_whale(report: dict) -> str:
         lines.append(
             f"vs dropped    {c['label']:<13} gap={c['gap_r']:+.3f}R se={c['se_r']:.3f} "
             f"t={c['t']:+.2f} df={c['df']} padj={c.get('p_adj', 1.0):.3f}{mark} "
-            f"(n={c['n_a']}v{c['n_b']})"
+            f"(n={c['n_a']}v{c['n_b']} eff={c['eff_n']} nom_t={c['t_nominal']:+.2f})"
+        )
+    # The confound that decides whether any row above means anything.
+    for row in report.get("by_strategy", []):
+        g = row["gap"]
+        if g is None:
+            lines.append(
+                f"wxs:{row['strategy']:<12} n={row['n']} with={row['n_with']} "
+                f"— too few on one side to compare"
+            )
+            continue
+        lines.append(
+            f"wxs:{row['strategy']:<12} rest-WITH gap={g['gap_r']:+.3f}R "
+            f"t={g['t']:+.2f} (n={g['n_a']}v{g['n_b']})"
         )
     survivor = next((c for c in report["contrasts"] if c.get("fdr_survives")), None)
     lines.append(
@@ -861,6 +916,14 @@ def render_whale(report: dict) -> str:
     # because it qualifies every row above, and printed every time because the
     # reading it guards against — "the veto is filtering the wrong side" — is
     # the one the numbers most invite and the one they cannot support.
+    # A pooled gap that no strategy reproduces is the mix, not the stance.
+    inside = [r["gap"] for r in report.get("by_strategy", []) if r["gap"]]
+    if inside:
+        agree = sum(1 for g in inside if g["gap_r"] > 0)
+        lines.append(
+            f"   the pooled gap reappears inside {agree} of {len(inside)} "
+            f"strategies that could be compared"
+        )
     lines.append(
         "BLIND SPOT: the live veto drops candidates before they are recorded, so "
         "the setups it actually refused are absent here. This scores only what "

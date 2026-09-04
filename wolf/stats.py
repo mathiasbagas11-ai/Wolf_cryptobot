@@ -148,13 +148,28 @@ def benjamini_hochberg(
     return rejected, adjusted
 
 
-def mean_gap(a: list[float], b: list[float]) -> Optional[dict]:
+def mean_gap(a: list[float], b: list[float], overlap: float = 1.0) -> Optional[dict]:
     """Welch's two-sample t for the gap between two populations of R.
 
     Welch rather than Student because the two sides have no reason to share a
     variance and usually do not share a size either — a layer that confirms
     twice as often as it rejects gives one bucket half the other's noise, and
     pooling them would report a precision neither side has.
+
+    ``overlap`` is the mean number of positions held simultaneously. Trades
+    running side by side in a correlated market are not independent samples, so
+    a standard error computed on the nominal count overstates what was actually
+    observed — by a lot. Under perfect correlation the variance of a mean over
+    ``m`` simultaneous positions is ``m`` times the independent case, so the
+    error is scaled by ``sqrt(overlap)`` and the degrees of freedom divided by
+    it. That is the same worst case ``eff_n_floor`` reports, and it belongs
+    here for the reason the floor exists: a card that prints the discount on
+    one line and an undiscounted t on the next invites the reader to believe
+    the wrong one, and the wrong one is always the more exciting.
+
+    The undiscounted figures travel alongside as ``t_nominal`` — not so the
+    reader can prefer them, but so the size of the discount is visible instead
+    of being something to take on trust.
 
     Returns ``None`` when either side is too small to have a variance, which is
     the honest answer: a gap computed from one observation is a difference of
@@ -165,17 +180,27 @@ def mean_gap(a: list[float], b: list[float]) -> Optional[dict]:
     na, nb = len(a), len(b)
     ma, mb = statistics.fmean(a), statistics.fmean(b)
     va, vb = statistics.variance(a) / na, statistics.variance(b) / nb
-    se = math.sqrt(va + vb)
-    if se <= 0:
+    se_nominal = math.sqrt(va + vb)
+    if se_nominal <= 0:
         return None
     denom = va * va / (na - 1) + vb * vb / (nb - 1)
-    df = ((va + vb) ** 2 / denom) if denom > 0 else 0.0
+    df_nominal = ((va + vb) ** 2 / denom) if denom > 0 else 0.0
+
+    # Below 1 there is no overlap to charge for, and a fractional divisor would
+    # invent precision rather than remove it.
+    m = max(1.0, overlap)
+    se = se_nominal * math.sqrt(m)
+    df = df_nominal / m
     return {
         "n": na + nb,
         "n_a": na,
         "n_b": nb,
-        "df": int(df),
+        "overlap": round(m, 2),
+        "eff_n": int((na + nb) / m),
+        "df": max(1, int(df)),
         "gap_r": round(ma - mb, 3),
         "se_r": round(se, 3),
         "t": round((ma - mb) / se, 2),
+        "se_nominal": round(se_nominal, 3),
+        "t_nominal": round((ma - mb) / se_nominal, 2),
     }
