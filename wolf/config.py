@@ -788,8 +788,16 @@ class LearningSettings:
 class BacktestSettings:
     """Backtest / warm-start settings."""
 
-    lookback: int = 50               # candles replayed per symbol at warm-start
-    candle_limit: int = 250
+    # Candles replayed per symbol. Depth is nearly free here — one klines
+    # request already returns up to 1000 bars, so a deeper walk costs CPU
+    # rather than API budget — and the questions history can answer (does a
+    # wider ladder fill more often?) are about candle paths, not about the
+    # live execution path, so they scale with this rather than with the
+    # ~22 live trades a day.
+    lookback: int = 300
+    # The venues cap a klines request at 1000 bars and this path does not
+    # paginate, so this is the ceiling rather than a preference.
+    candle_limit: int = 1000
     warm_start: bool = True          # seed learning from a backtest at boot
 
 
@@ -992,8 +1000,8 @@ class Settings:
             blacklist_max_winrate=_env_float("LEARNING_BLACKLIST_MAX_WINRATE", 25.0),
         )
         backtest = BacktestSettings(
-            lookback=_env_int("BACKTEST_LOOKBACK", 50),
-            candle_limit=_env_int("BACKTEST_CANDLE_LIMIT", 250),
+            lookback=_env_int("BACKTEST_LOOKBACK", 300),
+            candle_limit=_env_int("BACKTEST_CANDLE_LIMIT", 1000),
             warm_start=_env_bool("BACKTEST_WARM_START", True),
         )
         # Defaults mirror the dataclass, which ties each window to the

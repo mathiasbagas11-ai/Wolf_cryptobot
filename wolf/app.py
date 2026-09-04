@@ -322,6 +322,11 @@ def build_application(settings: Settings | None = None) -> Application:
         client, detectors,
         lookback=settings.backtest.lookback,
         candle_limit=settings.backtest.candle_limit,
+        # The same gate the screener applies, so the two cannot disagree about
+        # which setups exist. Without it a deeper history just accumulates more
+        # of the population the gate was added to remove.
+        max_cost_r=settings.max_cost_r,
+        round_trip_bps=settings.round_trip_cost_bps,
     )
     analyze = AnalyzeService(
         client, detectors,

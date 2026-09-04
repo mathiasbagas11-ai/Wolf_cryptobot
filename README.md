@@ -204,6 +204,32 @@ change is confirmed in seconds rather than in tomorrow's digest — a broken lay
 abstains rather than failing, so without the probe a fix cannot be verified until
 the abstentions it caused have aged out of the window.
 
+### The backtest runs the bot that is actually deployed
+
+`wolf/backtest/engine.py` replays the live detectors over history — under the
+live `MAX_COST_R` gate. That gate is not decoration: on the live ledger it
+removed roughly half the daily volume and nearly all of SCALP, by refusing
+setups whose stop is too tight to survive their own round trip.
+
+An ungated backtest therefore reports on a strategy nobody runs, and **depth
+makes that worse rather than better**: the deeper the history, the more of the
+rejected population it accumulates. So the gate is applied inside the engine
+with the same arithmetic as `Screener._too_expensive`, a test pins the two
+against each other so they cannot drift, and the run reports how many
+candidates were refused — a run returning half as many trades has either found
+less or been allowed less, and those are opposite conclusions from one number.
+
+Depth is nearly free here, because one klines request already returns up to
+1000 bars: a deeper walk costs CPU, not API budget. `candle_limit` is clamped
+to 1000 because no venue in this codebase paginates, and asking for more would
+silently return 1000 while the extra `lookback` walked off the front of the
+history it was given.
+
+`/whatif` history is deliberately **not** deepened. Its reach is 1000 × 15m ≈
+10.4 days, which is why it scores only the recent part of the ledger — and that
+window rolls the pre-gate era out of the sample on its own, which is the
+behaviour you want when the gate changed which trades exist.
+
 ### What the cost figures do and do not contain
 
 Two costs are reported side by side, and they are **not the same sum**:

@@ -83,13 +83,51 @@ def simulate(candidate: SignalCandidate, future: Sequence[Candle]) -> Optional[S
 
 
 class BacktestEngine:
+    """Replay the live detectors over history — under the live cost gate.
+
+    The gate is not decoration here. Without it the engine reports on a bot
+    nobody runs: MAX_COST_R rejects every setup whose stop is too tight to
+    survive its own round trip, which on the live ledger removed roughly half
+    the daily volume and nearly all of SCALP. A backtest that keeps those
+    setups describes the strategy as it was before that gate existed, and the
+    deeper the history, the more of that dead population it piles up — so
+    depth without the gate makes the mismatch worse, not better.
+    """
+
     def __init__(self, client, detectors: Sequence[Detector], interval: str = "15m",
-                 lookback: int = 50, candle_limit: int = 250) -> None:
+                 lookback: int = 300, candle_limit: int = 1000,
+                 max_cost_r: Optional[float] = None,
+                 round_trip_bps: float = 20.0) -> None:
         self._client = client
         self._detectors = list(detectors)
         self._interval = interval
         self._lookback = max(10, lookback)
-        self._candle_limit = candle_limit
+        # The venues cap a klines request at 1000 bars and none of them is
+        # paginated here, so asking for more silently returns 1000 and the
+        # extra lookback would walk off the front of the history.
+        self._candle_limit = min(1000, candle_limit)
+        self._max_cost_r = max_cost_r
+        self._round_trip_bps = round_trip_bps
+        #: Candidates the cost gate rejected, so the reduction is reported
+        #: rather than showing up as an unexplained drop in trade count.
+        self.gated = 0
+
+    def _affordable(self, candidate: SignalCandidate) -> bool:
+        """The screener's cost gate, applied to a simulated candidate.
+
+        Mirrors ``Screener._too_expensive`` deliberately: the same arithmetic
+        on the same fields, so a backtest and the live path cannot disagree
+        about which setups exist.
+        """
+        if self._max_cost_r is None:
+            return True
+        entry, sl = candidate.entry_price, candidate.sl
+        if entry <= 0:
+            return True
+        risk_pct = abs(entry - sl) / entry * 100
+        if risk_pct <= 0:
+            return True
+        return (self._round_trip_bps / 100.0) / risk_pct <= self._max_cost_r
 
     def _best(self, symbol: str, history: Sequence[Candle]) -> Optional[SignalCandidate]:
         try:
@@ -118,6 +156,9 @@ class BacktestEngine:
             cand = self._best(symbol, candles[: i + 1])
             if not cand:
                 continue
+            if not self._affordable(cand):
+                self.gated += 1
+                continue
             sim = simulate(cand, candles[i + 1:])
             if sim is None:
                 continue
@@ -126,6 +167,7 @@ class BacktestEngine:
         return trades
 
     def run(self, symbols: Sequence[str]) -> dict:
+        self.gated = 0
         all_trades: list[SimTrade] = []
         for sym in symbols:
             all_trades.extend(self.run_symbol(sym))
@@ -141,4 +183,15 @@ class BacktestEngine:
             b["win_rate"] = round(b["wins"] / t * 100, 1) if t else 0.0
             b["avg_pnl"] = round(b["pnl_sum"] / t, 3) if t else 0.0
             b["avg_r"] = round(b["r_sum"] / t, 2) if t else 0.0
-        return {"total_trades": len(all_trades), "by_strategy": by_strategy, "trades": all_trades}
+        return {
+            "total_trades": len(all_trades),
+            "by_strategy": by_strategy,
+            "trades": all_trades,
+            # Reported, not silent: a run that suddenly returns half as many
+            # trades has either found less or been allowed less, and those are
+            # opposite conclusions drawn from the same number.
+            "gated": self.gated,
+            "lookback": self._lookback,
+            "candle_limit": self._candle_limit,
+            "max_cost_r": self._max_cost_r,
+        }

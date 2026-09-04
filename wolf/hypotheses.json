@@ -58,13 +58,6 @@
       "note": "Monitor mode is the only arrangement in which the layer's verdict can be scored at all. The by_ai_verdict bucket and the CONFIRM-REJECT gap on the digest are what that arrangement buys; spending it on a veto would blind the measurement permanently."
     },
     {
-      "id": "exit-geometry-recut",
-      "question": "Does widening the TP ratio from 1.01 to 1.4 lower the required win rate enough to matter?",
-      "status": "OPEN",
-      "evidence": "Arithmetic: the breakeven bar falls 9.4pp, the largest of the three levers on offer",
-      "note": "Blocked on sample composition settling after the MAX_COST_R gate change. Measured with /whatif ladder. Read open= first (a wider ladder leaves more trades unsettled and marks them to last close, which flatters wide variants), then padj rather than t, then the shape of the curve across variants rather than the winning row."
-    },
-    {
       "id": "news-sentiment-vs-materiality",
       "question": "Should the news signal carry materiality separately from sentiment?",
       "status": "OPEN",
@@ -86,6 +79,22 @@
       "settled_on": "2026-09-04",
       "evidence": "First post-gate day: median 1R 1.14%->2.13%, cost/trade 0.175R->0.094R, ladder bar 55.6%->45.2%, rung fill tp3 5%->21%",
       "note": "ERA BOUNDARY \u2014 count to 350 restarts here, segmented by signal creation date rather than resolution date. The gate appears to have delivered the cost lever and part of the exit-geometry lever at once, which would reorder the lever ranking if it holds. It is one day at n=24 with se 0.243; the cost figures are arithmetic and trustworthy, the ladder figures are observations worth watching, and meanR/netR are noise."
+    },
+    {
+      "id": "exit-geometry-recut",
+      "question": "Does re-cutting the TP ladder lower the required win rate enough to matter?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-04",
+      "evidence": "/whatif ladder over 74 signals, all open=0: no variant beat live (best diff -0.048R, t=-1.55, padj=0.627). Tightening is strictly worse \u2014 need rises 50.8 -> 54.8 -> 60.6 as the ratio tightens. Widening is flat: 2rung/backload/even all within 0.005R of live",
+      "note": "This was ranked the largest lever at 9.4pp. Measured, it does not move. The curve says live sits at a local optimum with a flat gradient on the wide side and a steep penalty on the tight side. The sign test is far stronger than the mean test \u2014 rr2.5 changed 38 trades, 33 of them for the worse, which is p~1e-5 as a direction even though the magnitude is not resolvable. Direction certain, magnitude negligible."
+    },
+    {
+      "id": "backtest-without-the-cost-gate",
+      "question": "Can a deeper backtest accelerate the geometry questions?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-04",
+      "evidence": "Depth raised (lookback 50->300, candle_limit 250->1000) AND the live MAX_COST_R gate applied inside the engine, which previously applied no gates at all",
+      "note": "Depth alone would have made things worse: an ungated backtest accumulates the tiny-1R population the gate now rejects, so the deeper the history the more of a dead strategy it describes. /whatif history is deliberately NOT deepened \u2014 its 1000x15m reach is ~10.4 days, which rolls the pre-gate era out of the sample on its own."
     }
   ]
 }
