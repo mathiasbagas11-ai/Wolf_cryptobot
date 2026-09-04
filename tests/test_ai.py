@@ -427,3 +427,52 @@ def test_silent_roles_join_the_list_the_card_already_prints():
     status = ai_status(app, probe=True)
     assert status["available"] is True
     assert "bull" in status["degraded_roles"]
+
+
+class _SilentWithError(_SilentSide):
+    """A side that answered with nothing and knows why."""
+
+    last_error = "HTTP 429: Rate limit reached"
+
+
+def test_a_silent_role_carries_the_provider_s_own_explanation():
+    """Four unrelated faults share one symptom, and they share no remedy.
+
+    A rate limit, a spent balance, a budget eaten by reasoning and a model that
+    answered with whitespace all read as "bear is quiet". The provider already
+    said which one it was — the only job is not to throw that away.
+    """
+    result = DebateValidator(
+        arbiter=_Arbiter(), bull=_Arbiter(), bear=_SilentWithError()
+    ).selftest()
+    assert result["silent_roles"] == ["bear"]
+    assert result["silent_reasons"] == {"bear": "HTTP 429: Rate limit reached"}
+
+
+def test_a_silent_role_with_no_error_still_says_something():
+    """Empty is itself a finding — the model replied, with nothing in it."""
+    result = DebateValidator(
+        arbiter=_Arbiter(), bull=_Arbiter(), bear=_SilentSide()
+    ).selftest()
+    assert result["silent_reasons"] == {"bear": "returned empty content"}
+
+
+def test_the_reason_reaches_the_telegram_card():
+    """Otherwise the reader is sent back to the logs to find out which fault it was."""
+    from types import SimpleNamespace
+
+    from wolf.notify.commands import CommandRouter
+
+    from dataclasses import replace
+
+    settings = Settings()
+    app = SimpleNamespace(
+        analyze=None, account=None, learning=None, tracker=None,
+        settings=replace(settings, ai=replace(settings.ai, enabled=True)),
+        screener=SimpleNamespace(_validator=DebateValidator(
+            arbiter=_Arbiter(), bull=_Arbiter(), bear=_SilentWithError(),
+        )),
+    )
+    reply = CommandRouter(app).handle("/ai")
+    assert "Weak roles: bear" in reply
+    assert "Rate limit reached" in reply

@@ -155,6 +155,7 @@ def ai_status(app: "Application", probe: bool = False) -> dict:
         "available": bool(getattr(validator, "available", False)),
         "degraded_roles": list(getattr(validator, "degraded_roles", [])),
         "reason": "",
+        "silent_reasons": {},
     }
     # `available` only asks whether a client object exists. A key that is set
     # but rejected, or a balance that ran out, passes that test and still
@@ -171,6 +172,7 @@ def ai_status(app: "Application", probe: bool = False) -> dict:
         for role in result.get("silent_roles") or []:
             if role not in status["degraded_roles"]:
                 status["degraded_roles"].append(role)
+        status["silent_reasons"] = result.get("silent_reasons") or {}
     return status
 
 

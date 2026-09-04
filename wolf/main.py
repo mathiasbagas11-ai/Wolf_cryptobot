@@ -139,8 +139,12 @@ def main() -> None:
         # having come from, and this is the only line that will ever say so.
         log.warning(
             "AI debate is answering, but these roles contribute nothing: %s. "
-            "The arbiter is deciding on a one-sided argument.",
+            "The arbiter is deciding on a one-sided argument.%s",
             ", ".join(ai["degraded_roles"]),
+            "".join(
+                f" [{role}: {why}]"
+                for role, why in (ai.get("silent_reasons") or {}).items()
+            ),
         )
     if ai["enabled"] and not ai["available"]:
         log.warning(

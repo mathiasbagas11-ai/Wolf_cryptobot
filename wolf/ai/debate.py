@@ -311,7 +311,7 @@ class DebateValidator(SignalValidator):
         """
         if not self._arbiter.available:
             return {"ok": False, "reason": "arbiter has no client — its provider key is unset",
-                    "silent_roles": []}
+                    "silent_roles": [], "silent_reasons": {}}
 
         # Bull and bear are probed too, because their failure is quieter than
         # the arbiter's and costs the same thing. An empty argument is not an
@@ -319,14 +319,27 @@ class DebateValidator(SignalValidator):
         # verdict still comes back, and the layer reports a healthy debate that
         # was in fact the arbiter talking to itself. Nothing downstream can tell
         # a one-sided debate from a two-sided one, so it has to be caught here.
-        silent = [
-            name for name, client in (("bull", self._bull), ("bear", self._bear))
-            if client.available and not client.complete(
-                _BULL_SYSTEM if name == "bull" else _BEAR_SYSTEM,
+        silent: list[str] = []
+        reasons: dict[str, str] = {}
+        for name, client, system in (
+            ("bull", self._bull, _BULL_SYSTEM), ("bear", self._bear, _BEAR_SYSTEM)
+        ):
+            if not client.available:
+                continue
+            text = client.complete(
+                system,
                 "PROPOSED SETUP:\n(startup self-test — reply with one short sentence)",
                 max_tokens=512,
-            ).strip()
-        ]
+            )
+            if not (text or "").strip():
+                silent.append(name)
+                # Naming the role without naming the fault is the failure this
+                # codebase keeps having: "bear is quiet" is a symptom shared by
+                # a rate limit, a spent balance, a budget eaten by reasoning and
+                # a model that simply answered with whitespace, and the four
+                # have nothing in common as remedies. The provider already said
+                # which it was; the only job here is not to discard it.
+                reasons[name] = getattr(client, "last_error", "") or "returned empty content"
 
         data = self._arbiter.complete_json(
             _ARBITER_SYSTEM,
@@ -336,11 +349,13 @@ class DebateValidator(SignalValidator):
             max_tokens=self._arbiter_max_tokens,
         )
         if data.get("decision"):
-            return {"ok": True, "reason": "", "silent_roles": silent}
+            return {"ok": True, "reason": "", "silent_roles": silent,
+                    "silent_reasons": reasons}
         return {
             "ok": False,
             "reason": getattr(self._arbiter, "last_error", "") or "returned no JSON",
             "silent_roles": silent,
+            "silent_reasons": reasons,
         }
 
     def validate(self, candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> Verdict:

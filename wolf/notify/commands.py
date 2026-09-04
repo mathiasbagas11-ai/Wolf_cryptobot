@@ -100,9 +100,15 @@ class CommandRouter:
         if not st.get("enabled"):
             return "🤖 <b>AI debate</b>: OFF (<code>AI_DEBATE_ENABLED</code> is false)"
         if st.get("available"):
-            degraded = ", ".join(st.get("degraded_roles") or [])
-            extra = f"\nWeak roles: {esc(degraded)}" if degraded else ""
-            return f"🤖 <b>AI debate</b>: OK — the arbiter returned a verdict.{extra}"
+            lines = ["🤖 <b>AI debate</b>: OK — the arbiter returned a verdict."]
+            degraded = st.get("degraded_roles") or []
+            if degraded:
+                lines.append(f"Weak roles: {esc(', '.join(degraded))}")
+            # A role named without its fault sends the reader back to the logs
+            # to find out which of four unrelated problems it was.
+            for role, why in (st.get("silent_reasons") or {}).items():
+                lines.append(f"<code>{esc(role)}: {esc(why)}</code>")
+            return "\n".join(lines)
         return (
             "🤖 <b>AI debate</b>: ENABLED but not answering\n"
             f"<code>{esc(st.get('reason') or 'unknown')}</code>"

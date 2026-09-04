@@ -285,7 +285,7 @@ def test_selftest_passes_when_the_arbiter_answers(monkeypatch):
     # with no client is already reported by degraded_roles, and counting it
     # twice would read as two separate faults.
     assert DebateValidator(arbiter=client).selftest() == {
-        "ok": True, "reason": "", "silent_roles": [],
+        "ok": True, "reason": "", "silent_roles": [], "silent_reasons": {},
     }
 
 

@@ -184,7 +184,11 @@ an error on any path: it becomes `(none)` in the arbiter's prompt, the verdict
 still comes back, and the card reports a healthy debate that was in fact the
 arbiter talking to itself. Nothing downstream can tell the two apart, so the
 self-test probes all three roles and any that answers with nothing joins
-`degraded_roles` — the list `/ai` and the boot log already print.
+`degraded_roles` — the list `/ai` and the boot log already print — carrying the
+provider's own explanation beside it. Naming the role without the fault is only
+half a diagnosis: a rate limit, a spent balance, a budget eaten by reasoning and
+a model that replied with whitespace all read as "bear is quiet", and none of
+the four share a remedy.
 
 The knobs, all env vars:
 
