@@ -756,6 +756,16 @@ class AISettings:
     # "answer cut off at max_tokens=N" — so the card says which one is in play
     # before the budget is touched.
     arbiter_max_tokens: int = 2048
+    # Whether the debate roles are allowed to reason before answering.
+    #
+    # "disabled" (the default) sends the provider's switch for turning thinking
+    # off. The debate asks for three short fields and a paragraph of argument;
+    # a chain of thought in front of either buys nothing and, on DeepSeek's V4
+    # models, consumes the entire budget before a word of the answer is
+    # written. Any other value sends nothing and leaves the provider's default
+    # in force — the way back if a vendor renames the field, because a rejected
+    # field fails every call rather than half of them.
+    thinking: str = "disabled"
     # If a REJECT verdict at/above this confidence should veto the signal.
     veto_enabled: bool = True
     veto_min_confidence: int = 70
@@ -1062,6 +1072,7 @@ class Settings:
                 model=_env_str("DEBATE_ARBITER_MODEL", "deepseek-v4-flash"),
             ),
             arbiter_max_tokens=_env_int("DEBATE_ARBITER_MAX_TOKENS", 2048),
+            thinking=_env_str("AI_THINKING", "disabled").lower(),
             veto_enabled=_env_bool("AI_VETO_ENABLED", True),
             veto_min_confidence=_env_int("AI_VETO_MIN_CONFIDENCE", 70),
             chart_candles=_env_int("AI_CHART_CANDLES", 20),

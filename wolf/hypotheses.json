@@ -70,6 +70,22 @@
       "status": "OPEN",
       "evidence": "Untested. Taken from a QuantMind review as the one idea there worth keeping",
       "note": "A six-line schema change in wolf/news/signal.py, no new dependency. Cheap, but it is a strategy input, so it waits for the ~350-trade nominal sample like every other strategy change."
+    },
+    {
+      "id": "arbiter-model-swap",
+      "question": "Can a different arbiter model stop the debate layer abstaining?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-04",
+      "evidence": "DeepSeek V4 has no non-thinking model name: deepseek-v4-flash reasons by default at high effort, and deepseek-v4-pro more so",
+      "note": "The fault was never the model choice. Thinking is a request parameter, and turning it off is what fixes it. Raising DEBATE_ARBITER_MAX_TOKENS is only a bridge, and a narrow one \u2014 the hardcoded 30s HTTP timeout is the other wall."
+    },
+    {
+      "id": "post-cost-gate-era",
+      "question": "Did MAX_COST_R=0.15 change what gets traded, not just what it costs?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-04",
+      "evidence": "First post-gate day: median 1R 1.14%->2.13%, cost/trade 0.175R->0.094R, ladder bar 55.6%->45.2%, rung fill tp3 5%->21%",
+      "note": "ERA BOUNDARY \u2014 count to 350 restarts here, segmented by signal creation date rather than resolution date. The gate appears to have delivered the cost lever and part of the exit-geometry lever at once, which would reorder the lever ranking if it holds. It is one day at n=24 with se 0.243; the cost figures are arithmetic and trustworthy, the ladder figures are observations worth watching, and meanR/netR are noise."
     }
   ]
 }

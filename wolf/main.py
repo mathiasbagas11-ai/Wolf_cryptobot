@@ -133,6 +133,15 @@ def main() -> None:
             )
 
     ai = ai_status(application, probe=True)
+    if ai["enabled"] and ai["available"] and ai["degraded_roles"]:
+        # The arbiter answers, so nothing downstream reports a fault — but a
+        # debate missing a side is not the debate the verdicts are read as
+        # having come from, and this is the only line that will ever say so.
+        log.warning(
+            "AI debate is answering, but these roles contribute nothing: %s. "
+            "The arbiter is deciding on a one-sided argument.",
+            ", ".join(ai["degraded_roles"]),
+        )
     if ai["enabled"] and not ai["available"]:
         log.warning(
             "AI debate is ENABLED but cannot produce a verdict: %s. Every signal "

@@ -164,6 +164,13 @@ def ai_status(app: "Application", probe: bool = False) -> dict:
         result = getattr(validator, "selftest", lambda: {"ok": True, "reason": ""})()
         status["available"] = bool(result.get("ok"))
         status["reason"] = result.get("reason", "")
+        # A role that answers with nothing is degraded in exactly the sense the
+        # existing list means — present, and contributing nothing — so it joins
+        # that list rather than opening a second channel the reader has to know
+        # to look at. Everything that already prints degraded_roles picks it up.
+        for role in result.get("silent_roles") or []:
+            if role not in status["degraded_roles"]:
+                status["degraded_roles"].append(role)
     return status
 
 
@@ -211,7 +218,8 @@ def build_application(settings: Settings | None = None) -> Application:
 
     def _role_client(role, label: str = ""):
         llm = build_llm_client(
-            role.provider, settings.api_key_for(role.provider), role.model
+            role.provider, settings.api_key_for(role.provider), role.model,
+            thinking=settings.ai.thinking,
         )
         if label and not llm.available:
             # An enabled-but-unusable client degrades to a permanent ABSTAIN,

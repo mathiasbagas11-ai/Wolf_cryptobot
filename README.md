@@ -168,6 +168,24 @@ own sentence, and the two budget faults are worded apart on purpose:
 | `NO_JSON: spent all N tokens on reasoning` | the model reasoned until the budget ran out and never wrote an answer | a different model, or a bigger budget |
 | `NO_JSON: answer cut off at max_tokens=N` | it started answering and was truncated | a bigger budget |
 
+**The commonest cause here was not a broken key.** Since the V4 rename every
+DeepSeek model name reasons by default at high effort — `deepseek-v4-flash` is
+the fast *name*, not a non-thinking model, and there is no non-thinking name to
+switch to. Left on, the model spent the whole budget reasoning and returned
+empty content on 54% of one day's signals. `AI_THINKING=disabled` (the default)
+sends the provider's switch to turn it off; the field is sent only to the
+provider that owns it, because an unknown top-level field is ignored by some
+vendors and rejected by others. Set `AI_THINKING=enabled` to send nothing and
+fall back to the provider's own default — the way out if a vendor renames it,
+since a rejected field fails every call rather than half of them.
+
+A role can also fail *without* abstaining. An empty bull or bear argument is not
+an error on any path: it becomes `(none)` in the arbiter's prompt, the verdict
+still comes back, and the card reports a healthy debate that was in fact the
+arbiter talking to itself. Nothing downstream can tell the two apart, so the
+self-test probes all three roles and any that answers with nothing joins
+`degraded_roles` — the list `/ai` and the boot log already print.
+
 The knobs, all env vars:
 
 | Variable | Default | |
@@ -175,6 +193,7 @@ The knobs, all env vars:
 | `DEBATE_ARBITER_PROVIDER` | `deepseek` | `deepseek`, `groq`, `hermes`/`openrouter`, `anthropic` |
 | `DEBATE_ARBITER_MODEL` | `deepseek-v4-flash` | OpenRouter needs `vendor/model`; every other provider needs a bare name, and a mismatch is named at boot |
 | `DEBATE_ARBITER_MAX_TOKENS` | `2048` | sized for whatever the model does *before* the verdict, not for the verdict |
+| `AI_THINKING` | `disabled` | applies to all three roles; `enabled` sends nothing and restores the provider default |
 
 `/ai` fires one live call through the same path and reports what came back, so a
 change is confirmed in seconds rather than in tomorrow's digest — a broken layer

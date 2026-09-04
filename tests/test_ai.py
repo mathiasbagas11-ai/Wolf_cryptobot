@@ -284,3 +284,146 @@ def test_the_budget_is_settable_from_the_environment(monkeypatch):
     assert Settings.from_env().ai.arbiter_max_tokens == 4096
     monkeypatch.delenv("DEBATE_ARBITER_MAX_TOKENS")
     assert Settings.from_env().ai.arbiter_max_tokens == 2048
+
+
+# ── thinking mode, and the roles that answer with nothing ───────────────────
+
+
+class _Resp:
+    """Minimal stand-in for the provider's HTTP response."""
+
+    status_code = 200
+
+    def __init__(self, body: dict) -> None:
+        self._body = body
+
+    def json(self) -> dict:
+        return self._body
+
+
+def test_deepseek_is_told_not_to_think(monkeypatch):
+    """The fault this exists to stop, at the layer that can stop it.
+
+    Since the V4 rename every DeepSeek model name reasons by default at high
+    effort — "flash" is the fast name, not a non-thinking model, and there is
+    no non-thinking name to move to. Left alone the model spends the whole
+    budget reasoning and returns empty content, which the card records as
+    ABSTAIN/NO_JSON.
+    """
+    sent = {}
+    client = build_llm_client("deepseek", "k", "deepseek-v4-flash")
+    monkeypatch.setattr(
+        "wolf.ai.openai_compat.requests.post",
+        lambda *a, **kw: sent.update(kw["json"]) or _Resp({"choices": [
+            {"message": {"content": "hi"}}
+        ]}),
+    )
+    client.complete("sys", "user")
+    assert sent["thinking"] == {"type": "disabled"}
+
+
+def test_the_field_goes_only_to_the_provider_that_owns_it():
+    """An unknown top-level field is ignored by some vendors and rejected by others.
+
+    Sending DeepSeek's switch to Groq or OpenRouter would risk turning a layer
+    that fails half the time into one that fails every time.
+    """
+    assert build_llm_client("groq", "k", "m")._extra_body == {}
+    assert build_llm_client("hermes", "k", "v/m")._extra_body == {}
+
+
+def test_thinking_can_be_put_back_without_a_deploy():
+    """The way out if the vendor renames the field.
+
+    A rejected field fails every call rather than half of them, so the escape
+    hatch has to be reachable from the environment.
+    """
+    assert build_llm_client("deepseek", "k", "m", thinking="enabled")._extra_body == {}
+
+
+def test_the_thinking_switch_is_settable_from_the_environment(monkeypatch):
+    from wolf.config import Settings
+
+    assert Settings.from_env().ai.thinking == "disabled"
+    monkeypatch.setenv("AI_THINKING", "ENABLED")
+    assert Settings.from_env().ai.thinking == "enabled"  # case-folded
+
+
+def test_a_provider_quirk_cannot_be_dropped_by_a_default(monkeypatch):
+    """Merged last, so it overrides rather than being overridden."""
+    sent = {}
+    client = build_llm_client("deepseek", "k", "m")
+    monkeypatch.setattr(
+        "wolf.ai.openai_compat.requests.post",
+        lambda *a, **kw: sent.update(kw["json"]) or _Resp({"choices": [
+            {"message": {"content": '{"decision": "NEUTRAL"}'}}
+        ]}),
+    )
+    client.complete_json("sys", "user", {"type": "object"})
+    assert sent["response_format"] == {"type": "json_object"}
+    assert sent["thinking"] == {"type": "disabled"}
+
+
+class _SilentSide(LLMClient):
+    """A bull or bear whose client works and whose answer is empty."""
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
+        return "   "
+
+    def complete_json(self, system, user, schema, *, max_tokens: int = 1024) -> dict:
+        return {}
+
+
+class _Arbiter(LLMClient):
+    @property
+    def available(self) -> bool:
+        return True
+
+    def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
+        return "case"
+
+    def complete_json(self, system, user, schema, *, max_tokens: int = 1024) -> dict:
+        return {"decision": "NEUTRAL", "confidence": 0, "rationale": "ok"}
+
+
+def test_a_side_that_answers_with_nothing_is_named():
+    """The quietest failure in the layer, and the one nothing downstream sees.
+
+    An empty argument is not an error on any path: it becomes "(none)" in the
+    arbiter's prompt, the verdict still comes back, and the card reports a
+    healthy debate that was the arbiter talking to itself.
+    """
+    result = DebateValidator(
+        arbiter=_Arbiter(), bull=_SilentSide(), bear=_Arbiter()
+    ).selftest()
+    assert result["ok"] is True          # the arbiter still answers
+    assert result["silent_roles"] == ["bull"]   # and the debate is still broken
+
+
+def test_a_role_with_no_client_is_not_also_called_silent():
+    """degraded_roles already reports it; counting it twice reads as two faults."""
+    result = DebateValidator(arbiter=_Arbiter()).selftest()
+    assert result["silent_roles"] == []
+    assert DebateValidator(arbiter=_Arbiter()).degraded_roles == ["bull", "bear"]
+
+
+def test_silent_roles_join_the_list_the_card_already_prints():
+    """No second channel a reader has to know to look at."""
+    from types import SimpleNamespace
+
+    from wolf.app import ai_status
+    from wolf.config import Settings
+
+    app = SimpleNamespace(
+        settings=Settings(),
+        screener=SimpleNamespace(_validator=DebateValidator(
+            arbiter=_Arbiter(), bull=_SilentSide(), bear=_Arbiter(),
+        )),
+    )
+    status = ai_status(app, probe=True)
+    assert status["available"] is True
+    assert "bull" in status["degraded_roles"]

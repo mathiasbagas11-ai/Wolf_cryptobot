@@ -55,12 +55,21 @@ class OpenAICompatLLMClient(LLMClient):
         *,
         timeout: float = 30.0,
         extra_headers: Optional[dict] = None,
+        extra_body: Optional[dict] = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._timeout = timeout
         self._extra_headers = extra_headers or {}
+        #: Provider-specific request fields, merged into every payload. The
+        #: OpenAI-compatible surface is a common subset, not a standard, and
+        #: the parts that differ are exactly the parts that decide whether a
+        #: model answers at all — DeepSeek's thinking mode being the one that
+        #: cost this deployment half its verdicts. Keeping the quirk in a dict
+        #: the caller supplies lets the provider table carry it, rather than
+        #: this client growing a branch per vendor.
+        self._extra_body = extra_body or {}
         #: Why the last call failed, verbatim from the provider. Empty after a
         #: success. Read by the startup self-test so a misconfigured key or an
         #: empty balance is named on the deploy log instead of surfacing a day
@@ -89,6 +98,9 @@ class OpenAICompatLLMClient(LLMClient):
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        # Last, so a provider quirk can override a default set above rather
+        # than being silently dropped by it.
+        payload.update(self._extra_body)
         try:
             resp = requests.post(
                 f"{self._base_url}/chat/completions",

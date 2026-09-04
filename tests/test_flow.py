@@ -281,7 +281,12 @@ def test_selftest_passes_when_the_arbiter_answers(monkeypatch):
         lambda *a, **kw: _ErrResp(200, {"choices": [{"message": {
             "content": '{"decision": "NEUTRAL", "confidence": 0}'}}]}),
     )
-    assert DebateValidator(arbiter=client).selftest() == {"ok": True, "reason": ""}
+    # No bull or bear client is wired here, so neither can be silent: a role
+    # with no client is already reported by degraded_roles, and counting it
+    # twice would read as two separate faults.
+    assert DebateValidator(arbiter=client).selftest() == {
+        "ok": True, "reason": "", "silent_roles": [],
+    }
 
 
 def test_an_unset_key_is_reported_as_such(monkeypatch):

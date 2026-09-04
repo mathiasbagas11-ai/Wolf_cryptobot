@@ -310,7 +310,24 @@ class DebateValidator(SignalValidator):
         provider's own explanation.
         """
         if not self._arbiter.available:
-            return {"ok": False, "reason": "arbiter has no client — its provider key is unset"}
+            return {"ok": False, "reason": "arbiter has no client — its provider key is unset",
+                    "silent_roles": []}
+
+        # Bull and bear are probed too, because their failure is quieter than
+        # the arbiter's and costs the same thing. An empty argument is not an
+        # error anywhere: it becomes "(none)" in the arbiter's prompt, the
+        # verdict still comes back, and the layer reports a healthy debate that
+        # was in fact the arbiter talking to itself. Nothing downstream can tell
+        # a one-sided debate from a two-sided one, so it has to be caught here.
+        silent = [
+            name for name, client in (("bull", self._bull), ("bear", self._bear))
+            if client.available and not client.complete(
+                _BULL_SYSTEM if name == "bull" else _BEAR_SYSTEM,
+                "PROPOSED SETUP:\n(startup self-test — reply with one short sentence)",
+                max_tokens=512,
+            ).strip()
+        ]
+
         data = self._arbiter.complete_json(
             _ARBITER_SYSTEM,
             "PROPOSED SETUP:\n(startup self-test — reply NEUTRAL with confidence 0)\n\n"
@@ -319,8 +336,12 @@ class DebateValidator(SignalValidator):
             max_tokens=self._arbiter_max_tokens,
         )
         if data.get("decision"):
-            return {"ok": True, "reason": ""}
-        return {"ok": False, "reason": getattr(self._arbiter, "last_error", "") or "returned no JSON"}
+            return {"ok": True, "reason": "", "silent_roles": silent}
+        return {
+            "ok": False,
+            "reason": getattr(self._arbiter, "last_error", "") or "returned no JSON",
+            "silent_roles": silent,
+        }
 
     def validate(self, candidate: SignalCandidate, context=None, candles: Sequence = (), tf_candles: dict = {}) -> Verdict:
         if not self.available:
@@ -331,6 +352,18 @@ class DebateValidator(SignalValidator):
         try:
             bull = self._bull.complete(_BULL_SYSTEM, setup, max_tokens=512)
             bear = self._bear.complete(_BEAR_SYSTEM, setup, max_tokens=512)
+            # An empty argument is not an error on any path: it degrades to
+            # "(none)" below, the arbiter still answers, and the verdict is
+            # recorded as though both sides had been heard. Say so, because
+            # nothing further down can tell the difference.
+            for role, text, client in (("bull", bull, self._bull), ("bear", bear, self._bear)):
+                if client.available and not (text or "").strip():
+                    log.warning(
+                        "%s returned nothing for %s — the arbiter is deciding on a "
+                        "one-sided argument. %s",
+                        role.capitalize(), candidate.symbol,
+                        getattr(client, "last_error", "") or "no error reported",
+                    )
             arbiter_prompt = (
                 f"PROPOSED SETUP:\n{setup}\n\n"
                 f"BULL CASE:\n{bull or '(none)'}\n\n"
