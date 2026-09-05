@@ -106,6 +106,22 @@ def test_trap_falls_back_to_normal_topics_when_unconfigured():
     assert sess.calls[1]["message_thread_id"] == "4"  # Trade Reports
 
 
+def test_conviction_ranking_posts_to_the_high_conviction_topic():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(new_signal_thread_id="1", high_conviction_thread_id="99"),
+                         session=sess)
+    n.notify_conviction("ranking card")
+    assert sess.calls[0]["message_thread_id"] == "99"
+
+
+def test_conviction_ranking_sends_nothing_when_there_is_no_ranking():
+    sess = FakeSession()
+    n = TelegramNotifier(_settings(high_conviction_thread_id="99"), session=sess)
+    n.notify_conviction(None)
+    n.notify_conviction("")
+    assert sess.calls == []
+
+
 def test_non_trap_ignores_high_conviction_topic():
     sess = FakeSession()
     n = TelegramNotifier(_settings(new_signal_thread_id="1", high_conviction_thread_id="99"), session=sess)

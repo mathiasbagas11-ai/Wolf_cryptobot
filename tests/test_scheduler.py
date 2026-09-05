@@ -26,6 +26,7 @@ def _app(*, notifier_enabled: bool = False, **overrides):
     notifier = SimpleNamespace(
         enabled=notifier_enabled,
         notify_flow=lambda text: None,
+        notify_conviction=lambda text: None,
     )
     settings = _Settings(
         tracker_interval_min=5, screener_interval_min=10, stats_report_hours=24,
@@ -35,6 +36,7 @@ def _app(*, notifier_enabled: bool = False, **overrides):
             pulse_interval_min=30, whale_interval_min=5,
         ),
         flow=SimpleNamespace(interval_min=30),
+        conviction=SimpleNamespace(interval_min=60),
         onchain=_onchain(),
     )
     app = SimpleNamespace(
@@ -43,7 +45,7 @@ def _app(*, notifier_enabled: bool = False, **overrides):
         screener=SimpleNamespace(run_cycle=lambda: None,
                                  current_universe=lambda: ["BTCUSDT", "ETHUSDT"]),
         news=None, news_synth=None, majors=None, radar=None, pulse=None,
-        whale=None, flow=None,
+        whale=None, flow=None, conviction=None,
         valuation_collector=None, whale_collector=None,
         premium_collector=None, macro_collector=None,
     )
@@ -114,6 +116,23 @@ def test_flow_report_job_added_when_reporter_and_notifier_are_live():
 
 def test_flow_report_job_skipped_without_a_reporter():
     assert "flow_report" not in _job_ids(_app(notifier_enabled=True))
+
+
+# ── conviction ranking job ────────────────────────────────────────────────
+def test_conviction_job_added_when_the_ranker_and_notifier_are_live():
+    app = _app(notifier_enabled=True, conviction=SimpleNamespace(build=lambda: "text"))
+    assert "conviction" in _job_ids(app)
+
+
+def test_conviction_job_skipped_when_the_ranker_is_disabled():
+    assert "conviction" not in _job_ids(_app(notifier_enabled=True))
+
+
+def test_conviction_job_interval_comes_from_settings():
+    app = _app(notifier_enabled=True, conviction=SimpleNamespace(build=lambda: "text"))
+    app.settings.conviction = SimpleNamespace(interval_min=15)
+    job = {j.id: j for j in build_scheduler(app).get_jobs()}["conviction"]
+    assert job.trigger.interval.total_seconds() == 15 * 60
 
 
 # ── valuation universe cap ────────────────────────────────────────────────

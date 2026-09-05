@@ -41,6 +41,7 @@ from wolf.onchain import (
     WhaleHyperliquidCollector,
 )
 from wolf.reports import (
+    ConvictionRanker,
     FlowIntelReporter,
     MajorsReporter,
     MarketPulse,
@@ -75,6 +76,7 @@ class Application:
     pulse: Optional[MarketPulse] = None
     whale: Optional[WhaleTracker] = None
     flow: Optional[FlowIntelReporter] = None
+    conviction: Optional[ConvictionRanker] = None
     deepdive: Optional[TokenDeepDive] = None
     # On-chain collectors. Each is None when disabled; the scheduler only adds a
     # job for the ones that exist, so a disabled collector costs nothing.
@@ -360,6 +362,21 @@ def build_application(settings: Settings | None = None) -> Application:
     pulse = MarketPulse(client, tz=tz, llm=analysis_llm) if r.pulse_enabled else None
     whale = WhaleTracker(client, store, min_usd=r.whale_min_usd, tz=tz) if r.whale_enabled else None
 
+    # 🏆 Conviction ranking. Given the (cheap) arbiter client when the debate is
+    # on; without one it still runs and orders the book heuristically, saying so
+    # on the card. That degradation is deliberate — the room stays useful on a
+    # day the provider is down, and never presents a score sort as a verdict.
+    c = settings.conviction
+    conviction = ConvictionRanker(
+        tracker, store, llm=analysis_llm,
+        max_picks=c.max_picks,
+        min_candidates=c.min_candidates,
+        min_conviction=c.min_conviction,
+        lookback_hours=c.lookback_hours,
+        max_tokens=c.max_tokens,
+        tz=tz,
+    ) if c.enabled else None
+
     anomaly = build_anomaly_scanner(settings) if settings.anomaly.enabled else None
     flow = (
         build_flow_reporter(settings, store, universe_provider, anomaly=anomaly)
@@ -387,6 +404,7 @@ def build_application(settings: Settings | None = None) -> Application:
         pulse=pulse,
         whale=whale,
         flow=flow,
+        conviction=conviction,
         deepdive=deepdive,
         anomaly=anomaly,
         **collectors,

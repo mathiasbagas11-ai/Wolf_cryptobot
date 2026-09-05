@@ -1,5 +1,6 @@
 """Periodic market reports posted to their own Telegram topics."""
 
+from wolf.reports.conviction import ConvictionRanker, RankedPick
 from wolf.reports.deepdive import TokenDeepDive
 from wolf.reports.flow import FlowIntelReporter
 from wolf.reports.majors import MajorsReporter
@@ -12,6 +13,8 @@ from wolf.reports.whale_alert import (
 )
 
 __all__ = [
+    "ConvictionRanker",
+    "RankedPick",
     "MajorsReporter",
     "MarketRadar",
     "MarketPulse",

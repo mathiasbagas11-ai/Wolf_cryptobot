@@ -447,7 +447,7 @@ configured:
 | Telegram topic | Env var | Content | Enable |
 |----------------|---------|---------|--------|
 | ‼️ New Signal | `NEW_SIGNAL_THREAD_ID` | new signal alerts | always |
-| 🎯 High-Conviction | `HIGH_CONVICTION_THREAD_ID` | full lifecycle of TRAP (premium) signals; blank → normal topics | always |
+| 🎯 High-Conviction | `HIGH_CONVICTION_THREAD_ID` | full lifecycle of TRAP (premium) signals + the AI conviction ranking; blank → normal topics | always |
 | ⭐ Signal Entry | `SIGNAL_THREAD_ID` | entry touched + TP hits | always |
 | 📝 Trade Reports | `TRADE_REPORT_THREAD_ID` | win/loss resolutions | always |
 | 📚 Market Update | `MARKET_UPDATE_THREAD_ID` | BTC/ETH bias pulse | `MARKET_PULSE_ENABLED` |
@@ -516,6 +516,61 @@ Periodic reports each post to their own topic and are **opt-in**:
   the request is the trigger. An LLM narrator (`FLOW_NARRATOR_PROVIDER`) phrases
   it, falling back to a template without a key. The digest itself is fully
   deterministic: no model ever phrases its numbers.
+
+## AI conviction ranking (🏆 High-Conviction)
+
+Every other room answers *"did something fire?"*. This one answers the question
+that comes next: **of everything live right now, which one deserves the risk?**
+
+Enable with `CONVICTION_RANKING_ENABLED=true`. Every `CONVICTION_INTERVAL_MIN`
+(default 60) the whole live signal book — pending + active, newer than
+`CONVICTION_LOOKBACK_HOURS` — goes into **one** LLM call and comes back ordered,
+with a conviction score, a one-line thesis and the thing that would invalidate
+each pick. The card posts to `HIGH_CONVICTION_THREAD_ID` (falling back to the
+New Signal topic, never to the main channel).
+
+This is deliberately not what the debate layer does. The debate judges each
+candidate *in isolation* — "is this setup sound?" — which structurally cannot
+say that setup A is a better use of the same risk than setup B. Ranking is
+comparative, so it needs the whole book in one prompt.
+
+Rules it is held to, each one a way this could otherwise lie to you:
+
+* **It never fetches.** Candidates come from the tracker's own pending book and
+  every fact comes off the recorded `Signal` — the same numbers that were true
+  when the card was sent. A ranker that re-read the market would silently
+  disagree with the signals it is ranking.
+* **It never invents a pick.** Every id the model returns is matched back to a
+  real live signal; hallucinated or repeated ids are dropped.
+* **Setups it would not take are omitted, not ranked last.** A pick below
+  `CONVICTION_MIN_CONVICTION` (default 60) is dropped, and a book with nothing
+  worth taking produces **no message** rather than a weak leaderboard.
+* **It says when the AI did not rank it.** With no usable client the picks are
+  ordered by a documented heuristic (detector score adjusted for the debate
+  verdict, R:R, regime/strategy flags and whale stance) and the header says
+  `⚠️ AI unavailable` — the score is shown as a score, never dressed up as a
+  conviction. Silent AI degradation has cost this bot real information before.
+* **It shows what it passed over.** The setups considered and not picked are
+  named at the bottom, so the ranking can be checked against how those trades
+  actually resolved.
+
+The same ranking is never posted twice: the ordered pick ids are remembered in
+the state store, and an unchanged leaderboard is skipped. `/rank` in Telegram
+(or `POST /rank`) forces a fresh one and answers in the room you asked from.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `CONVICTION_RANKING_ENABLED` | `false` | turn the ranking on |
+| `CONVICTION_INTERVAL_MIN` | `60` | how often the book is ranked |
+| `CONVICTION_MAX_PICKS` | `3` | how many picks the card shows |
+| `CONVICTION_MIN_CANDIDATES` | `2` | below this there is nothing to compare — stays silent |
+| `CONVICTION_MIN_CONVICTION` | `60` | picks the model believes in less than this are dropped |
+| `CONVICTION_LOOKBACK_HOURS` | `12` | ignore setups the market has already accepted or refused |
+| `CONVICTION_MAX_TOKENS` | `1500` | budget for the ranking call |
+
+It reuses the arbiter's client (`DEBATE_ARBITER_PROVIDER`/`_MODEL`), so no extra
+key is needed when `AI_DEBATE_ENABLED=true`. With the debate off it still runs,
+heuristically, and says so.
 
 ### On-chain, whale and institutional collectors
 
@@ -826,6 +881,7 @@ The API is then available at `http://localhost:8000` (interactive docs at
 | `POST` | `/signals/outcomes/import` | Merge an exported outcome log back into state |
 | `POST` | `/flow` | Render the Flow Intelligence digest now → its topic (503 if no collector has run) |
 | `POST` | `/flow/{symbol}` | Single-token deep-dive (bull vs bear), fetched on demand |
+| `POST` | `/rank` | Rank the live signal book now → High-Conviction topic (503 if nothing to rank) |
 
 Example — on-demand single-token deep-dive (works even when scheduled flow is off):
 
@@ -871,6 +927,7 @@ unchanged. Key knobs:
 | `DEBATE_ARBITER_PROVIDER` | `deepseek` | Provider for the verdict — needs its own key |
 | `CLAUDE_MODEL` | `claude-opus-4-8` | Model for the AI arbiter |
 | `AI_VETO_MIN_CONFIDENCE` | `70` | Min `REJECT` confidence to veto a signal |
+| `CONVICTION_RANKING_ENABLED` | `false` | AI ranking of the live signal book → High-Conviction |
 
 ---
 

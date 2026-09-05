@@ -32,6 +32,7 @@ _HELP = (
     "<code>/paper</code> — paper balance &amp; return\n"
     "<code>/learning</code> — strategy edge &amp; blacklist\n"
     "<code>/active</code> — open signals\n"
+    "<code>/rank</code> — AI ranking of the live signals, best first\n"
     "<code>/diag</code> — diagnostic digest now (add hours, e.g. <code>/diag 48</code>)\n"
     "<code>/whatif</code> — re-grade past signals under each stop rule\n"
     "<code>/whatif cost</code> — what each max_cost_r would have kept\n"
@@ -71,6 +72,8 @@ class CommandRouter:
             return self._learning()
         if cmd == "active":
             return self._active()
+        if cmd == "rank":
+            return self._rank()
         if cmd == "whatif":
             return self._whatif(arg)
         if cmd == "ai":
@@ -281,6 +284,25 @@ class CommandRouter:
         if snap.get("blacklist"):
             lines.append(f"⛔ Blacklist: {esc(', '.join(snap['blacklist']))}")
         return "\n".join(lines)
+
+    def _rank(self) -> str:
+        """The conviction ranking on demand, answered in the room asked from.
+
+        Returned as text rather than posted to the High-Conviction topic: the
+        scheduled job owns that room, and a reply that lands somewhere the
+        asker is not looking reads as no reply at all. Forced, so asking twice
+        answers twice — and deliberately not remembered, because this reply is
+        not what is on that board and must not suppress the next post to it.
+        """
+        ranker = getattr(self._app, "conviction", None)
+        if ranker is None:
+            return ("⚠️ Conviction ranking is off. Set "
+                    "<code>CONVICTION_RANKING_ENABLED=true</code> to enable it.")
+        card = ranker.build(force=True, remember=False)
+        if not card:
+            return ("Nothing to rank right now — too few live signals, or none "
+                    "the AI would take.")
+        return card
 
     def _active(self) -> str:
         signals = self._app.tracker.active_signals()

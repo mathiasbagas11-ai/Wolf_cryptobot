@@ -129,6 +129,24 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         app_obj.notifier.notify_flow(text)
         return {"posted": app_obj.notifier.enabled, "text": text}
 
+    @api.post("/rank", dependencies=[Depends(require_api_key)])
+    def conviction_ranking() -> dict:
+        """Rank the live signal book now and post it to the High-Conviction topic.
+
+        Forced, unlike the scheduled job: an explicit request is answered even
+        when the ranking has not changed since the last post.
+        """
+        if app_obj.conviction is None:
+            raise HTTPException(status_code=503, detail="Conviction ranking is disabled")
+        text = app_obj.conviction.build(force=True)
+        if not text:
+            raise HTTPException(
+                status_code=503,
+                detail="Nothing to rank — too few live signals, or none worth taking",
+            )
+        app_obj.notifier.notify_conviction(text)
+        return {"posted": app_obj.notifier.enabled, "text": text}
+
     @api.post("/flow/{symbol}", dependencies=[Depends(require_api_key)])
     def flow_deep_dive(symbol: str) -> dict:
         """Single-token honest deep-dive (bull vs bear), fetched on demand."""

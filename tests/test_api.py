@@ -70,6 +70,39 @@ def test_flow_endpoint_503_when_reporting_is_disabled(client):
     assert api.post("/flow").status_code == 503
 
 
+class _FakeRanker:
+    def __init__(self, card="RANKING CARD"):
+        self.card = card
+        self.forced = None
+
+    def build(self, force=False):
+        self.forced = force
+        return self.card
+
+
+def test_rank_endpoint_posts_the_ranking(client):
+    api, app_obj = client
+    ranker = _FakeRanker()
+    app_obj.conviction = ranker
+    resp = api.post("/rank")
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "RANKING CARD"
+    # An explicit request is answered even when the ranking has not changed.
+    assert ranker.forced is True
+
+
+def test_rank_endpoint_503_when_there_is_nothing_to_rank(client):
+    api, app_obj = client
+    app_obj.conviction = _FakeRanker(card=None)
+    assert api.post("/rank").status_code == 503
+
+
+def test_rank_endpoint_503_when_ranking_is_disabled(client):
+    api, app_obj = client
+    app_obj.conviction = None
+    assert api.post("/rank").status_code == 503
+
+
 def test_record_and_list_active(client):
     api, _ = client
     payload = {

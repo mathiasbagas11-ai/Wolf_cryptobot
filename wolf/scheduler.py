@@ -166,6 +166,14 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
                         app.settings.flow.interval_min,
                         lambda: app.notifier.notify_flow(app.flow.build()))
 
+    # 🏆 Conviction ranking → the High-Conviction topic. Reads the tracker's
+    # own live book, so like the flow digest it costs nothing but one message
+    # (and, when the AI layer is on, one LLM call for the whole book).
+    if getattr(app, "conviction", None) is not None:
+        _add_report_job(scheduler, app.notifier.enabled, "conviction",
+                        app.settings.conviction.interval_min,
+                        lambda: app.notifier.notify_conviction(app.conviction.build()))
+
     # Daily backfill of anomaly paper-log outcomes (7d/14d/30d % change).
     anomaly = getattr(app, "anomaly", None)
     if anomaly is not None:
