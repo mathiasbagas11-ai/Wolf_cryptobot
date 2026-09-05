@@ -175,6 +175,13 @@ class TelegramSettings:
         # trade-report), preserving existing behaviour when the topic is unset.
         return _first(self.high_conviction_thread_id)
 
+    def route_conviction(self) -> str:      # 🏆 AI conviction ranking
+        # The ranking is the High-Conviction room's whole reason to exist, so
+        # it leads the chain. It falls back to New Signal rather than to the
+        # main channel: a curated leaderboard belongs next to the signals it
+        # is curating, not in whatever room the group uses for everything else.
+        return _first(self.high_conviction_thread_id, self.new_signal_thread_id)
+
     def route_entry(self) -> str:           # ⭐ Signal Entry (activation / TP)
         return _first(self.signal_thread_id)
 
@@ -588,6 +595,36 @@ class ReportsSettings:
 
 
 @dataclass(frozen=True)
+class ConvictionSettings:
+    """🏆 AI conviction ranking of the live signal book.
+
+    Opt-in like every other report. It costs one LLM call per interval — the
+    whole book in a single prompt, not one call per signal — and answers the
+    question the per-signal debate structurally cannot: given several live
+    setups, which one deserves the risk.
+    """
+
+    enabled: bool = False
+    interval_min: int = 60
+    # How many picks the card shows. A leaderboard long enough to include
+    # everything is a list, and a list is what the New Signal room already is.
+    max_picks: int = 3
+    # Below this many live setups there is nothing to compare, and the card
+    # would just be one signal re-announced in a second room.
+    min_candidates: int = 2
+    # Picks the model believes in less than this are dropped rather than shown
+    # at the bottom. A ranked-last setup reads as a recommendation to anyone
+    # skimming, which is the opposite of what a premium room is for.
+    min_conviction: int = 60
+    # Setups older than this are no longer an allocation decision — the market
+    # has already accepted or refused their entry.
+    lookback_hours: float = 12.0
+    # Budget for the ranking call. Larger than the debate's because the answer
+    # is a list with a thesis per entry, not three short fields.
+    max_tokens: int = 1500
+
+
+@dataclass(frozen=True)
 class DebateRole:
     """One debate participant (bull / bear / arbiter) → a provider + model."""
 
@@ -900,6 +937,7 @@ class Settings:
     ai: AISettings = field(default_factory=AISettings)
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
+    conviction: ConvictionSettings = field(default_factory=ConvictionSettings)
     flow: FlowSettings = field(default_factory=FlowSettings)
     onchain: OnChainSettings = field(default_factory=OnChainSettings)
     anomaly: AnomalySettings = field(default_factory=AnomalySettings)
@@ -950,6 +988,15 @@ class Settings:
             whale_enabled=_env_bool("WHALE_ENABLED", False),
             whale_interval_min=_env_int("WHALE_INTERVAL_MIN", 5),
             whale_min_usd=_env_float("WHALE_MIN_USD", 250_000),
+        )
+        conviction = ConvictionSettings(
+            enabled=_env_bool("CONVICTION_RANKING_ENABLED", False),
+            interval_min=_env_int("CONVICTION_INTERVAL_MIN", 60),
+            max_picks=_env_int("CONVICTION_MAX_PICKS", 3),
+            min_candidates=_env_int("CONVICTION_MIN_CANDIDATES", 2),
+            min_conviction=_env_int("CONVICTION_MIN_CONVICTION", 60),
+            lookback_hours=_env_float("CONVICTION_LOOKBACK_HOURS", 12.0),
+            max_tokens=_env_int("CONVICTION_MAX_TOKENS", 1500),
         )
         flow = FlowSettings(
             enabled=_env_bool("FLOW_ENABLED", False),
@@ -1124,6 +1171,7 @@ class Settings:
             ai=ai,
             news=news,
             reports=reports,
+            conviction=conviction,
             flow=flow,
             onchain=onchain,
             anomaly=anomaly,

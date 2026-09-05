@@ -345,6 +345,17 @@ class TelegramNotifier:
         if text:
             self.send(text, self._settings.route_flow())
 
+    def notify_conviction(self, text: Optional[str]) -> None:
+        """Post the AI conviction ranking to the High-Conviction topic.
+
+        ``text`` is ``None`` whenever the ranker had nothing to say — too few
+        live setups, no pick the model would take, or the same ranking already
+        on the board — so the falsiness check is the whole "should this be
+        sent?" decision and lives here rather than in the scheduler.
+        """
+        if text:
+            self.send(text, self._settings.route_conviction())
+
     # ── message builders ────────────────────────────────────────────────
     @staticmethod
     def _dir_emoji(direction: str) -> str:
