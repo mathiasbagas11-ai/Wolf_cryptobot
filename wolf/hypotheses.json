@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "drop-breakeven-stop",
+      "question": "Does removing the breakeven stop pay for itself?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "/whatif over n=66: 26 trades worse, 4 better, t=-2.85",
+      "note": "The stop is not cutting runners short. It is banking trades that would otherwise have round-tripped, which is most of them."
+    },
+    {
+      "id": "stop-advance-ladder",
+      "question": "Should STOP_ADVANCE trail up the ladder instead of halting at breakeven?",
+      "status": "INCONCLUSIVE",
+      "settled_on": "2026-09-02",
+      "evidence": "/whatif: +0.015R, and only 8 of 66 trades were touched at all",
+      "note": "Not adopted. Too few trades reach a second rung for the rule to have anything to act on. Worth re-running only if an exit-geometry re-cut raises rung fill."
+    },
+    {
+      "id": "entry-selectivity-for-win-rate",
+      "question": "Can a tighter entry filter raise the win rate to what the ladder needs?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "Breakeven WR 56.3% vs 52.8% actual; resolving a 4.5pp move needs n_eff>=493 against n_eff~44",
+      "note": "Not a lever twice over: unmeasurable at this sample, and a tighter entry usually cuts avgWin, which raises the very bar it was meant to clear."
+    },
+    {
+      "id": "cost-model-refinement",
+      "question": "Is the net-negative verdict an artefact of the 20bps cost assumption?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "netR turns positive only below a 7.3bps round trip, which is under Binance's published taker fee on its own",
+      "note": "The verdict does not depend on the assumption. Halving the modelled cost moves netR from -0.100 to -0.021 and it stays negative. Better cost measurement is still worth having, but it will not rescue anything."
+    },
+    {
+      "id": "vibe-trading-import",
+      "question": "Is there anything in HKUDS/Vibe-Trading worth importing?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "Reviewed: the factor zoo is cross-sectional daily equity, the crypto engine is leverage and liquidation, trailing_stop is an eToro API passthrough",
+      "note": "One thing was worth taking and has been taken: the BH-FDR procedure, reimplemented without numpy in wolf/stats.py. Nothing else touches exit geometry or cost."
+    },
+    {
+      "id": "quantmind-import",
+      "question": "Is there anything in LLMQuant/QuantMind worth importing?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "grep for backtest, sharpe, slippage and stop_loss returns nothing; the dependency footprint is large",
+      "note": "One idea worth stealing without the import: separate sentiment from materiality in wolf/news/signal.py. Six lines of schema, no dependency."
+    },
+    {
+      "id": "llm-in-signal-path",
+      "question": "Should the AI layer veto signals rather than only annotate them?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "Design, not measurement: a live veto has no counterfactual, because a dropped signal never becomes an outcome",
+      "note": "Monitor mode is the only arrangement in which the layer's verdict can be scored at all. The by_ai_verdict bucket and the CONFIRM-REJECT gap on the digest are what that arrangement buys; spending it on a veto would blind the measurement permanently."
+    },
+    {
+      "id": "news-sentiment-vs-materiality",
+      "question": "Should the news signal carry materiality separately from sentiment?",
+      "status": "OPEN",
+      "evidence": "Untested. Taken from a QuantMind review as the one idea there worth keeping",
+      "note": "A six-line schema change in wolf/news/signal.py, no new dependency. Cheap, but it is a strategy input, so it waits for the ~350-trade nominal sample like every other strategy change."
+    },
+    {
+      "id": "arbiter-model-swap",
+      "question": "Can a different arbiter model stop the debate layer abstaining?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-04",
+      "evidence": "DeepSeek V4 has no non-thinking model name: deepseek-v4-flash reasons by default at high effort, and deepseek-v4-pro more so",
+      "note": "The fault was never the model choice. Thinking is a request parameter, and turning it off is what fixes it. Raising DEBATE_ARBITER_MAX_TOKENS is only a bridge, and a narrow one \u2014 the hardcoded 30s HTTP timeout is the other wall."
+    },
+    {
+      "id": "post-cost-gate-era",
+      "question": "Did MAX_COST_R=0.15 change what gets traded, not just what it costs?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-04",
+      "evidence": "First post-gate day: median 1R 1.14%->2.13%, cost/trade 0.175R->0.094R, ladder bar 55.6%->45.2%, rung fill tp3 5%->21%",
+      "note": "ERA BOUNDARY \u2014 count to 350 restarts here, segmented by signal creation date rather than resolution date. The gate appears to have delivered the cost lever and part of the exit-geometry lever at once, which would reorder the lever ranking if it holds. It is one day at n=24 with se 0.243; the cost figures are arithmetic and trustworthy, the ladder figures are observations worth watching, and meanR/netR are noise."
+    },
+    {
+      "id": "exit-geometry-recut",
+      "question": "Does re-cutting the TP ladder lower the required win rate enough to matter?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-04",
+      "evidence": "/whatif ladder over 74 signals, all open=0: no variant beat live (best diff -0.048R, t=-1.55, padj=0.627). Tightening is strictly worse \u2014 need rises 50.8 -> 54.8 -> 60.6 as the ratio tightens. Widening is flat: 2rung/backload/even all within 0.005R of live",
+      "note": "This was ranked the largest lever at 9.4pp. Measured, it does not move. The curve says live sits at a local optimum with a flat gradient on the wide side and a steep penalty on the tight side. The sign test is far stronger than the mean test \u2014 rr2.5 changed 38 trades, 33 of them for the worse, which is p~1e-5 as a direction even though the magnitude is not resolvable. Direction certain, magnitude negligible."
+    },
+    {
+      "id": "backtest-without-the-cost-gate",
+      "question": "Can a deeper backtest accelerate the geometry questions?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-04",
+      "evidence": "Depth raised (lookback 50->300, candle_limit 250->1000) AND the live MAX_COST_R gate applied inside the engine, which previously applied no gates at all",
+      "note": "Depth alone would have made things worse: an ungated backtest accumulates the tiny-1R population the gate now rejects, so the deeper the history the more of a dead strategy it describes. /whatif history is deliberately NOT deepened \u2014 its 1000x15m reach is ~10.4 days, which rolls the pre-gate era out of the sample on its own."
+    },
+    {
+      "id": "whale-veto-direction",
+      "question": "Is the whale veto filtering the wrong side?",
+      "status": "INCONCLUSIVE",
+      "evidence": "/whatif whale 168 (one era, overlap-discounted): drop WITH gap +0.349R, t=+0.89, padj=0.528 at eff_n=28 from n=165 with mean_open=5.83. The all-era undiscounted version read padj=0.002 and was an artefact of both. Direction survives the strategy confound \u2014 the gap reappears in 3 of 3 comparable strategies (SCALP +0.251 n=59v40, MOMENTUM +0.209 n=17v7, PREDUMP +0.906 but only n=2 on one side) \u2014 so it is not a strategy mix relabelled",
+      "note": "Direction consistent, magnitude unresolvable. Worth noting what it would buy even taken at face value: netR -0.116 to -0.003, i.e. breakeven, not profit \u2014 and dropping WITH RAISES cost per trade from 0.14R to 0.18R because those trades carry wider stops, eating 26% of the gross gain. Still UNANSWERABLE as posed: the veto drops candidates before record_signal, so the strongly-opposed setups it refuses have no outcomes. Settling it needs the veto in monitor mode, which is a strategy change. This remains the one queued item whose cost grows while it waits.",
+      "settled_on": "2026-09-04"
+    }
+  ]
+}

@@ -1,0 +1,472 @@
+"""Tests for re-grading a resolved sample under a different stop rule."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+from wolf.config import LadderSettings, TrackerSettings
+from wolf.models import Candle, Status
+from wolf.tracker import OUTCOMES_KEY, Tracker
+from wolf.whatif import compare_stop_rules, render
+
+LADDER_1_3 = [
+    {"level": 1, "price": 105, "allocation": 0.5, "r_multiple": 1.0},
+    {"level": 2, "price": 110, "allocation": 0.3, "r_multiple": 2.0},
+    {"level": 3, "price": 115, "allocation": 0.2, "r_multiple": 3.0},
+]
+
+
+def _run(store, fake_client, path, ladder_cfg, symbol="BTCUSDT"):
+    """Grade one LONG (entry 100 / stop 95) over ``path`` under ``ladder_cfg``."""
+    tracker = Tracker(store, fake_client, TrackerSettings(), ladder=ladder_cfg)
+    sig = tracker.record_signal(
+        symbol, "MOMENTUM", "LONG", 100, tp=115, sl=95,
+        entry_mode="MOMENTUM_NOW", timeframe="15m", tps=LADDER_1_3,
+        entry_quoted_live=True,
+    )
+    now_ms = int(datetime.fromisoformat(sig.created_at).timestamp() * 1000)
+    fake_client.klines[symbol] = [
+        # A bar from before the signal, so the fetched history demonstrably
+        # reaches back to the entry — which is what the replay checks for. It
+        # sits below every rung and above the stop, so it changes no outcome.
+        Candle(time=now_ms - 900_000, open=100, high=100, low=100, close=100, volume=100.0)
+    ] + [
+        Candle(time=now_ms + (i + 1) * 900_000, open=o, high=h, low=l, close=c, volume=100.0)
+        for i, (o, h, l, c) in enumerate(path)
+    ]
+    return tracker.check_pending()[0]
+
+
+# The case the two rules are supposed to disagree about: TP2 fills, then price
+# slides all the way back to entry without ever reaching TP3.
+_TP2_THEN_FADE = [
+    (100, 106, 100, 105),   # TP1
+    (105, 111, 104, 110),   # TP2
+    (110, 111,  99, 100),   # fades to entry
+]
+
+
+def test_a_frozen_breakeven_stop_hands_the_last_slice_back(store, fake_client):
+    """Under "breakeven" the stop never moves again after TP1.
+
+    So a trade that got as far as TP2 still returns its remaining 20% to entry,
+    booking only what the first two rungs banked.
+    """
+    r = _run(store, fake_client, _TP2_THEN_FADE, LadderSettings(stop_advance="breakeven"))
+    assert r.tps_hit == [1, 2]
+    assert r.r_multiple == 1.1     # .5x1R + .3x2R + .2x0R
+
+
+def test_the_ladder_rule_protects_the_rung_below(store, fake_client):
+    """Under "ladder" TP2 pushes the stop up to TP1, so the last slice pays 1R."""
+    r = _run(store, fake_client, _TP2_THEN_FADE, LadderSettings(stop_advance="ladder"))
+    assert r.tps_hit == [1, 2]
+    assert r.r_multiple == 1.3     # .5x1R + .3x2R + .2x1R
+
+
+def test_the_ladder_rule_gives_up_a_run_that_dips_first(store, fake_client):
+    """The cost side, which is why this is a setting and not a rewrite.
+
+    Price reaches TP2, slips under TP1, then runs to TP3. The advanced stop
+    takes it out at TP1 for 1.3R; the frozen one rides it to a full 1.7R.
+    """
+    dip_then_run = [
+        (100, 106, 100, 105),
+        (105, 111, 104, 110),   # TP2
+        (110, 110, 104, 106),   # dips under TP1 (105)
+        (106, 116, 105, 115),   # then runs to TP3
+    ]
+    frozen = _run(store, fake_client, dip_then_run, LadderSettings(stop_advance="breakeven"))
+    assert frozen.tps_hit == [1, 2, 3] and frozen.r_multiple == 1.7
+
+    fake_client.klines.clear()
+    advanced = _run(store, fake_client, dip_then_run, LadderSettings(stop_advance="ladder"))
+    assert advanced.tps_hit == [1, 2] and advanced.r_multiple == 1.3
+
+
+def test_tp1_still_means_breakeven_under_both_rules(store, fake_client):
+    """The first rung behaves identically — "ladder" only changes later rungs."""
+    tp1_then_fade = [(100, 106, 100, 105), (105, 106, 99, 100)]
+    for rule, expected in (("breakeven", 0.5), ("ladder", 0.5)):
+        fake_client.klines.clear()
+        r = _run(store, fake_client, tp1_then_fade, LadderSettings(stop_advance=rule))
+        assert r.tps_hit == [1] and r.r_multiple == expected, rule
+
+
+def test_the_comparison_scores_both_rules_on_the_same_trades(store, fake_client):
+    """The whole point is that only the rule differs between the two columns."""
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    tracker = Tracker(store, fake_client, TrackerSettings())
+    report = compare_stop_rules(tracker)
+    assert report["error"] == ""
+    assert report["sample"] == 1
+    assert report["scored"] == 1 and report["skipped"] == 0
+    scores = {r.rule: r.mean_r for r in report["results"]}
+    assert scores["breakeven"] == 1.1
+    assert scores["ladder"] == 1.3
+    # One trade cannot clear a corrected bar, so the card reports the ranking
+    # and refuses the verdict — measured, as always, against the live rule.
+    assert "ladder has the best mean (+0.200R/trade vs breakeven)" in render(report)
+
+
+def test_an_empty_history_says_so_rather_than_reporting_zero(store, fake_client):
+    tracker = Tracker(store, fake_client, TrackerSettings())
+    report = compare_stop_rules(tracker)
+    assert report["results"] == []
+    assert "no graded signals" in report["error"]
+    assert "no graded signals" in render(report)
+
+
+def test_missing_price_history_refuses_to_compare(store, fake_client):
+    """No answer beats an answer computed from whatever candles came back."""
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    fake_client.klines.clear()          # candles no longer fetchable
+    report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
+    assert report["results"] == []
+    assert "reaching back to its entry" in report["error"]
+
+
+def test_history_that_starts_after_the_entry_is_refused(store, fake_client):
+    """The klines API answers with the newest N bars, not a date range.
+
+    Asking for as many bars as a trade lasted returns *today's* last N bars, and
+    for an older signal every one of them sits after its start — so the filter
+    passes them all and the replay grades the setup against unrelated prices.
+    A history whose first bar begins after the entry is not this trade's
+    history, however plausible the numbers it would produce.
+    """
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    first = fake_client.klines["BTCUSDT"][0]
+    fake_client.klines["BTCUSDT"] = [
+        c for c in fake_client.klines["BTCUSDT"] if c.time > first.time
+    ]
+    report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
+    assert report["results"] == []
+    assert "reaching back to its entry" in report["error"]
+
+
+def test_the_endpoint_renders_the_comparison(store, fake_client):
+    from fastapi.testclient import TestClient
+    from wolf.api.app import create_app
+
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    tracker = Tracker(store, fake_client, TrackerSettings())
+
+    class _App:
+        pass
+    app_obj = _App()
+    app_obj.tracker = tracker
+    app_obj.store = store
+    from wolf.config import Settings
+    app_obj.settings = Settings()
+    app_obj.notifier = type("N", (), {"enabled": False})()
+    app_obj.screener = type("S", (), {"_validator": None})()
+
+    client = TestClient(create_app(app_obj))
+    body = client.get("/whatif/stops").text
+    assert "breakeven" in body and "ladder" in body
+    assert "ladder has the best mean (+0.200R/trade vs breakeven)" in body
+
+
+# ── Telegram commands ───────────────────────────────────────────────────────
+def _router_app(store, fake_client):
+    from types import SimpleNamespace
+    from wolf.config import Settings
+
+    return SimpleNamespace(
+        analyze=None,
+        tracker=Tracker(store, fake_client, TrackerSettings()),
+        settings=Settings(),
+        screener=SimpleNamespace(_validator=None),
+        account=None,
+        learning=None,
+    )
+
+
+def test_whatif_is_reachable_as_a_telegram_command(store, fake_client):
+    """The API is not exposed on this deployment; Telegram is the way in."""
+    from wolf.notify.commands import CommandRouter
+
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    reply = CommandRouter(_router_app(store, fake_client)).handle("/whatif")
+    assert "breakeven" in reply and "ladder" in reply
+    assert "ladder has the best mean (+0.200R/trade vs breakeven)" in reply
+
+
+def test_diag_is_reachable_as_a_telegram_command(store, fake_client):
+    """The digest already arrives daily; this asks for it between reports."""
+    from wolf.notify.commands import CommandRouter
+
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    router = CommandRouter(_router_app(store, fake_client))
+    assert "WOLF-DIAG" in router.handle("/diag")
+    assert "WOLF-DIAG" in router.handle("/diag 48")
+    assert "Usage" in router.handle("/diag banyak")
+
+
+def test_both_commands_are_listed_in_help(store, fake_client):
+    from wolf.notify.commands import CommandRouter
+
+    help_text = CommandRouter(_router_app(store, fake_client)).handle("/help")
+    assert "/whatif" in help_text and "/diag" in help_text
+
+
+def test_both_rules_always_score_the_identical_set_of_trades(store, fake_client):
+    """A signal counts under every rule or under none — never just one.
+
+    The advanced stop terminates trades sooner, so it resolves some that the
+    frozen stop leaves running. Scoring each rule over whatever it managed to
+    grade let the columns hold different trades: three trades' difference in
+    membership was worth 4.16R, which was the entire reported gap between them.
+    """
+    from wolf import whatif
+
+    stopped_out = [(100, 101, 94, 96)]        # straight to the stop, resolves
+    for symbol, path in (("BTCUSDT", _TP2_THEN_FADE), ("ETHUSDT", stopped_out)):
+        _run(store, fake_client, path, LadderSettings(), symbol=symbol)
+
+    tracker = Tracker(store, fake_client, TrackerSettings())
+    real = whatif._regrade_one
+    calls = {"n": 0}
+
+    def flaky(probe, sig, candles):
+        # Fail for exactly one rule on one signal — the asymmetry that bit.
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return None
+        return real(probe, sig, candles)
+
+    whatif._regrade_one = flaky
+    try:
+        report = whatif.compare_stop_rules(tracker)
+    finally:
+        whatif._regrade_one = real
+
+    counts = {r.rule: r.n for r in report["results"]}
+    assert len(set(counts.values())) == 1, counts
+
+
+def test_the_render_says_how_much_of_the_sample_it_could_use(store, fake_client):
+    """Coverage is part of the answer: 189 of 198 is a different claim to 198."""
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    text = render(compare_stop_rules(Tracker(store, fake_client, TrackerSettings())))
+    assert "scored 1 of 1" in text
+    assert "0 without usable history" in text
+
+
+def test_a_never_moving_stop_lets_the_remainder_run(store, fake_client):
+    """Under "none" the last slice keeps its original stop instead of entry."""
+    r = _run(store, fake_client, [
+        (100, 106, 100, 105),   # TP1
+        (105, 111, 104, 110),   # TP2
+        (110, 116, 109, 115),   # TP3 -> full run either way
+    ], LadderSettings(stop_advance="none"))
+    assert r.tps_hit == [1, 2, 3] and r.r_multiple == 1.7
+
+
+def test_a_never_moving_stop_gives_back_what_tp1_banked(store, fake_client):
+    """The cost of protecting nothing, which "breakeven" exists to avoid.
+
+    TP1 banks half at +1R, then price runs to the original stop and the other
+    half loses 1R: the two cancel and the trade scratches at 0R, where a
+    breakeven stop would have kept the +0.5R.
+    """
+    path = [(100, 106, 100, 105), (105, 105, 94, 95)]
+    frozen = _run(store, fake_client, path, LadderSettings(stop_advance="breakeven"))
+    assert frozen.r_multiple == 0.5
+
+    fake_client.klines.clear()
+    loose = _run(store, fake_client, path, LadderSettings(stop_advance="none"))
+    assert loose.r_multiple == 0.0
+
+
+def test_a_trade_still_open_is_valued_not_discarded(store, fake_client):
+    """Dropping unresolved trades would grade each rule on the trades it suits.
+
+    A stop that never advances is precisely what leaves a trade running, so the
+    unresolved rows are where the rules differ most. They are marked to the
+    last close instead of being excluded.
+    """
+    # Resolves under a breakeven stop (bar 3 pierces entry) but not under one
+    # that never moved, since 99 never reaches the original stop at 95.
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
+    assert report["scored"] == 1, report
+    assert {r.rule for r in report["results"]} == {"breakeven", "ladder", "none"}
+    scores = {r.rule: r.mean_r for r in report["results"]}
+    assert scores["none"] == 1.1   # marked at the last close, which is entry
+
+
+def test_the_paired_view_counts_the_trades_that_actually_moved(store, fake_client):
+    """Six changed trades out of fifty-eight is a different claim to fifty-eight."""
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings(), symbol="BTCUSDT")
+    _run(store, fake_client, [(100, 101, 94, 96)], LadderSettings(), symbol="ETHUSDT")
+
+    report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
+    ladder = next(p for p in report["paired"] if p["rule"] == "ladder")
+    assert ladder["base"] == "breakeven"
+    assert ladder["changed"] == 1 and ladder["helped"] == 1 and ladder["hurt"] == 0
+    assert "changed 1 trade(s) (+1/-0)" in render(report)
+
+
+def test_the_headline_measures_against_the_rule_in_force(store, fake_client):
+    """Best-minus-worst credits a winner with beating a rule nobody runs.
+
+    With three rules on the card that overstated the change on offer by nearly
+    ten times: "ladder leads by +0.130R" was ladder against "none", while the
+    decision actually facing the reader — switch from breakeven — was +0.015R.
+    """
+    _run(store, fake_client, _TP2_THEN_FADE, LadderSettings(), symbol="BTCUSDT")
+    _run(store, fake_client, [(100, 106, 100, 105), (105, 105, 94, 95)],
+         LadderSettings(), symbol="SOLUSDT")
+
+    report = compare_stop_rules(Tracker(store, fake_client, TrackerSettings()))
+    scores = {r.rule: r.mean_r for r in report["results"]}
+    assert scores["none"] < scores["breakeven"] < scores["ladder"]
+
+    text = render(report)
+    gain = round(scores["ladder"] - scores["breakeven"], 3)
+    assert f"{gain:+.3f}R/trade vs breakeven" in text
+    # The gap to the rule nobody is running must not appear as the headline.
+    assert f"{scores['ladder'] - scores['none']:+.3f}R/trade" not in text
+
+
+# ── /ai probe ───────────────────────────────────────────────────────────────
+def _app_with_validator(store, fake_client, validator, enabled=True):
+    from types import SimpleNamespace
+    from dataclasses import replace as dc_replace
+    from wolf.config import Settings
+
+    settings = Settings()
+    return SimpleNamespace(
+        analyze=None, account=None, learning=None,
+        tracker=Tracker(store, fake_client, TrackerSettings()),
+        settings=dc_replace(settings, ai=dc_replace(settings.ai, enabled=enabled)),
+        screener=SimpleNamespace(_validator=validator),
+    )
+
+
+def test_ai_command_reports_the_providers_own_reason(store, fake_client):
+    """A fix applied now is otherwise unconfirmable until tomorrow's digest.
+
+    A broken debate layer abstains rather than failing, so the abstentions it
+    already caused stay in the window long after the cause is gone. One live
+    call separates "fixed" from "still broken" on the spot.
+    """
+    from wolf.notify.commands import CommandRouter
+
+    class _Broken:
+        available = True
+        degraded_roles: list = []
+        def selftest(self):
+            return {"ok": False, "reason": "HTTP 400: unknown model name"}
+
+    reply = CommandRouter(_app_with_validator(store, fake_client, _Broken())).handle("/ai")
+    assert "not answering" in reply
+    assert "HTTP 400: unknown model name" in reply
+
+
+def test_ai_command_confirms_a_working_arbiter(store, fake_client):
+    from wolf.notify.commands import CommandRouter
+
+    class _Working:
+        available = True
+        degraded_roles: list = []
+        def selftest(self):
+            return {"ok": True, "reason": ""}
+
+    reply = CommandRouter(_app_with_validator(store, fake_client, _Working())).handle("/ai")
+    assert "OK" in reply and "returned a verdict" in reply
+
+
+def test_ai_command_says_so_when_the_layer_is_switched_off(store, fake_client):
+    from wolf.notify.commands import CommandRouter
+
+    app = _app_with_validator(store, fake_client, None, enabled=False)
+    assert "OFF" in CommandRouter(app).handle("/ai")
+
+
+# ── cost gate sweep ─────────────────────────────────────────────────────────
+def _resolved(store, *, r: float, risk_pct: float, n: int, hours_ago: float = 3):
+    """Append a resolved outcome with an exact R and stop distance."""
+    from datetime import timedelta, timezone
+    from wolf.models import Signal
+    from wolf.tracker import OUTCOMES_KEY
+
+    entry = 100.0
+    start = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    rows = store.read(OUTCOMES_KEY, default=[]) or []
+    rows.append(Signal(
+        symbol=f"AAA{n}USDT", signal_type="SCREENER", direction="LONG",
+        entry_price=entry, tp=entry * 1.05, sl=entry * (1 - risk_pct / 100),
+        strategy="SCALP", status=Status.TP_HIT.value if r > 0 else Status.SL_HIT.value,
+        pnl_pct=r * risk_pct, r_multiple=r,
+        tp_ladder=LADDER_1_3, activated_at=start.isoformat(),
+        exit_time=(start + timedelta(hours=1)).isoformat(),
+        resolved_at=(start + timedelta(hours=1)).isoformat(),
+    ).to_dict())
+    store.write(OUTCOMES_KEY, rows)
+
+
+def test_the_cost_gate_sweep_prices_each_threshold(store, fake_client):
+    """A gate on stop distance can be priced without any price history.
+
+    Both halves of the answer are already on the record: how far the stop sat,
+    which is what the gate reads, and what the trade returned. So this can use
+    every stored outcome rather than the recent slice a candle replay reaches.
+    """
+    from wolf.whatif import compare_cost_gates, render_cost_gates
+
+    # Tight stops: a real gross edge that its own costs more than consume.
+    for i in range(20):
+        _resolved(store, r=+0.5 if i % 2 else -0.4, risk_pct=0.80, n=i)
+    # Wide stops: the same modest edge, at a fraction of the cost.
+    for i in range(20, 40):
+        _resolved(store, r=+0.5 if i % 2 else -0.4, risk_pct=4.00, n=i)
+
+    report = compare_cost_gates(Tracker(store, fake_client, TrackerSettings()))
+    rows = {r.threshold: r for r in report["results"]}
+    assert rows[999.0].kept == 40                  # ungated: everything
+    assert rows[0.15].kept == 20                   # only the wide stops survive
+    assert rows[999.0].net_r < rows[0.15].net_r    # and they are the profitable half
+
+    text = render_cost_gates(report)
+    assert "no gate" in text
+    assert "read the shape of the curve, not the winning row" in text
+
+
+def test_the_whole_pre_fix_era_is_dropped_not_just_its_impossible_rows(store, fake_client):
+    """Filtering on the value alone strips that era's winners and keeps its losses.
+
+    Only full runs were over-booked, so an R-above-the-ceiling test removes the
+    3.0R rows and leaves every -1.0R beside them — which returns a sample that
+    is negative by construction. The era has to go as a whole, and the newest
+    impossible outcome dates the end of it.
+    """
+    from wolf.whatif import compare_cost_gates
+
+    # Buggy era: over-booked winners sitting next to ordinary losses. The
+    # newest impossible row is what dates the era, so the losses settle before
+    # it — as they would around the deploy that ended the bug.
+    for i in range(6, 16):
+        _resolved(store, r=-1.0, risk_pct=2.0, n=i, hours_ago=41)
+    for i in range(6):
+        _resolved(store, r=+3.0, risk_pct=2.0, n=i, hours_ago=40)
+    # After the fix.
+    for i in range(16, 26):
+        _resolved(store, r=+0.5, risk_pct=2.0, n=i, hours_ago=3)
+
+    report = compare_cost_gates(Tracker(store, fake_client, TrackerSettings()))
+    assert report["excluded_inflated"] == 16      # the losses went too
+    assert report["sample"] == 10
+    assert all(r.mean_r == 0.5 for r in report["results"])
+    assert report["cutoff"]
+
+
+def test_the_cost_sweep_is_reachable_from_telegram(store, fake_client):
+    from wolf.notify.commands import CommandRouter
+
+    for i in range(6):
+        _resolved(store, r=+0.5, risk_pct=2.0, n=i)
+    reply = CommandRouter(_router_app(store, fake_client)).handle("/whatif cost")
+    assert "cost gate" in reply and "no gate" in reply

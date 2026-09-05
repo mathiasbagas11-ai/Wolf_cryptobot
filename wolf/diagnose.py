@@ -1,0 +1,919 @@
+"""Diagnostics — the derived statistics behind a performance verdict.
+
+The Telegram card answers "how did it go". This module answers "does that mean
+anything", which is a different question and the one that kept being re-derived
+by hand from a lossy summary.
+
+Four things the aggregate card cannot say, and this can:
+
+* **How noisy the average is.** An expectancy without its standard error is not
+  evidence. Reporting a mean of +0.085R over 226 trades sounds like an edge; the
+  same number with se 0.094 is a coin flip.
+* **What "no edge" would have looked like.** A win rate is meaningless against
+  50%: a ladder with a 1.5R stop and a 3R target pays out ~25% of the time under
+  a driftless random walk. The baseline is derived per strategy from the
+  geometry those trades actually carried.
+* **What the trade cost.** Targets are ATR multiples, so 1R is often well under
+  1% and round-trip fees can exceed the gross edge outright. Expectancy is
+  reported net.
+* **How many independent observations there really are.** Positions held
+  simultaneously in a correlated market are not independent samples, so the
+  nominal count overstates the evidence.
+
+Verdicts are deliberately hard to earn: below ``MIN_CONCLUSIVE_TRADES`` graded
+trades, or |t| under ``CONCLUSIVE_T``, the answer is INCONCLUSIVE regardless of
+how the sample looks. With samples this size that is usually the correct answer,
+and a diagnostic that cannot say "I don't know" is a machine for manufacturing
+confidence.
+"""
+
+from __future__ import annotations
+
+import math
+import statistics
+from datetime import datetime, timedelta, timezone
+from typing import Iterable, Optional
+
+from wolf.config import LadderSettings, state_is_persistent, volume_mount
+from wolf.models import Signal, Status
+from wolf.stats import DEFAULT_FDR, benjamini_hochberg, mean_gap, t_to_p
+from wolf.tracker import Tracker, _parse_iso, _risk_pct, r_multiple_of
+
+# A verdict needs both a real sample and a real signal-to-noise ratio.
+MIN_CONCLUSIVE_TRADES = 100
+CONCLUSIVE_T = 2.0
+# Below this fraction of the whole sample's spread, a bucket's own standard
+# deviation is treated as collapsed rather than small — see _summarise.
+DEGENERATE_SD_FRACTION = 0.25
+
+# One-sided 95% bound, matching the auto-pause gate.
+CI_Z = 1.96
+
+# Share of the signals the AI layer actually ran on that it may fail before the
+# failures are called out. Every abstention is a fault, so the honest floor is
+# zero; this is set where an occasional transient stops being occasional. Above
+# it the abstentions are systematic enough to bias the verdict sample as well
+# as thin it — the signals the layer fails on are not a random subset of the
+# signals it sees, so what survives is not a fair sample of its opinions.
+AI_DEGRADED_ABSTAIN_RATE = 0.10
+
+# Verdicts
+INCONCLUSIVE = "INCONCLUSIVE"
+EDGE_POSITIVE = "EDGE_POSITIVE"
+EDGE_NEGATIVE = "EDGE_NEGATIVE"
+NET_NEGATIVE_AFTER_COST = "NET_NEGATIVE_AFTER_COST"
+
+
+def _safe_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return _parse_iso(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _no_edge_win_rate(sig: Signal, tp1_banks_win: bool) -> Optional[float]:
+    """Win rate this trade's own geometry would produce with no edge at all.
+
+    Under a driftless walk the chance of touching barrier A before barrier B is
+    B/(A+B). With the stop trailing to entry after the first rung:
+
+        P(TP1 first)      = d_sl / (d_sl + d_tp1)
+        P(final | TP1)    = d_tp1 / d_tp_last
+
+    When TP1 banks a partial win, reaching TP1 is already a win; otherwise only
+    the full ladder counts. Returns ``None`` when the geometry is unusable.
+    """
+    entry, sl = sig.entry_price, sig.sl
+    if entry <= 0 or sl <= 0:
+        return None
+    rungs = sorted(
+        (float(r["price"]) for r in (sig.tp_ladder or []) if r.get("price")),
+        reverse=not sig.is_long,
+    )
+    if not rungs:
+        return None
+    d_sl = abs(entry - sl)
+    d_tp1 = abs(rungs[0] - entry)
+    d_last = abs(rungs[-1] - entry)
+    if d_sl <= 0 or d_tp1 <= 0 or d_last <= 0:
+        return None
+
+    p_tp1 = d_sl / (d_sl + d_tp1)
+    if tp1_banks_win:
+        return p_tp1 * 100
+    return p_tp1 * (d_tp1 / d_last) * 100
+
+
+def concurrency(outcomes: Iterable[Signal]) -> dict:
+    """How many positions were open at once, as a check on independence.
+
+    Trades running side by side in a correlated market share most of their move,
+    so the nominal count overstates how much was actually observed. Sweeping the
+    open/close events gives the average overlap; dividing by it yields the
+    worst case (perfectly correlated) — a floor on the effective sample, not an
+    estimate of it.
+    """
+    events: list[tuple[datetime, int]] = []
+    for o in outcomes:
+        start = _safe_dt(o.activated_at) or _safe_dt(o.created_at)
+        end = _safe_dt(o.resolved_at) or _safe_dt(o.exit_time)
+        if start and end and end >= start:
+            events.append((start, 1))
+            events.append((end, -1))
+    if not events:
+        return {"mean_open": 0.0, "max_open": 0, "eff_n_floor": 0}
+
+    events.sort(key=lambda e: e[0])
+    open_now = 0
+    peak = 0
+    weighted = 0.0
+    span = 0.0
+    prev = events[0][0]
+    for ts, delta in events:
+        gap = (ts - prev).total_seconds()
+        if gap > 0 and open_now > 0:
+            weighted += open_now * gap
+            span += gap
+        open_now += delta
+        peak = max(peak, open_now)
+        prev = ts
+    mean_open = (weighted / span) if span else 0.0
+    n = len(events) // 2
+    return {
+        "mean_open": round(mean_open, 2),
+        "max_open": peak,
+        "eff_n_floor": int(n / mean_open) if mean_open >= 1 else n,
+    }
+
+
+def _ladder_economics(traded: list) -> dict:
+    """How far the ladder actually runs, and what that demands of the win rate.
+
+    A reward:risk ratio describes the *last* rung. What decides whether the
+    system makes money is the average R of a winner, and with a front-loaded
+    scale-out plus a breakeven stop those are very different numbers: banking
+    50% at 1R and scratching the rest returns +0.5R, not the ladder's 1.7R
+    ceiling. Quoting the ceiling understates the required win rate by half.
+
+    So the breakeven win rate here is derived from realised wins and losses
+    rather than from the configured geometry. It answers "what would this have
+    needed", which is the only version that can be checked against the win rate
+    actually achieved.
+    """
+    wins = [r_multiple_of(o) for o in traded if r_multiple_of(o) > 0]
+    losses = [-r_multiple_of(o) for o in traded if r_multiple_of(o) < 0]
+    avg_win = statistics.fmean(wins) if wins else 0.0
+    avg_loss = statistics.fmean(losses) if losses else 0.0
+
+    # How deep into the ladder the winners got. A runner that never pays means
+    # the far rungs are decoration and the geometry should be re-cut.
+    filled: dict[int, int] = {}
+    for o in traded:
+        for level in (o.tps_hit or []):
+            filled[level] = filled.get(level, 0) + 1
+    n = len(traded)
+
+    breakeven_wr = (avg_loss / (avg_win + avg_loss) * 100) if (avg_win + avg_loss) else 0.0
+    return {
+        "avg_win_r": round(avg_win, 3),
+        "avg_loss_r": round(avg_loss, 3),
+        "breakeven_win_rate": round(breakeven_wr, 1),
+        "rung_fill_rate": {
+            f"tp{lvl}": round(filled.get(lvl, 0) / n * 100, 1) for lvl in (1, 2, 3)
+        } if n else {},
+    }
+
+
+def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0) -> dict:
+    """Mean, spread and verdict for one population of R-multiples.
+
+    ``sd_floor`` guards against a spread that collapsed rather than one that is
+    genuinely small. This ladder quantises its outcomes — a stop pays -1.0R, a
+    banked TP1 pays 0.5R, a full run 1.7R — so a handful of trades landing on
+    the same rung is ordinary, and it breaks the t-statistic in both
+    directions at once. Three SWING trades all at exactly -1.0R gave sd=0, se=0
+    and t=0, reading as "no evidence" for a sample that lost unanimously; two
+    PREDUMP trades at 0.499 and 0.500 gave sd=0.001 and t=999, reading as
+    overwhelming proof of an edge.
+
+    Neither sample knows anything about variance. Substituting the spread of
+    the whole traded sample says so honestly: these outcomes vary about as much
+    as every other bucket's, and this one is simply too small to have shown it.
+    """
+    n = len(rs)
+    if n == 0:
+        return {
+            "n": 0, "mean_r": 0.0, "sd_r": 0.0, "se_r": 0.0, "t": 0.0,
+            "ci95": [0.0, 0.0], "net_r": 0.0, "verdict": INCONCLUSIVE,
+        }
+    mean = statistics.fmean(rs)
+    sd = statistics.stdev(rs) if n > 1 else 0.0
+    # Only a collapsed spread is replaced; a merely narrow one is left alone.
+    eff_sd = max(sd, sd_floor) if sd < sd_floor * DEGENERATE_SD_FRACTION else sd
+    se = eff_sd / math.sqrt(n) if eff_sd else 0.0
+    t = mean / se if se else 0.0
+    half = CI_Z * se
+    net = mean - cost_r
+
+    if n < MIN_CONCLUSIVE_TRADES or abs(t) < CONCLUSIVE_T:
+        verdict = INCONCLUSIVE
+    elif mean < 0:
+        verdict = EDGE_NEGATIVE
+    elif net < 0:
+        # A gross edge that does not survive its own trading costs.
+        verdict = NET_NEGATIVE_AFTER_COST
+    else:
+        verdict = EDGE_POSITIVE
+
+    return {
+        "n": n,
+        "mean_r": round(mean, 3),
+        "sd_r": round(sd, 3),
+        "se_r": round(se, 3),
+        "t": round(t, 2),
+        "ci95": [round(mean - half, 3), round(mean + half, 3)],
+        "net_r": round(net, 3),
+        "verdict": verdict,
+    }
+
+
+def _abstain_reasons(outcomes: list) -> dict[str, int]:
+    """Why the AI layer failed, counted, most common first.
+
+    Every abstention is a fault. ``Decision.ABSTAIN`` is documented as "AI
+    layer unavailable / errored" and is set at exactly three places, all of
+    them failure paths: no usable arbiter, a role that raised, or an arbiter
+    that answered without a verdict. An AI that looked and had no opinion
+    returns NEUTRAL instead. So a count of abstentions is a count of failures,
+    and the count alone does not say which.
+
+    The provider's own sentence is kept, not just the class of fault:
+    "NO_JSON" says the arbiter did not return a verdict, and only the message
+    says whether that was an expired key, a spent balance, or a model
+    answering in prose — three different remedies, two of which are not code
+    changes at all.
+    """
+    reasons: dict[str, int] = {}
+    for o in outcomes:
+        head, _, rest = (o.ai_rationale or "").partition(":")
+        head = head.strip()
+        if not head.startswith("ABSTAIN/"):
+            continue
+        key = head.split("/", 1)[1]
+        if rest.strip():
+            key = f"{key}: {rest.strip()}"
+        reasons[key] = reasons.get(key, 0) + 1
+    return dict(sorted(reasons.items(), key=lambda kv: -kv[1]))
+
+
+def _spread_status(tracker) -> str:
+    """The screener's own last word on why the book ticker did or did not answer.
+
+    Counting uncovered signals states a symptom. "The venue served nothing",
+    "the request failed" and "the symbols came back under other names" are
+    three different faults behind that one symptom, two of which are not code
+    changes at all.
+    """
+    try:
+        row = tracker._store.read("spread_status", default=None) or {}
+    except Exception:
+        return ""
+    status = str(row.get("status") or "")
+    at = str(row.get("at") or "")
+    return f"{status} @ {at}" if status and at else status
+
+
+def _measured_cost(rows: list, taker_fee_bps: float, round_trip_bps: float) -> dict:
+    """Fee-and-spread cost priced from the spread each signal actually faced.
+
+    Two taker fees plus one full spread — the position is opened at the ask and
+    closed at the bid — and only the fees are the same on every symbol. The
+    configured constant charges the whole book one number, which models a range
+    spanning better than a basis point on BTC to ten on a freshly-rotated alt as
+    a single point.
+
+    **This is not the same quantity as the constant it sits beside.**
+    ``round_trip_cost_bps`` is documented as taker fees both sides *plus
+    slippage*; what is measured here has no slippage term in it at all, because
+    a paper ledger has no fill to price one from. Two spreads under 10bps
+    therefore make the measured figure land below the assumption every time,
+    and a reader comparing them straight would conclude costs are cheaper than
+    modelled when in fact one component is simply absent. The difference is
+    returned as ``slippage_residual_bps`` and printed, so the comparison states
+    what separates the two numbers instead of implying nothing does.
+
+    Reported *alongside* the constant-based figure rather than replacing it.
+    The sample straddles the change: signals booked before the spread was
+    recorded carry none, and quietly re-pricing the old ones against a number
+    they never saw would move every figure on the card mid-measurement, which
+    is the era break this report has already had to drop a sample over once.
+
+    Cost is averaged per trade rather than taken at the median risk, because
+    expectancy is a mean and it is the mean that ``netR`` subtracts.
+
+    Returns ``{}`` when nothing in the sample carries a spread.
+    """
+    priced = [
+        (o, o.spread_bps, risk)
+        for o in rows
+        if getattr(o, "spread_bps", None) is not None
+        and (risk := _risk_pct(o)) > 0
+    ]
+    if not priced:
+        return {"covered": 0, "sample": len(rows)}
+
+    spreads = [s for _, s, _ in priced]
+    costs = [((2 * taker_fee_bps + s) / 100.0) / risk for _, s, risk in priced]
+    median_spread = statistics.median(spreads)
+    fee_spread = 2 * taker_fee_bps + median_spread
+    return {
+        "covered": len(priced),
+        "sample": len(rows),
+        "median_spread_bps": round(median_spread, 2),
+        "min_spread_bps": round(min(spreads), 2),
+        "max_spread_bps": round(max(spreads), 2),
+        # Named for what it contains. It was called a "round trip", which is
+        # what the assumption is also called, and two different quantities
+        # under one name is how the missing component stayed invisible.
+        "median_fee_spread_bps": round(fee_spread, 2),
+        # What the assumption carries and this measurement does not. Negative
+        # means the observed fees and spread have already overrun the constant,
+        # so the constant is not merely missing slippage — it is too small.
+        "slippage_residual_bps": round(round_trip_bps - fee_spread, 2),
+        "cost_r": round(statistics.fmean(costs), 3),
+    }
+
+
+def _apply_fdr(families: tuple[dict, ...], fdr: float = DEFAULT_FDR) -> None:
+    """Attach false-discovery-rate control across every bucket, in place.
+
+    The family is the set of buckets the digest prints, because that is the set
+    a reader actually scans. Each bucket's t is converted to a two-sided
+    p-value on its own degrees of freedom, the whole family goes through
+    Benjamini-Hochberg together, and each bucket carries away its raw p, its
+    adjusted p and whether it survives.
+
+    A bucket with fewer than two trades has no degrees of freedom and no
+    p-value to adjust; it is scored 1.0, which keeps it in the family — it was
+    still one of the rows on the card — without letting it claim anything.
+    """
+    buckets = [b for family in families for b in family.values()]
+    if not buckets:
+        return
+    # Most buckets are one-sample tests on their own n, so n-1 is the default.
+    # A two-sample contrast carries its own Welch degrees of freedom and says
+    # so explicitly, because n-1 would overstate them and thin every p-value in
+    # the family — the one direction this correction must not err in.
+    raw = [
+        t_to_p(b.get("t", 0.0), int(b.get("df", b.get("n", 0) - 1)))
+        for b in buckets
+    ]
+    rejected, adjusted = benjamini_hochberg(raw, fdr)
+    for bucket, p, adj, keep in zip(buckets, raw, adjusted, rejected):
+        bucket["p_raw"] = round(p, 4)
+        bucket["p_adj"] = round(adj, 4)
+        bucket["fdr_survives"] = bool(keep)
+
+
+def diagnose(
+    tracker: Tracker,
+    *,
+    window_hours: Optional[float] = None,
+    round_trip_bps: float = 20.0,
+    taker_fee_bps: float = 5.0,
+    max_cost_r: Optional[float] = None,
+    tp1_banks_win: bool = False,
+    state_dir: str = "",
+    ai_available: Optional[bool] = None,
+) -> dict:
+    """Compute the full diagnostic over resolved outcomes.
+
+    ``round_trip_bps`` is the assumed all-in cost of a trade (taker fees both
+    sides plus slippage). It is converted into R using the median risk distance,
+    because that is the unit the strategies actually target.
+
+    ``taker_fee_bps`` prices the separate, *measured* figure reported beside it,
+    which is fees plus the recorded spread and carries no slippage term. The two
+    are different sums and the digest says so; see :func:`_measured_cost`.
+    """
+    outcomes = tracker.outcomes()
+    if window_hours and window_hours > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+        outcomes = [
+            o for o in outcomes
+            if (ts := (_safe_dt(o.resolved_at) or _safe_dt(o.exit_time))) is not None
+            and ts >= cutoff
+        ]
+
+    traded = [o for o in outcomes if o.status != Status.INVALIDATED.value]
+    graded = [o for o in traded if Status(o.status).is_graded]
+
+    def _cost_r(rows: list) -> tuple[float, float]:
+        """Return ``(median 1R %, cost in R)`` for one population.
+
+        Cost has to be computed from *that* population's own risk unit. A
+        strategy stopping 0.12% from entry pays 1.67R in fees on a 20bps round
+        trip, while one stopping 0.80% away pays 0.25R — charging both the
+        portfolio median inverts their ranking outright, which is exactly what
+        it did: the strategy reported as the only net-positive one was in fact
+        paying fourteen times its own risk unit more than the report showed.
+        """
+        risks = [r for r in (_risk_pct(o) for o in rows) if r > 0]
+        median = statistics.median(risks) if risks else 0.0
+        return median, ((round_trip_bps / 100.0) / median if median else 0.0)
+
+    median_1r, cost_r = _cost_r(traded)
+
+    overall = _summarise([r_multiple_of(o) for o in traded], cost_r)
+    # The whole sample's spread is the reference every bucket is measured
+    # against, so a bucket whose own spread collapsed borrows this one.
+    sample_sd = overall["sd_r"]
+
+    by_strategy: dict[str, dict] = {}
+    for name in sorted({o.strategy for o in traded}):
+        rows = [o for o in traded if o.strategy == name]
+        graded_rows = [o for o in rows if Status(o.status).is_graded]
+        strat_1r, strat_cost_r = _cost_r(rows)
+        summary = _summarise([r_multiple_of(o) for o in rows], strat_cost_r, sample_sd)
+        summary["cost_r"] = round(strat_cost_r, 3)
+
+        wins = sum(1 for o in graded_rows if Status(o.status).is_win)
+        wr = (wins / len(graded_rows) * 100) if graded_rows else 0.0
+        baselines = [
+            b for b in (_no_edge_win_rate(o, tp1_banks_win) for o in rows) if b is not None
+        ]
+        no_edge = statistics.fmean(baselines) if baselines else None
+        # How far the observed win rate sits from its own no-edge baseline, in
+        # binomial standard deviations. Answers "is 33% good?" — which depends
+        # entirely on the ladder, not on 50%.
+        wr_z = None
+        if no_edge is not None and graded_rows:
+            p = no_edge / 100
+            sd = math.sqrt(len(graded_rows) * p * (1 - p))
+            if sd > 0:
+                wr_z = round((wins - len(graded_rows) * p) / sd, 2)
+
+        summary.update({
+            "graded": len(graded_rows),
+            "win_rate": round(wr, 1),
+            "no_edge_win_rate": round(no_edge, 1) if no_edge is not None else None,
+            "win_rate_z": wr_z,
+            "median_1r_pct": round(strat_1r, 3),
+        })
+        by_strategy[name] = summary
+
+    def _buckets_by(label_of) -> dict[str, dict]:
+        """Split the traded sample on one label and summarise each side.
+
+        Every dimension gets the same statistics as ``by_strategy``, because
+        the question is always the same one — does this population's mean R
+        differ from zero by enough to act on.
+        """
+        buckets: dict[str, dict] = {}
+        for label in sorted({label_of(o) for o in traded}):
+            rows = [o for o in traded if label_of(o) == label]
+            graded_rows = [o for o in rows if Status(o.status).is_graded]
+            _, bucket_cost_r = _cost_r(rows)
+            summary = _summarise([r_multiple_of(o) for o in rows], bucket_cost_r, sample_sd)
+            wins = sum(1 for o in graded_rows if Status(o.status).is_win)
+            summary.update({
+                "graded": len(graded_rows),
+                "win_rate": round(wins / len(graded_rows) * 100, 1) if graded_rows else 0.0,
+            })
+            buckets[label] = summary
+        return buckets
+
+    # On-chain dimensions: is any of the collected data actually predictive?
+    # Today only the whale gate acts on any of it; these buckets are what
+    # should decide whether the others earn a gate too, or whether the whale
+    # threshold is set anywhere near right.
+    #
+    # NO_DATA stays its own bucket: a collector that was off is not a finding,
+    # and folding it into NEUTRAL would dilute whatever real effect exists.
+    def _onchain_buckets(key: str) -> dict[str, dict]:
+        return _buckets_by(lambda o: getattr(o, key, "") or "NO_DATA")
+
+    by_whale_stance = _onchain_buckets("whale_stance")
+    by_onchain_bias = _onchain_buckets("onchain_bias")
+
+    # Does the AI layer's verdict carry any information?
+    #
+    # This bucket exists because of the decision to keep the layer out of the
+    # signal path. A live veto blinds itself: the signals it drops never become
+    # outcomes, so a REJECT can never be checked against what the trade would
+    # have done. In monitor mode every verdict is attached to a trade that ran
+    # anyway, which makes this the only arrangement where the question is
+    # answerable at all — and leaving it unmeasured would waste the only
+    # advantage the arrangement buys.
+    #
+    # ABSTAIN and NO_AI stay separate for the same reason NO_DATA does: an
+    # abstention is a failure of the layer, never an opinion it held, and a
+    # switched-off layer never tried. Folding either into NEUTRAL would label a
+    # missing verdict as a considered one.
+    by_ai_verdict = _buckets_by(lambda o: o.ai_verdict or "NO_AI")
+
+    # Each bucket above is measured against zero, which on a system whose
+    # overall mean is negative answers a question nobody asked: every bucket
+    # will read negative because every bucket pays the same costs. What decides
+    # whether the verdict is worth anything is the *gap* between the two
+    # opinionated buckets, so that contrast is computed directly rather than
+    # left to a reader eyeballing two rows that were never compared.
+    # Charged the same independence discount the concurrency line reports. The
+    # contrast used to be quoted on the nominal count while eff_n_floor sat two
+    # lines below saying the sample was a third that size — and the reader was
+    # left to reconcile them, which on the one row anybody would act on is not
+    # a reconciliation anyone performs.
+    overlap = concurrency(traded)["mean_open"]
+    ai_edge = mean_gap(
+        [r_multiple_of(o) for o in traded if o.ai_verdict == "CONFIRM"],
+        [r_multiple_of(o) for o in traded if o.ai_verdict == "REJECT"],
+        overlap,
+    )
+
+    # Whale stance crossed with strategy, because the one-dimensional split
+    # cannot tell a real effect from a bookkeeping artefact. If the strategies
+    # that lose are also the ones whose signals whales happen to agree with,
+    # "trading with whales loses" is just those strategies losing, re-labelled.
+    # Only the cross-tab separates the two, and the answer decides whether the
+    # whale veto is filtering the right side.
+    def _whale_by_strategy() -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for strategy in sorted({o.strategy or "?" for o in traded}):
+            rows = [o for o in traded if (o.strategy or "?") == strategy]
+            cells: dict[str, dict] = {}
+            for stance in sorted({(o.whale_stance or "NO_DATA") for o in rows}):
+                cell = [o for o in rows if (o.whale_stance or "NO_DATA") == stance]
+                graded_cell = [o for o in cell if Status(o.status).is_graded]
+                wins = sum(1 for o in graded_cell if Status(o.status).is_win)
+                cells[stance] = {
+                    "n": len(cell),
+                    "graded": len(graded_cell),
+                    "win_rate": round(wins / len(graded_cell) * 100, 1) if graded_cell else 0.0,
+                    "mean_r": round(
+                        statistics.fmean([r_multiple_of(o) for o in cell]), 3
+                    ) if cell else 0.0,
+                }
+            out[strategy] = cells
+        return out
+
+    whale_by_strategy = _whale_by_strategy()
+
+    status_counts: dict[str, int] = {}
+    for o in outcomes:
+        status_counts[o.status] = status_counts.get(o.status, 0) + 1
+
+    ai_verdicts: dict[str, int] = {}
+    for o in traded:
+        key = o.ai_verdict or "NO_AI"
+        ai_verdicts[key] = ai_verdicts.get(key, 0) + 1
+    abstain_rate = (
+        (ai_verdicts.get("ABSTAIN", 0) + ai_verdicts.get("NO_AI", 0)) / len(traded)
+        if traded else 0.0
+    )
+
+    # Multiplicity. Every bucket above carries its own t, and a reader scanning
+    # a dozen of them for the convincing one is running a dozen tests while
+    # judging each at the bar for a single test. At eleven buckets and p<0.05
+    # that manufactures about one apparent finding per digest out of pure
+    # noise. Adjusting them as one family puts the corrected number on the row,
+    # so the correction does not depend on the reader remembering to make it.
+    #
+    # ``overall`` is deliberately excluded. It is the one question the bot was
+    # built to answer, fixed before any data arrived; the buckets are a search
+    # across subgroups. Folding the pre-registered question into the family it
+    # was not part of would penalise it for tests it never ran.
+    # The AI buckets and the contrast drawn from them are rows on the same
+    # card, so they join the same family rather than getting a private bar.
+    # This raises the threshold every other bucket has to clear, which is the
+    # point: the reader who scans the strategy rows is now scanning the AI rows
+    # too, and the correction has to know that.
+    families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict]
+    if ai_edge is not None:
+        families.append({"ai_edge": ai_edge})
+    _apply_fdr(tuple(families))
+
+    ladder = _ladder_economics(traded)
+
+    flags = []
+    # Same durability test the startup card uses. The old check here only asked
+    # whether the path was absolute, which passes /app/state_data — absolute and
+    # still inside the container, so it is wiped exactly like a relative path.
+    if state_dir and not state_is_persistent(state_dir):
+        flags.append("STATE_NOT_PERSISTED")
+    # Failures of the AI layer, counted over the signals it actually ran on.
+    # NO_AI is excluded deliberately: a layer that is switched off never tried,
+    # which is a configuration choice and not a fault, and folding it in here
+    # would make a disabled AI read as a broken one.
+    ai_ran = sum(v for k, v in ai_verdicts.items() if k != "NO_AI")
+    ai_abstained = ai_verdicts.get("ABSTAIN", 0)
+    ai_failure_rate = (ai_abstained / ai_ran) if ai_ran else 0.0
+    abstain_reasons = _abstain_reasons(traded)
+    # The flag carries only the leading fault: the full ranked list is printed
+    # on the ai block above it, and a flags line long enough to wrap is a line
+    # that gets skimmed past.
+    detail = next(
+        (f"{k} x{v}" for k, v in abstain_reasons.items()), ""
+    )
+
+    if traded and abstain_rate >= 0.99:
+        flags.append(f"AI_NEVER_DECIDES({detail})" if detail else "AI_NEVER_DECIDES")
+    elif ai_failure_rate > AI_DEGRADED_ABSTAIN_RATE:
+        # The old card only spoke at total failure, so a layer failing on half
+        # its signals counted the abstentions and never said why — the same
+        # silence that let a 29/29 run go unnoticed, one degree quieter.
+        flags.append(
+            f"AI_DEGRADED({ai_abstained}/{ai_ran}={ai_failure_rate:.0%}"
+            + (f" {detail}" if detail else "") + ")"
+        )
+    if ai_available is False:
+        flags.append("AI_CLIENT_UNAVAILABLE")
+    unpriced = status_counts.get(Status.EXPIRED.value, 0)
+    if unpriced:
+        flags.append(f"UNPRICED_EXITS={unpriced}")
+    if not tp1_banks_win:
+        flags.append("TP1_BANKS_WIN_OFF")
+    # Scaling out caps a perfect run: most of the size is sold before the last
+    # rung, so no single trade can pay what the final rung is worth. An average
+    # winner above that ceiling is arithmetically impossible, which means the
+    # grading is wrong — not that the strategy is exceptional. Say so loudly,
+    # because every number downstream inherits the error and they all look good.
+    ceiling = LadderSettings().full_run_r
+    if ladder["avg_win_r"] > ceiling:
+        flags.append(f"AVG_WIN_ABOVE_LADDER_CEILING={ladder['avg_win_r']:.2f}R>{ceiling:.2f}R")
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "window_hours": window_hours,
+        "sample": {
+            "traded": len(traded),
+            "graded": len(graded),
+            "flat": status_counts.get(Status.EXPIRED_FLAT.value, 0),
+            "invalidated": status_counts.get(Status.INVALIDATED.value, 0),
+            "unpriced": unpriced,
+        },
+        "cost": {
+            "round_trip_bps": round_trip_bps,
+            "median_1r_pct": round(median_1r, 3),
+            "cost_r": round(cost_r, 3),
+            "measured": _measured_cost(traded, taker_fee_bps, round_trip_bps),
+            "taker_fee_bps": taker_fee_bps,
+            # The gate as the running process has it, not as the operator
+            # believes they set it. An env var that never reached the
+            # container leaves the code default in force and nothing on the
+            # card contradicts the intention — which is how a threshold can be
+            # "deployed" for days while every signal it was meant to reject
+            # still arrives.
+            "max_cost_r": max_cost_r,
+            "min_1r_pct": (
+                round((round_trip_bps / 100.0) / max_cost_r, 3)
+                if max_cost_r else None
+            ),
+            "spread_status": _spread_status(tracker),
+        },
+        "overall": overall,
+        "ladder": ladder,
+        "by_strategy": by_strategy,
+        "by_whale_stance": by_whale_stance,
+        "whale_by_strategy": whale_by_strategy,
+        "by_onchain_bias": by_onchain_bias,
+        "by_ai_verdict": by_ai_verdict,
+        "ai_edge": ai_edge,
+        "status_counts": status_counts,
+        "ai_verdicts": ai_verdicts,
+        "ai_abstain_reasons": abstain_reasons,
+        "ai_failure_rate": round(ai_failure_rate, 3),
+        "concurrency": concurrency(traded),
+        "flags": flags,
+        "state_dir": state_dir,
+        "state_persistent": state_is_persistent(state_dir) if state_dir else None,
+        "volume_mount": volume_mount(),
+        "thresholds": {
+            "min_conclusive_trades": MIN_CONCLUSIVE_TRADES,
+            "conclusive_t": CONCLUSIVE_T,
+        },
+    }
+
+
+def _gate_lines(cost: dict) -> list[str]:
+    """The cost gate as the running process holds it.
+
+    Printed beside the strategy rows it decides, because the failure this
+    catches is silent by construction: an environment variable that never
+    reached the container leaves the code default in force, every signal the
+    new threshold was meant to reject keeps arriving, and no figure on the
+    card says which threshold was actually applied. Reporting the derived
+    minimum 1R as well makes the check a glance — compare it to the 1R column
+    on each strategy row and a gate that is not biting is obvious.
+    """
+    max_cost_r = cost.get("max_cost_r")
+    if max_cost_r is None:
+        return []
+    floor = cost.get("min_1r_pct")
+    return [
+        f"gate     max_cost_r={max_cost_r:g} => rejects 1R < "
+        f"{floor:.2f}%" if floor else f"gate     max_cost_r={max_cost_r:g}"
+    ]
+
+
+def _measured_cost_lines(cost: dict) -> list[str]:
+    """The spread-priced cost, when any of the sample carries a spread.
+
+    Prints the range as well as the middle. A median alone would hide the very
+    thing the measurement was added to expose: that one configured constant is
+    standing in for symbols whose real spreads differ by an order of
+    magnitude.
+
+    The two figures are named for what each one contains, and the difference
+    between them is spelled out. Printed side by side under one word — "round
+    trip" for both — the measured number reads as a cheaper version of the
+    assumed one, when the truthful reading is that it is a *different sum*: the
+    constant carries a slippage allowance and the measurement has no slippage
+    term at all. On a paper ledger there is no fill to price one from, so the
+    honest move is to say what is missing rather than to invent a number for it
+    or to let the comparison imply nothing is.
+    """
+    m = cost.get("measured") or {}
+    covered, sample = m.get("covered", 0), m.get("sample", 0)
+    if not covered:
+        # Say nothing at all only when the field has never been populated;
+        # once collection starts, silence would read as "no difference found".
+        if not sample:
+            return []
+        why = cost.get("spread_status") or "collector has not reported yet"
+        return [
+            f"spread   no signal in this window recorded a spread "
+            f"(0/{sample}) — cost above is the configured constant",
+            f"         collector: {why}",
+        ]
+    residual = m["slippage_residual_bps"]
+    if residual >= 0:
+        gap = (
+            f"incl. {residual:.2f}bps slippage the book cannot price "
+            f"(paper ledger, no fill)"
+        )
+    else:
+        # The constant is not merely missing a component; the observed fees and
+        # spread already exceed it, so netR is understating the cost outright.
+        gap = (
+            f"but fees+spread overrun it by {-residual:.2f}bps — "
+            f"constant too small, before any slippage"
+        )
+    return [
+        f"spread   {m['median_spread_bps']:.2f}bps median "
+        f"[{m['min_spread_bps']:.2f}..{m['max_spread_bps']:.2f}] "
+        f"over {covered}/{sample} signals",
+        f"         + 2x{cost['taker_fee_bps']:g}bps taker => "
+        f"{m['median_fee_spread_bps']:.2f}bps fee+spread, "
+        f"measured cost={m['cost_r']:.3f}R",
+        f"         assumed {cost['round_trip_bps']:g}bps => "
+        f"{cost['cost_r']:.3f}R, {gap}",
+    ]
+
+
+def _fdr_col(bucket: dict) -> str:
+    """The bucket's multiplicity-adjusted p, formatted for the row.
+
+    Empty when no adjustment was made, so a digest built before the family
+    existed still renders rather than raising. A surviving bucket is marked
+    ``*`` — the only mark on the card that means "this one cleared the bar the
+    whole table was judged at", which is a different and much rarer claim than
+    the t beside it.
+    """
+    if "p_adj" not in bucket:
+        return ""
+    mark = "*" if bucket.get("fdr_survives") else " "
+    return f"padj={bucket['p_adj']:.3f}{mark} "
+
+
+def render_digest(diag: dict) -> str:
+    """Render the diagnostic as a compact fixed-shape text block.
+
+    Small enough to paste back into a conversation whole, and ordered so the
+    verdict and the evidence behind it sit together — the numbers a reader would
+    need to disagree with the verdict are on the same line as the verdict.
+    """
+    s, c, o = diag["sample"], diag["cost"], diag["overall"]
+    win = diag.get("window_hours")
+    lines = [
+        f"WOLF-DIAG v1 | {diag['generated_at']} | window={f'{win:g}h' if win else 'all'}",
+        f"sample   traded={s['traded']} graded={s['graded']} flat={s['flat']} "
+        f"invalid={s['invalidated']} unpriced={s['unpriced']}",
+        f"cost     {c['round_trip_bps']:g}bps / 1R={c['median_1r_pct']:.2f}% => {c['cost_r']:.3f}R",
+        *_gate_lines(c),
+        *_measured_cost_lines(c),
+        f"overall  meanR={o['mean_r']:+.3f} sdR={o['sd_r']:.2f} n={o['n']} se={o['se_r']:.3f} "
+        f"t={o['t']:+.2f} ci95=[{o['ci95'][0]:+.3f},{o['ci95'][1]:+.3f}]",
+        f"         netR={o['net_r']:+.3f}  => {o['verdict']}",
+    ]
+    for name, b in diag["by_strategy"].items():
+        base = "n/a" if b["no_edge_win_rate"] is None else f"{b['no_edge_win_rate']:.1f}"
+        z = "n/a" if b["win_rate_z"] is None else f"{b['win_rate_z']:+.2f}"
+        lines.append(
+            f"{name:<9} n={b['n']} graded={b['graded']} wr={b['win_rate']:.1f} "
+            f"noedge_wr={base} wr_z={z}"
+        )
+        lines.append(
+            f"{'':<9} meanR={b['mean_r']:+.3f} sd={b['sd_r']:.2f} t={b['t']:+.2f} "
+            f"{_fdr_col(b)}"
+            f"ci95=[{b['ci95'][0]:+.3f},{b['ci95'][1]:+.3f}] 1R={b['median_1r_pct']:.2f}% "
+            f"cost={b.get('cost_r', 0):.2f}R netR={b['net_r']:+.3f} => {b['verdict']}"
+        )
+    # On-chain and AI evidence. Each block is printed only once a bucket with a
+    # real label exists, so a deployment with the collectors off does not carry
+    # three lines of NO_DATA forever, and one with the AI switched off does not
+    # carry a NO_AI row that answers nothing.
+    for label, sentinel, buckets in (
+        ("whale", "NO_DATA", diag.get("by_whale_stance") or {}),
+        ("onchain", "NO_DATA", diag.get("by_onchain_bias") or {}),
+        ("ai", "NO_AI", diag.get("by_ai_verdict") or {}),
+    ):
+        real = {k: v for k, v in buckets.items() if k != sentinel}
+        if not real:
+            continue
+        for name, b in buckets.items():
+            lines.append(
+                # Width fits the longest label the buckets can produce
+                # ("onchain:SUPPORTS_SHORT"), so the columns stay aligned.
+                f"{label + ':' + name:<22} n={b['n']} graded={b['graded']} "
+                f"wr={b['win_rate']:.1f} meanR={b['mean_r']:+.3f} t={b['t']:+.2f} "
+                f"{_fdr_col(b)}=> {b['verdict']}"
+            )
+
+    # The contrast the AI rows exist to support. Printed on its own line rather
+    # than left as a subtraction for the reader, because the two means it draws
+    # from carry standard errors that do not appear on either row and the gap
+    # is far noisier than either mean.
+    gap = diag.get("ai_edge")
+    if gap:
+        lines.append(
+            f"{'ai:CONFIRM-REJECT':<22} gap={gap['gap_r']:+.3f}R "
+            f"se={gap['se_r']:.3f} t={gap['t']:+.2f} df={gap['df']} "
+            f"{_fdr_col(gap)}(n={gap['n_a']}v{gap['n_b']} "
+            f"eff={gap['eff_n']} nom_t={gap['t_nominal']:+.2f})"
+        )
+
+    # Cross-tab, printed only when a whale stance actually varies within a
+    # strategy — that is the only case where it can separate a whale effect
+    # from the strategy mix, and the only case worth the extra lines.
+    cross = diag.get("whale_by_strategy") or {}
+    informative = {
+        name: cells for name, cells in cross.items()
+        if len([k for k in cells if k != "NO_DATA"]) >= 2
+    }
+    for name, cells in informative.items():
+        lines.append(
+            f"wxs:{name:<18} " + "  ".join(
+                f"{stance}(n={c['n']},wr={c['win_rate']:.0f},R={c['mean_r']:+.2f})"
+                for stance, c in sorted(cells.items())
+            )
+        )
+
+    if diag.get("state_dir"):
+        mark = "ok" if diag.get("state_persistent") else "EPHEMERAL"
+        mount = diag.get("volume_mount") or "none detected"
+        lines.append(f"state    {diag['state_dir']} [{mark}] volume_mount={mount}")
+    lad = diag.get("ladder") or {}
+    if lad.get("avg_win_r") or lad.get("avg_loss_r"):
+        fill = lad.get("rung_fill_rate") or {}
+        lines.append(
+            f"ladder   avgWin={lad['avg_win_r']:+.2f}R avgLoss=-{lad['avg_loss_r']:.2f}R "
+            f"=> needs WR>{lad['breakeven_win_rate']:.1f}%  "
+            + " ".join(f"{k}={v:.0f}%" for k, v in fill.items())
+        )
+    if diag["status_counts"]:
+        lines.append(
+            "status   " + " ".join(f"{k}={v}" for k, v in sorted(diag["status_counts"].items()))
+        )
+    conc = diag["concurrency"]
+    lines.append(
+        f"concur   mean_open={conc['mean_open']} max_open={conc['max_open']} "
+        f"eff_n_floor={conc['eff_n_floor']}"
+    )
+    if diag["ai_verdicts"]:
+        lines.append(
+            "ai       " + " ".join(f"{k}={v}" for k, v in sorted(diag["ai_verdicts"].items()))
+        )
+        # Printed whenever anything abstained, at any rate. An abstention is a
+        # failure of the layer, never an opinion it held, so the count is only
+        # half a sentence: it says how often the AI failed and not once what
+        # went wrong. Two of the three faults are fixed outside this codebase.
+        reasons = diag.get("ai_abstain_reasons") or {}
+        if reasons:
+            rate = diag.get("ai_failure_rate", 0.0)
+            lines.append(f"         abstained on {rate:.0%} of the signals it ran on:")
+            for reason, count in list(reasons.items())[:3]:
+                lines.append(f"           x{count} {reason}")
+    if diag["flags"]:
+        lines.append("flags    " + " ".join(diag["flags"]))
+    n_family = sum(
+        len(diag.get(k) or {})
+        for k in ("by_strategy", "by_whale_stance", "by_onchain_bias", "by_ai_verdict")
+    ) + (1 if diag.get("ai_edge") else 0)
+    if n_family:
+        lines.append(
+            f"fdr      padj = p across all {n_family} buckets at FDR "
+            f"{DEFAULT_FDR:.2f} (* = survives); overall is not in the family"
+        )
+    return "\n".join(lines)
