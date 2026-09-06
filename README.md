@@ -301,6 +301,39 @@ A **negative** residual is not a smaller allowance, it is a deficit: fees and
 spread alone have overrun the constant, so `netR` is understating the cost
 outright. That case is worded as such rather than as slippage.
 
+### One card, one standard
+
+Every `se`, `t` and `ci95` on the digest is charged for overlap. Nine positions
+running through the same BTC move are not nine observations — they are one move
+recorded nine times, and a standard error computed on the nominal count says
+otherwise. The error is scaled by `sqrt(mean_open)` and the degrees of freedom
+divided by it, which is the same worst case `eff_n_floor` reports.
+
+This closes a real inconsistency rather than adding conservatism for its own
+sake: `eff_n_floor` sat two lines below the verdict saying the sample was a
+fraction of its nominal size, while every `t` above it was quoted as though the
+nominal count were the evidence. On a live card that was `t=+1.46` where the
+honest figure was `+0.63`. The undiscounted value prints as `nom` so the size of
+the discount is visible, and `win_rate_z` is charged too — leaving one statistic
+on the old standard would rebuild the whole problem.
+
+The degrees of freedom follow the effective count, so the p-values the FDR family
+is built from carry the same discount as the `t` beside them. They are not
+floored at 1: a bucket whose effective sample is a single observation has
+measured nothing, and `t_to_p` returning 1.0 is how that gets said.
+
+### When a collector goes quiet
+
+The on-chain blocks print only when a real label exists — but when none does,
+the card now names the reason instead of rendering nothing. Silence reads as
+"measured, nothing to report", which is the one thing it does not mean, and it
+is exactly how the `onchain:` rows disappeared off a live card with no way to
+tell a dead collector from one that simply found nothing to label.
+
+Three states, three different remedies, none of them a code change: absent means
+the collector never wrote, stale means it stopped, and a fresh snapshot covering
+symbols the bot does not trade means the two universes have drifted apart.
+
 ### Is the AI's verdict worth anything?
 
 The debate layer runs in monitor mode: it annotates a signal and never blocks

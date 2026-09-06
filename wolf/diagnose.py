@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 from wolf.config import LadderSettings, state_is_persistent, volume_mount
+from wolf.market import age_minutes
 from wolf.models import Signal, Status
 from wolf.stats import DEFAULT_FDR, benjamini_hochberg, mean_gap, t_to_p
 from wolf.tracker import Tracker, _parse_iso, _risk_pct, r_multiple_of
@@ -186,7 +187,8 @@ def _ladder_economics(traded: list) -> dict:
     }
 
 
-def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0) -> dict:
+def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0,
+               overlap: float = 1.0) -> dict:
     """Mean, spread and verdict for one population of R-multiples.
 
     ``sd_floor`` guards against a spread that collapsed rather than one that is
@@ -201,19 +203,37 @@ def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0) -> dict:
     Neither sample knows anything about variance. Substituting the spread of
     the whole traded sample says so honestly: these outcomes vary about as much
     as every other bucket's, and this one is simply too small to have shown it.
+
+    ``overlap`` is the mean number of positions open at once. Nine positions
+    running through the same BTC move are not nine observations of anything —
+    they are one move recorded nine times, and a standard error computed on the
+    nominal count says otherwise. The error is scaled by ``sqrt(overlap)`` and
+    the degrees of freedom divided by it, which is the same worst case
+    ``eff_n_floor`` has been reporting two lines below all along while every t
+    on the card was quoted without it. One card, two standards, and the reader
+    left to reconcile them on exactly the rows they would act on.
+
+    The undiscounted figures travel as ``t_nominal`` and ``se_nominal`` so the
+    size of the discount is visible rather than taken on trust.
     """
     n = len(rs)
     if n == 0:
         return {
-            "n": 0, "mean_r": 0.0, "sd_r": 0.0, "se_r": 0.0, "t": 0.0,
+            "n": 0, "eff_n": 0, "mean_r": 0.0, "sd_r": 0.0, "se_r": 0.0, "t": 0.0,
+            "se_nominal": 0.0, "t_nominal": 0.0, "df": 0,
             "ci95": [0.0, 0.0], "net_r": 0.0, "verdict": INCONCLUSIVE,
         }
     mean = statistics.fmean(rs)
     sd = statistics.stdev(rs) if n > 1 else 0.0
     # Only a collapsed spread is replaced; a merely narrow one is left alone.
     eff_sd = max(sd, sd_floor) if sd < sd_floor * DEGENERATE_SD_FRACTION else sd
-    se = eff_sd / math.sqrt(n) if eff_sd else 0.0
+    se_nominal = eff_sd / math.sqrt(n) if eff_sd else 0.0
+    # Below 1 there is no overlap to charge for, and a fractional divisor would
+    # invent precision rather than remove it.
+    m = max(1.0, overlap)
+    se = se_nominal * math.sqrt(m)
     t = mean / se if se else 0.0
+    eff_n = max(1, int(n / m))
     half = CI_Z * se
     net = mean - cost_r
 
@@ -229,10 +249,20 @@ def _summarise(rs: list[float], cost_r: float, sd_floor: float = 0.0) -> dict:
 
     return {
         "n": n,
+        "eff_n": eff_n,
         "mean_r": round(mean, 3),
         "sd_r": round(sd, 3),
         "se_r": round(se, 3),
         "t": round(t, 2),
+        # Degrees of freedom follow the effective count, so the p-value the FDR
+        # family is built from is charged the same discount as the t it reads.
+        # Not floored at 1: a bucket whose effective sample is a single
+        # observation has measured nothing, and t_to_p returning 1.0 for df=0
+        # is how that gets said. Flooring it would let one trade — or a dozen
+        # trades that were all the same market move — claim a finding.
+        "df": eff_n - 1,
+        "se_nominal": round(se_nominal, 3),
+        "t_nominal": round(mean / se_nominal, 2) if se_nominal else 0.0,
         "ci95": [round(mean - half, 3), round(mean + half, 3)],
         "net_r": round(net, 3),
         "verdict": verdict,
@@ -283,6 +313,48 @@ def _spread_status(tracker) -> str:
     status = str(row.get("status") or "")
     at = str(row.get("at") or "")
     return f"{status} @ {at}" if status and at else status
+
+
+#: The store keys the on-chain collectors write, and the bucket prefix each one
+#: feeds. A block that renders as nothing has to be able to say which.
+_COLLECTOR_KEYS = {
+    "whale": "whale_hyperliquid",
+    "onchain": "onchain_valuation",
+}
+
+
+def _collector_status(tracker, key: str) -> str:
+    """Why a collector's dimension is empty: never ran, went stale, or covered nothing.
+
+    The spread collector already reports itself, and the difference it made was
+    immediate — an uncovered window stopped reading as "no effect found" and
+    started reading as "not measured yet". The on-chain dimensions had no such
+    line, so when their buckets vanished from the card the reader was left with
+    silence, which is indistinguishable from a collector that ran and found
+    nothing worth labelling.
+
+    Three states, three different things to do, and none of them is code:
+    absent means the collector never wrote, stale means it stopped writing, and
+    a fresh snapshot covering symbols the bot does not trade means the universes
+    have drifted apart.
+    """
+    try:
+        doc = tracker._store.read(key, default=None)
+    except Exception:
+        return "state unreadable"
+    if not isinstance(doc, dict):
+        return "the collector has never written a snapshot"
+    age = age_minutes(doc.get("ts"))
+    symbols = doc.get("symbols")
+    covered = len(symbols) if isinstance(symbols, dict) else 0
+    when = f"{age:.0f}m old" if age is not None else "undated"
+    if age is None:
+        # An undated snapshot is treated as stale everywhere else; say so here
+        # rather than quoting a coverage count nothing will act on.
+        return f"snapshot is undated, so it is never used ({covered} symbols)"
+    if not covered:
+        return f"snapshot {when} but carries no symbols"
+    return f"snapshot {when}, {covered} symbols — none of them traded in this window"
 
 
 def _measured_cost(rows: list, taker_fee_bps: float, round_trip_bps: float) -> dict:
@@ -426,7 +498,14 @@ def diagnose(
 
     median_1r, cost_r = _cost_r(traded)
 
-    overall = _summarise([r_multiple_of(o) for o in traded], cost_r)
+    # Every figure below is charged this. Nine positions running through the
+    # same BTC move are one move recorded nine times, and until now the card
+    # said so on the concurrency line while quoting every t as though the
+    # nominal count were the evidence.
+    conc = concurrency(traded)
+    overlap = conc["mean_open"]
+
+    overall = _summarise([r_multiple_of(o) for o in traded], cost_r, 0.0, overlap)
     # The whole sample's spread is the reference every bucket is measured
     # against, so a bucket whose own spread collapsed borrows this one.
     sample_sd = overall["sd_r"]
@@ -436,7 +515,9 @@ def diagnose(
         rows = [o for o in traded if o.strategy == name]
         graded_rows = [o for o in rows if Status(o.status).is_graded]
         strat_1r, strat_cost_r = _cost_r(rows)
-        summary = _summarise([r_multiple_of(o) for o in rows], strat_cost_r, sample_sd)
+        summary = _summarise(
+            [r_multiple_of(o) for o in rows], strat_cost_r, sample_sd, overlap
+        )
         summary["cost_r"] = round(strat_cost_r, 3)
 
         wins = sum(1 for o in graded_rows if Status(o.status).is_win)
@@ -453,7 +534,14 @@ def diagnose(
             p = no_edge / 100
             sd = math.sqrt(len(graded_rows) * p * (1 - p))
             if sd > 0:
-                wr_z = round((wins - len(graded_rows) * p) / sd, 2)
+                # Charged for overlap like every other statistic here. A win
+                # rate counted over positions that shared one market move is
+                # no more independent than the R-multiples they produced, and
+                # leaving this one undiscounted would rebuild the very
+                # inconsistency the rest of this change removes.
+                wr_z = round(
+                    (wins - len(graded_rows) * p) / (sd * math.sqrt(max(1.0, overlap))), 2
+                )
 
         summary.update({
             "graded": len(graded_rows),
@@ -476,7 +564,9 @@ def diagnose(
             rows = [o for o in traded if label_of(o) == label]
             graded_rows = [o for o in rows if Status(o.status).is_graded]
             _, bucket_cost_r = _cost_r(rows)
-            summary = _summarise([r_multiple_of(o) for o in rows], bucket_cost_r, sample_sd)
+            summary = _summarise(
+                [r_multiple_of(o) for o in rows], bucket_cost_r, sample_sd, overlap
+            )
             wins = sum(1 for o in graded_rows if Status(o.status).is_win)
             summary.update({
                 "graded": len(graded_rows),
@@ -525,7 +615,6 @@ def diagnose(
     # lines below saying the sample was a third that size — and the reader was
     # left to reconcile them, which on the one row anybody would act on is not
     # a reconciliation anyone performs.
-    overlap = concurrency(traded)["mean_open"]
     ai_edge = mean_gap(
         [r_multiple_of(o) for o in traded if o.ai_verdict == "CONFIRM"],
         [r_multiple_of(o) for o in traded if o.ai_verdict == "REJECT"],
@@ -680,11 +769,15 @@ def diagnose(
         "by_onchain_bias": by_onchain_bias,
         "by_ai_verdict": by_ai_verdict,
         "ai_edge": ai_edge,
+        "collector_status": {
+            label: _collector_status(tracker, key)
+            for label, key in _COLLECTOR_KEYS.items()
+        },
         "status_counts": status_counts,
         "ai_verdicts": ai_verdicts,
         "ai_abstain_reasons": abstain_reasons,
         "ai_failure_rate": round(ai_failure_rate, 3),
-        "concurrency": concurrency(traded),
+        "concurrency": conc,
         "flags": flags,
         "state_dir": state_dir,
         "state_persistent": state_is_persistent(state_dir) if state_dir else None,
@@ -803,8 +896,10 @@ def render_digest(diag: dict) -> str:
         f"cost     {c['round_trip_bps']:g}bps / 1R={c['median_1r_pct']:.2f}% => {c['cost_r']:.3f}R",
         *_gate_lines(c),
         *_measured_cost_lines(c),
-        f"overall  meanR={o['mean_r']:+.3f} sdR={o['sd_r']:.2f} n={o['n']} se={o['se_r']:.3f} "
-        f"t={o['t']:+.2f} ci95=[{o['ci95'][0]:+.3f},{o['ci95'][1]:+.3f}]",
+        f"overall  meanR={o['mean_r']:+.3f} sdR={o['sd_r']:.2f} n={o['n']} "
+        f"eff={o.get('eff_n', o['n'])} se={o['se_r']:.3f} t={o['t']:+.2f} "
+        f"(nom {o.get('t_nominal', o['t']):+.2f}) "
+        f"ci95=[{o['ci95'][0]:+.3f},{o['ci95'][1]:+.3f}]",
         f"         netR={o['net_r']:+.3f}  => {o['verdict']}",
     ]
     for name, b in diag["by_strategy"].items():
@@ -831,6 +926,12 @@ def render_digest(diag: dict) -> str:
     ):
         real = {k: v for k, v in buckets.items() if k != sentinel}
         if not real:
+            # Silence here reads as "measured, nothing to report", which is the
+            # one thing it does not mean. Say which collector is quiet and why,
+            # for the same reason the spread line does.
+            why = (diag.get("collector_status") or {}).get(label)
+            if why and buckets:
+                lines.append(f"{label + ':':<9} no {label} label on any signal — {why}")
             continue
         for name, b in buckets.items():
             lines.append(
@@ -889,7 +990,8 @@ def render_digest(diag: dict) -> str:
     conc = diag["concurrency"]
     lines.append(
         f"concur   mean_open={conc['mean_open']} max_open={conc['max_open']} "
-        f"eff_n_floor={conc['eff_n_floor']}"
+        f"eff_n_floor={conc['eff_n_floor']} — every se, t and ci95 above is "
+        f"charged this"
     )
     if diag["ai_verdicts"]:
         lines.append(

@@ -103,6 +103,14 @@
       "evidence": "/whatif whale 168 (one era, overlap-discounted): drop WITH gap +0.349R, t=+0.89, padj=0.528 at eff_n=28 from n=165 with mean_open=5.83. The all-era undiscounted version read padj=0.002 and was an artefact of both. Direction survives the strategy confound \u2014 the gap reappears in 3 of 3 comparable strategies (SCALP +0.251 n=59v40, MOMENTUM +0.209 n=17v7, PREDUMP +0.906 but only n=2 on one side) \u2014 so it is not a strategy mix relabelled",
       "note": "Direction consistent, magnitude unresolvable. Worth noting what it would buy even taken at face value: netR -0.116 to -0.003, i.e. breakeven, not profit \u2014 and dropping WITH RAISES cost per trade from 0.14R to 0.18R because those trades carry wider stops, eating 26% of the gross gain. Still UNANSWERABLE as posed: the veto drops candidates before record_signal, so the strongly-opposed setups it refuses have no outcomes. Settling it needs the veto in monitor mode, which is a strategy change. This remains the one queued item whose cost grows while it waits.",
       "settled_on": "2026-09-04"
+    },
+    {
+      "id": "sample-target-350",
+      "question": "Is 350 nominal trades enough to settle whether the bot has an edge?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-06",
+      "evidence": "At mean_open 5.34, 350 nominal is 66 independent observations: se 0.145, so it can only resolve an edge of +0.29R or larger. The observed netR is +0.233 \u2014 below its own bar",
+      "note": "The target was set as a count, and what a count buys depends on overlap. Even if today's netR is real and holds, 350 trades still return INCONCLUSIVE. Revised target: ~540 nominal (~100 effective, ~38 days at 14/day) to resolve +0.233R at t=2. If the true edge is half that, ~2,100 trades and five months; at +0.05R it is over two years. Adding symbols does not help \u2014 more signals in the same window raise mean_open proportionally and leave the effective count where it was."
     }
   ]
 }

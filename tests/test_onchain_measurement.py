@@ -112,16 +112,27 @@ def _outcome(status: str, r: float, **annotations) -> Signal:
     )
 
 
+class _StubStore:
+    """Only what the diagnostic reads: collector snapshots by key."""
+
+    def __init__(self, docs: dict) -> None:
+        self._docs = docs
+
+    def read(self, key: str, default=None):
+        return self._docs.get(key, default)
+
+
 class _StubTracker:
-    def __init__(self, outcomes: list[Signal]) -> None:
+    def __init__(self, outcomes: list[Signal], docs: dict | None = None) -> None:
         self._outcomes = outcomes
+        self._store = _StubStore(docs or {})
 
     def outcomes(self) -> list[Signal]:
         return list(self._outcomes)
 
 
-def _diag(outcomes: list[Signal]) -> dict:
-    return diagnose(_StubTracker(outcomes))
+def _diag(outcomes: list[Signal], docs: dict | None = None) -> dict:
+    return diagnose(_StubTracker(outcomes, docs))
 
 
 def test_buckets_split_signals_by_whale_stance():
@@ -176,9 +187,52 @@ def test_digest_prints_onchain_buckets_once_data_exists():
     assert "onchain:SUPPORTS_LONG" in digest
 
 
-def test_digest_stays_quiet_when_no_collector_ran():
-    """A deployment with the collectors off must not carry NO_DATA lines forever."""
+def test_a_quiet_collector_says_so_instead_of_vanishing():
+    """A deployment with the collectors off must not carry NO_DATA rows forever.
+
+    But it must not go silent either. Silence reads as "measured, nothing to
+    report", which is the one thing it does not mean — and it is how the
+    on-chain rows disappeared off a live card with nothing to say whether the
+    collector had died or simply found nothing to label. One line naming the
+    state, the way the spread collector already does.
+    """
     digest = render_digest(_diag([_outcome(Status.TP_HIT.value, 2.0)]))
 
-    assert "whale:" not in digest
-    assert "onchain:" not in digest
+    # No per-bucket rows: a wall of NO_DATA is what the old behaviour avoided.
+    assert "whale:NO_DATA" not in digest
+    assert "onchain:NO_DATA" not in digest
+    # But the reason is named, once, per dimension.
+    assert "no whale label on any signal" in digest
+    assert "no onchain label on any signal" in digest
+    assert "never written a snapshot" in digest
+
+
+def test_a_stale_collector_reads_differently_from_one_that_never_ran():
+    """Three states, three different things to do, none of them a code change.
+
+    Absent means the collector never wrote. Stale means it stopped. A fresh
+    snapshot covering symbols the bot does not trade means the two universes
+    have drifted apart. Collapsing them into one silent card loses the only
+    information that decides which.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=7)).isoformat()
+    fresh = render_digest(_diag(
+        [_outcome(Status.TP_HIT.value, 2.0)],
+        {"onchain_valuation": {"ts": recent, "symbols": {"SOL": {"bias": "SUPPORTS_LONG"}}}},
+    ))
+    assert "7m old, 1 symbols" in fresh
+    assert "none of them traded in this window" in fresh
+
+    undated = render_digest(_diag(
+        [_outcome(Status.TP_HIT.value, 2.0)],
+        {"onchain_valuation": {"symbols": {"SOL": {}}}},
+    ))
+    assert "undated, so it is never used" in undated
+
+    empty = render_digest(_diag(
+        [_outcome(Status.TP_HIT.value, 2.0)],
+        {"onchain_valuation": {"ts": recent, "symbols": {}}},
+    ))
+    assert "carries no symbols" in empty

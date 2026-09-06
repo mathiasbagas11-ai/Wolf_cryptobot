@@ -18,7 +18,12 @@ def _outcome(store_list, *, r: float, status: str, strategy: str = "SCALP",
     """Append a resolved outcome with an exact R-multiple and risk distance."""
     entry = 100.0
     sl = entry * (1 - risk_pct / 100)
-    start = datetime.now(timezone.utc) - timedelta(hours=6)
+    # Staggered by ``n``, so trades overlap the way live ones do rather than
+    # all opening and closing on the same instant. Identical timestamps make
+    # mean_open equal the trade count, which collapses the effective sample to
+    # a single observation — a true reading of a fixture the bot cannot
+    # produce, and one that would have every statistic here measure nothing.
+    start = datetime.now(timezone.utc) - timedelta(hours=6) + timedelta(minutes=20 * n)
     store_list.append(Signal(
         symbol=f"{symbol}{n}", signal_type="SCREENER", direction="LONG",
         entry_price=entry, tp=entry * 1.05, sl=sl, strategy=strategy,
@@ -132,7 +137,15 @@ def test_concurrency_floors_the_effective_sample(store, fake_client, tracker_set
     """Overlapping positions are not independent observations."""
     rows = []
     for i in range(20):
-        _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=i)  # all share one window
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=i)
+    # Collapse the staggered fixture back onto one window: twenty positions
+    # running through the same move is the case this floor exists to price.
+    start = datetime.now(timezone.utc) - timedelta(hours=6)
+    for row in rows:
+        row["activated_at"] = start.isoformat()
+        row["exit_time"] = (start + timedelta(hours=1)).isoformat()
+        row["resolved_at"] = row["exit_time"]
+
     diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
     assert diag["concurrency"]["max_open"] == 20
     assert diag["concurrency"]["eff_n_floor"] < 20
@@ -368,7 +381,10 @@ def test_a_unanimous_bucket_is_not_reported_as_no_evidence(store, fake_client, t
 
     swing = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))["by_strategy"]["SWING"]
     assert swing["sd_r"] == 0.0               # its own spread really is zero
-    assert swing["t"] < -1.0                  # but the verdict is not "nothing"
+    assert swing["t"] < -0.5                  # but the verdict is not "nothing"
+    # The borrowed spread is what makes a t exist at all here; the overlap
+    # discount then shrinks it, and both are working as intended.
+    assert swing["t_nominal"] < swing["t"] < 0.0
 
 
 def test_near_identical_outcomes_do_not_manufacture_certainty(store, fake_client, tracker_settings):
@@ -477,11 +493,17 @@ def test_a_wider_family_makes_the_same_bucket_harder_to_believe(
     alone_p, alone_t, alone_raw = _scalp_padj(0)
     crowded_p, crowded_t, crowded_raw = _scalp_padj(5)
 
-    # The same trades, so the same statistic and the same uncorrected p.
-    assert alone_t == crowded_t
-    assert alone_raw == crowded_raw
-    # But a weaker claim once it is one of several splits that were looked at.
+    # The SCALP trades are identical, but its t is not quite: the noise buckets
+    # are real positions running alongside them, so the book's overlap rises
+    # and every bucket's evidence is genuinely thinner. That is the discount
+    # doing its job, and it is small.
+    assert abs(crowded_t - alone_t) < 0.15
+
+    # The finding is the other effect, and it is much the larger one: the same
+    # bucket is a weaker claim once it is one of several splits a reader
+    # scanned. Multiplicity, not overlap, is what moves this.
     assert crowded_p > alone_p
+    assert (crowded_p - alone_p) > abs(crowded_raw - alone_raw)
 
 
 def test_a_bucket_with_no_degrees_of_freedom_claims_nothing(
@@ -857,3 +879,87 @@ def test_the_digest_prints_the_verdict_rows_and_the_gap(
     assert "ai:REJECT" in digest
     assert "ai:CONFIRM-REJECT" in digest
     assert "gap=" in digest and "df=" in digest
+
+
+# ── one card, one standard ──────────────────────────────────────────────────
+
+
+def _same_window(rows) -> list:
+    """Put every trade in one window, so mean_open equals the trade count."""
+    start = datetime.now(timezone.utc) - timedelta(hours=6)
+    for row in rows:
+        row["activated_at"] = start.isoformat()
+        row["exit_time"] = (start + timedelta(hours=1)).isoformat()
+        row["resolved_at"] = row["exit_time"]
+    return rows
+
+
+def test_every_row_is_charged_the_overlap_the_card_reports(
+    store, fake_client, tracker_settings
+):
+    """The inconsistency this removes.
+
+    eff_n_floor sat two lines below saying the sample was a fraction of its
+    nominal size, while every t above it was quoted as though the nominal count
+    were the evidence. One card, two standards, and the reader left to
+    reconcile them on exactly the rows they would act on.
+    """
+    rows = []
+    for i in range(24):
+        _outcome(rows, r=1.5 if i % 3 else -1.0, n=i,
+                 status=Status.TP_HIT.value if i % 3 else Status.SL_HIT.value)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, _same_window(rows)))
+
+    o = diag["overall"]
+    assert o["eff_n"] < o["n"]                       # the sample is smaller than it looks
+    assert abs(o["t"]) < abs(o["t_nominal"])         # and the t says so
+    assert o["se_r"] > o["se_nominal"]
+    # The strategy rows are charged the same, not left on the old standard.
+    scalp = diag["by_strategy"]["SCALP"]
+    assert abs(scalp["t"]) < abs(scalp["t_nominal"])
+
+
+def test_a_win_rate_z_is_charged_too(store, fake_client, tracker_settings):
+    """Leaving one statistic undiscounted rebuilds the inconsistency.
+
+    A win rate counted over positions that shared one market move is no more
+    independent than the R-multiples those positions produced.
+    """
+    def _z(same_window):
+        rows = []
+        for i in range(24):
+            _outcome(rows, r=1.5 if i % 3 else -1.0, n=i,
+                     status=Status.TP_HIT.value if i % 3 else Status.SL_HIT.value)
+        if same_window:
+            _same_window(rows)
+        return diagnose(
+            _tracker_with(store, fake_client, tracker_settings, rows)
+        )["by_strategy"]["SCALP"]["win_rate_z"]
+
+    assert abs(_z(True)) < abs(_z(False))     # same wins, more overlap, weaker claim
+
+
+def test_the_effective_sample_reaches_the_correction_too(
+    store, fake_client, tracker_settings
+):
+    """A discounted t read against undiscounted degrees of freedom is half a fix."""
+    rows = []
+    for i in range(24):
+        _outcome(rows, r=1.5 if i % 3 else -1.0, n=i,
+                 status=Status.TP_HIT.value if i % 3 else Status.SL_HIT.value)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, _same_window(rows)))
+    scalp = diag["by_strategy"]["SCALP"]
+    assert scalp["df"] == scalp["eff_n"] - 1
+
+
+def test_the_card_says_the_discount_was_applied(store, fake_client, tracker_settings):
+    """A number quietly changed is a number nobody can check."""
+    rows = []
+    for i in range(24):
+        _outcome(rows, r=1.5 if i % 3 else -1.0, n=i,
+                 status=Status.TP_HIT.value if i % 3 else Status.SL_HIT.value)
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "charged this" in digest
+    assert "eff=" in digest and "(nom " in digest
