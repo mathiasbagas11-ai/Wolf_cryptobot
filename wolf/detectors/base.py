@@ -64,6 +64,10 @@ class SignalCandidate:
     # regime or comes from an underperforming strategy. Kept for win-rate study.
     against_regime: bool = False
     weak_strategy: bool = False
+    # What the learning engine would have done to this candidate: BENCH, BOOST,
+    # PENALTY or "" for nothing. In monitor mode it is recorded and not applied,
+    # so a benched symbol keeps producing outcomes and the bench can be checked.
+    learning_action: str = ""
     # Composite-regime bounce guard: flagged when a SHORT faces bounce/squeeze
     # risk. ``risk_scale`` shrinks the position size (1.0 = full). In monitor
     # mode the flag is set but risk_scale stays 1.0 (observation only).

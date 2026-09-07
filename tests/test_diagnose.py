@@ -14,7 +14,7 @@ from wolf.tracker import OUTCOMES_KEY, Tracker
 
 def _outcome(store_list, *, r: float, status: str, strategy: str = "SCALP",
              risk_pct: float = 1.0, symbol: str = "BTCUSDT", n: int = 0,
-             ai_verdict: str = "") -> None:
+             ai_verdict: str = "", learning_action: str = "") -> None:
     """Append a resolved outcome with an exact R-multiple and risk distance."""
     entry = 100.0
     sl = entry * (1 - risk_pct / 100)
@@ -30,6 +30,7 @@ def _outcome(store_list, *, r: float, status: str, strategy: str = "SCALP",
         tp_ladder=[{"level": 1, "price": entry * 1.01}, {"level": 2, "price": entry * 1.02}],
         status=status, pnl_pct=r * risk_pct, r_multiple=r,
         ai_verdict=ai_verdict,
+        learning_action=learning_action,
         activated_at=start.isoformat(),
         exit_time=(start + timedelta(hours=1)).isoformat(),
         resolved_at=(start + timedelta(hours=1)).isoformat(),
@@ -963,3 +964,52 @@ def test_the_card_says_the_discount_was_applied(store, fake_client, tracker_sett
     )
     assert "charged this" in digest
     assert "eff=" in digest and "(nom " in digest
+
+
+# ── was the bench going to be right? ────────────────────────────────────────
+
+
+def test_the_bench_the_engine_wanted_is_scored_against_what_happened(
+    store, fake_client, tracker_settings
+):
+    """The whole return on moving learning to monitor mode.
+
+    A bench that fires can never be checked: the symbol it silences stops
+    producing the outcomes that would settle whether the bench was right. Held
+    back and recorded, the judgment becomes a bucket like any other.
+    """
+    rows = []
+    for i in range(12):                       # what learning wanted to suppress
+        _outcome(rows, r=-1.0, status=Status.SL_HIT.value, n=i,
+                 learning_action="BENCH")
+    for i in range(12, 24):                   # what it was happy to leave alone
+        _outcome(rows, r=1.5 if i % 3 else -1.0, n=i,
+                 status=Status.TP_HIT.value if i % 3 else Status.SL_HIT.value)
+
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    buckets = diag["by_learning_action"]
+
+    assert buckets["BENCH"]["n"] == 12
+    assert buckets["NONE"]["n"] == 12
+    # It joins the same family, so it is corrected like every other row.
+    assert "p_adj" in buckets["BENCH"]
+    assert "learn:BENCH" in render_digest(diag)
+
+
+def test_an_engine_with_nothing_to_say_prints_no_learning_rows(
+    store, fake_client, tracker_settings
+):
+    """An all-NONE column is a finding, not an outage.
+
+    So it prints nothing rather than borrowing the collector line — there is no
+    snapshot behind this dimension and naming a fault would invent one.
+    """
+    rows = []
+    for i in range(12):
+        _outcome(rows, r=1.5 if i % 3 else -1.0, n=i,
+                 status=Status.TP_HIT.value if i % 3 else Status.SL_HIT.value)
+    digest = render_digest(
+        diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    )
+    assert "learn:" not in digest
+    assert "no learn label" not in digest      # never a collector diagnosis

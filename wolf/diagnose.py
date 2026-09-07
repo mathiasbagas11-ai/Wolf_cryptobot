@@ -322,6 +322,12 @@ _COLLECTOR_KEYS = {
     "onchain": "onchain_valuation",
 }
 
+#: Blocks whose emptiness is not a collector fault. "learn" carries no snapshot
+#: — an all-NONE column means the engine simply had nothing to say, which is a
+#: finding rather than an outage, and quoting a collector status for it would
+#: name a fault that does not exist.
+_NO_COLLECTOR = ("learn",)
+
 
 def _collector_status(tracker, key: str) -> str:
     """Why a collector's dimension is empty: never ran, went stale, or covered nothing.
@@ -604,6 +610,16 @@ def diagnose(
     # missing verdict as a considered one.
     by_ai_verdict = _buckets_by(lambda o: o.ai_verdict or "NO_AI")
 
+    # What the learning engine wanted to do, scored against what the trades
+    # then did. This is the whole return on moving it to monitor mode: a bench
+    # that fires can never be checked, because the symbol it silences stops
+    # producing the outcomes that would settle it. Recorded instead, the
+    # judgment becomes a bucket like any other, and "should this symbol have
+    # been benched" turns into a question with an answer.
+    by_learning_action = _buckets_by(
+        lambda o: getattr(o, "learning_action", "") or "NONE"
+    )
+
     # Each bucket above is measured against zero, which on a system whose
     # overall mean is negative answers a question nobody asked: every bucket
     # will read negative because every bucket pays the same costs. What decides
@@ -678,7 +694,8 @@ def diagnose(
     # This raises the threshold every other bucket has to clear, which is the
     # point: the reader who scans the strategy rows is now scanning the AI rows
     # too, and the correction has to know that.
-    families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict]
+    families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict,
+                by_learning_action]
     if ai_edge is not None:
         families.append({"ai_edge": ai_edge})
     _apply_fdr(tuple(families))
@@ -768,6 +785,7 @@ def diagnose(
         "whale_by_strategy": whale_by_strategy,
         "by_onchain_bias": by_onchain_bias,
         "by_ai_verdict": by_ai_verdict,
+        "by_learning_action": by_learning_action,
         "ai_edge": ai_edge,
         "collector_status": {
             label: _collector_status(tracker, key)
@@ -923,6 +941,7 @@ def render_digest(diag: dict) -> str:
         ("whale", "NO_DATA", diag.get("by_whale_stance") or {}),
         ("onchain", "NO_DATA", diag.get("by_onchain_bias") or {}),
         ("ai", "NO_AI", diag.get("by_ai_verdict") or {}),
+        ("learn", "NONE", diag.get("by_learning_action") or {}),
     ):
         real = {k: v for k, v in buckets.items() if k != sentinel}
         if not real:
@@ -930,7 +949,7 @@ def render_digest(diag: dict) -> str:
             # one thing it does not mean. Say which collector is quiet and why,
             # for the same reason the spread line does.
             why = (diag.get("collector_status") or {}).get(label)
-            if why and buckets:
+            if why and buckets and label not in _NO_COLLECTOR:
                 lines.append(f"{label + ':':<9} no {label} label on any signal — {why}")
             continue
         for name, b in buckets.items():
@@ -1011,7 +1030,8 @@ def render_digest(diag: dict) -> str:
         lines.append("flags    " + " ".join(diag["flags"]))
     n_family = sum(
         len(diag.get(k) or {})
-        for k in ("by_strategy", "by_whale_stance", "by_onchain_bias", "by_ai_verdict")
+        for k in ("by_strategy", "by_whale_stance", "by_onchain_bias",
+                  "by_ai_verdict", "by_learning_action")
     ) + (1 if diag.get("ai_edge") else 0)
     if n_family:
         lines.append(

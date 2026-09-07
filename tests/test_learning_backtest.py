@@ -238,3 +238,90 @@ def test_the_shipped_depth_is_the_one_the_venues_can_serve():
     s = BacktestSettings()
     assert s.candle_limit == 1000
     assert s.lookback == 300
+
+
+# ── learning records its judgment instead of enforcing it ───────────────────
+
+
+def _benched_engine(store, hard_block: bool):
+    """A learning engine holding one symbol well past the bench threshold."""
+    eng = LearningEngine(store, LearningSettings(
+        min_samples=3, blacklist_min_trades=8, blacklist_max_winrate=25,
+        hard_block=hard_block,
+    ))
+    for i in range(10):
+        eng.observe(_resolved(symbol="ZZZUSDT",
+                              status="TP_HIT" if i < 2 else "SL_HIT",
+                              pnl=6.0 if i < 2 else -4.0))
+    return eng
+
+
+def _judge(store, hard_block):
+    """Run one candidate through the learning gate; return (kept, action)."""
+    from wolf.screener import Screener
+
+    eng = _benched_engine(store, hard_block)
+    screener = Screener.__new__(Screener)
+    screener._learning = eng
+    screener._learning_hard_block = hard_block
+    cand = _AlwaysFires(2.0).evaluate("ZZZUSDT", [])
+    kept = screener._apply_learning(cand)
+    return kept, cand.learning_action, cand.score
+
+
+def test_a_bench_is_recorded_not_enforced(store):
+    """A bench is an absorbing state, and that is why it does not fire.
+
+    The symbol stops emitting signals, so its record never grows, so the bench
+    is permanent and can never be checked against what those trades would have
+    done. It is the AI veto's blind spot under a friendlier name — and it fires
+    on eight trades, where a pure coin flip returns two wins or fewer 14.5% of
+    the time.
+    """
+    kept, action, _ = _judge(store, hard_block=False)
+    assert kept is True                  # the signal still happens
+    assert action == "BENCH"             # and the judgment is on the record
+
+
+def test_hard_mode_still_benches(store):
+    """The old behaviour is reachable, it is just no longer the default."""
+    kept, action, _ = _judge(store, hard_block=True)
+    assert kept is False
+    assert action == "BENCH"
+
+
+def test_monitor_mode_withholds_the_score_delta_too(store):
+    """The delta is not cosmetic, so monitor mode cannot let it through.
+
+    Score decides which detector's candidate wins a symbol, and bounce-risk
+    shorts must clear bounce_min_score — so a swing of up to 15 points changes
+    which signals exist at all. Applying it would keep the strategy drifting
+    under a freeze meant to hold it still.
+    """
+    from wolf.screener import Screener
+
+    eng = LearningEngine(store, LearningSettings(min_samples=3, hard_block=False))
+    for _ in range(6):
+        eng.observe(_resolved(symbol="AAAUSDT", status="TP_HIT", pnl=6.0))
+
+    screener = Screener.__new__(Screener)
+    screener._learning, screener._learning_hard_block = eng, False
+    cand = _AlwaysFires(2.0).evaluate("AAAUSDT", [])
+    before = cand.score
+    assert screener._apply_learning(cand) is True
+    assert cand.score == before                     # untouched
+    assert cand.learning_action in ("BOOST", "PENALTY")
+    assert any("[monitor]" in r for r in cand.reasons)
+
+
+def test_the_shipped_default_is_monitor():
+    """Shipping this as enforce would leave the freeze leaking."""
+    assert LearningSettings().hard_block is False
+
+
+def test_the_switch_is_reachable_from_the_environment(monkeypatch):
+    from wolf.config import Settings
+
+    assert Settings.from_env().learning.hard_block is False
+    monkeypatch.setenv("LEARNING_HARD_BLOCK", "1")
+    assert Settings.from_env().learning.hard_block is True

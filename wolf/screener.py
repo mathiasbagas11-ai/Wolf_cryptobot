@@ -150,6 +150,13 @@ class Screener:
         self._max_cost_r = max_cost_r
         self._max_chase_r = max_chase_r
         self._learning = learning
+        # Read off the engine's own settings rather than taking another
+        # constructor argument, so the two can never be configured apart: the
+        # thing that decides and the thing that applies the decision are one
+        # switch.
+        self._learning_hard_block = bool(
+            getattr(getattr(learning, "_settings", None), "hard_block", False)
+        )
         self._whale_veto_enabled = whale_veto_enabled
         self._whale_veto_min_wallets = whale_veto_min_wallets
 
@@ -355,16 +362,44 @@ class Screener:
             )
 
     def _apply_learning(self, candidate: SignalCandidate) -> bool:
-        """Adjust score from memory; return False if the symbol is blacklisted."""
+        """Record what memory would do; act only in hard mode. True to keep.
+
+        Monitor by default, and for the reason every other veto in this project
+        ended up there. A bench is an absorbing state: the symbol stops emitting
+        signals, so its record never grows, so the bench can never be checked
+        against what those trades would have done. It is the AI veto's blind
+        spot wearing a friendlier name — and it fires on eight trades, where a
+        pure coin flip returns two wins or fewer 14.5% of the time.
+
+        The score delta is withheld too, which the sibling gates do not do. It
+        is not cosmetic here: score decides which detector's candidate wins a
+        symbol, and bounce-risk shorts must clear ``bounce_min_score``, so a
+        swing of up to 15 points changes which signals exist at all. Left on, a
+        strategy the freeze is meant to hold still keeps drifting on samples of
+        five.
+        """
         if self._learning is None:
             return True
         adj = self._learning.adjustment(candidate.symbol, candidate.strategy)
+        hard = self._learning_hard_block
+
         if adj.blacklisted:
-            log.info("Learning skip %s: %s", candidate.symbol, adj.reason)
-            return False
+            candidate.learning_action = "BENCH"
+            if hard:
+                log.info("Learning skip %s: %s", candidate.symbol, adj.reason)
+                return False
+            candidate.reasons.insert(0, f"[monitor] {adj.reason}")
+            log.info("Flagged %s — learning would bench it (monitor): %s",
+                     candidate.symbol, adj.reason)
+            return True
+
         if adj.delta:
-            candidate.score = int(max(0, min(100, candidate.score + adj.delta)))
-            candidate.reasons.insert(0, adj.reason)
+            candidate.learning_action = "BOOST" if adj.delta > 0 else "PENALTY"
+            if hard:
+                candidate.score = int(max(0, min(100, candidate.score + adj.delta)))
+                candidate.reasons.insert(0, adj.reason)
+            else:
+                candidate.reasons.insert(0, f"[monitor] {adj.reason}")
         return True
 
     # ── risk gates ──────────────────────────────────────────────────────────
@@ -796,6 +831,7 @@ class Screener:
                 ai_vetoed=candidate.ai_vetoed,
                 against_regime=candidate.against_regime,
                 weak_strategy=candidate.weak_strategy,
+                learning_action=candidate.learning_action,
                 bounce_flagged=candidate.bounce_flagged,
                 risk_scale=candidate.risk_scale,
                 entry_quoted_live=candidate.entry_quoted_live,

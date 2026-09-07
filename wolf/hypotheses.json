@@ -111,6 +111,14 @@
       "settled_on": "2026-09-06",
       "evidence": "At mean_open 5.34, 350 nominal is 66 independent observations: se 0.145, so it can only resolve an edge of +0.29R or larger. The observed netR is +0.233 \u2014 below its own bar",
       "note": "The target was set as a count, and what a count buys depends on overlap. Even if today's netR is real and holds, 350 trades still return INCONCLUSIVE. Revised target: ~540 nominal (~100 effective, ~38 days at 14/day) to resolve +0.233R at t=2. If the true edge is half that, ~2,100 trades and five months; at +0.05R it is over two years. Adding symbols does not help \u2014 more signals in the same window raise mean_open proportionally and leave the effective count where it was."
+    },
+    {
+      "id": "learning-engine-monitor-mode",
+      "question": "Should the learning engine act on 5-8 trades while the diagnostic says 28 cannot separate anything?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-07",
+      "evidence": "A coin-flip symbol returns <=2 wins from 8 trades 14.5% of the time, so ~1 symbol per 30 is benched per rotation on luck alone. Blacklist thresholds: 8 trades. Score adjustment: 5 trades. Sample needed to resolve the observed edge: ~540",
+      "note": "ERA BOUNDARY \u2014 the third deliberate one, and the reason the others were leaking. Every score delta and every bench was a silent strategy change, so the count toward a stable-strategy sample was counting something that never stopped moving. Now monitor-only: flags recorded to by_learning_action, nothing applied, LEARNING_HARD_BLOCK=1 to restore. The score delta is withheld as well as the bench, because score decides which detector wins a symbol and gates bounce-risk shorts. Third instance of the same self-blinding shape after the AI veto (rejected) and the whale veto (identified) \u2014 this one was an absorbing state, which made it the worst of the three."
     }
   ]
 }

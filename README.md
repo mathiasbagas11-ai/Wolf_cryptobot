@@ -334,6 +334,35 @@ Three states, three different remedies, none of them a code change: absent means
 the collector never wrote, stale means it stopped, and a fresh snapshot covering
 symbols the bot does not trade means the two universes have drifted apart.
 
+### Learning records its judgment instead of enforcing it
+
+`LearningEngine` adjusts a candidate's score after 5 trades and benches a
+symbol after 8 with a win rate under 25%. The diagnostic next door reports that
+28 trades at `mean_open` 5.34 cannot separate anything, and that resolving the
+edge currently showing needs roughly 540. Those two facts cannot both be acted
+on, so `LEARNING_HARD_BLOCK` defaults to false and the engine only records.
+
+The arithmetic: a symbol that is a pure coin flip returns two wins or fewer
+from eight trades **14.5%** of the time, so across a 30-symbol universe about
+one symbol is benched every rotation on luck alone.
+
+And a bench is an **absorbing state**. A benched symbol emits no signals, so
+its record never grows, so the bench is permanent and can never be checked
+against what those trades would have done — the same self-blinding the AI layer
+was kept out of the signal path to avoid, arriving through a gate whose name
+made it sound like the opposite. Held back and recorded, the judgment becomes
+`by_learning_action`, a bucket scored like any other: *was the bench going to
+be right?* now has an answer.
+
+Monitor mode withholds the **score delta** too, which the sibling risk gates do
+not. That is deliberate: score decides which detector's candidate wins a
+symbol, and bounce-risk shorts must clear `bounce_min_score`, so a swing of up
+to 15 points changes which signals exist. Left on, a strategy the freeze is
+meant to hold still keeps drifting on samples of five — and the count toward a
+stable-strategy sample would be counting something that never stopped moving.
+
+`LEARNING_HARD_BLOCK=1` restores the old behaviour.
+
 ### Is the AI's verdict worth anything?
 
 The debate layer runs in monitor mode: it annotates a signal and never blocks

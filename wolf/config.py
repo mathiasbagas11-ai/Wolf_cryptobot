@@ -819,6 +819,26 @@ class LearningSettings:
     max_adjust: float = 15.0         # max +/- score points learning may apply
     blacklist_min_trades: int = 8    # bench a symbol after this many trades...
     blacklist_max_winrate: float = 25.0  # ...if its win-rate is below this %
+    # Whether learning may act, or only record what it would have done.
+    #
+    # Monitor by default, for two reasons. The first is arithmetic: a symbol
+    # that is a pure coin flip has a 14.5% chance of returning two wins or
+    # fewer from eight trades, so across a 30-symbol universe roughly one
+    # symbol is benched every rotation on luck alone — while the diagnostic
+    # next door reports that 28 trades cannot separate anything at all.
+    #
+    # The second is that a bench is an absorbing state. A benched symbol emits
+    # no signals, so its bucket never grows, so the bench is permanent and can
+    # never be checked. That is the same self-blinding the AI layer was kept
+    # out of the signal path to avoid, arriving through a gate whose name made
+    # it sound like the opposite.
+    #
+    # Monitor mode flags without acting — no bench, and no score delta either.
+    # The delta is not cosmetic: score decides which detector's candidate wins
+    # a symbol, and bounce-risk shorts need >= bounce_min_score, so a +/-15
+    # swing changes which signals exist. Leaving it on would keep the strategy
+    # drifting under a freeze meant to hold it still.
+    hard_block: bool = False
 
 
 @dataclass(frozen=True)
@@ -1045,6 +1065,7 @@ class Settings:
             max_adjust=_env_float("LEARNING_MAX_ADJUST", 15.0),
             blacklist_min_trades=_env_int("LEARNING_BLACKLIST_MIN_TRADES", 8),
             blacklist_max_winrate=_env_float("LEARNING_BLACKLIST_MAX_WINRATE", 25.0),
+            hard_block=_env_bool("LEARNING_HARD_BLOCK", False),
         )
         backtest = BacktestSettings(
             lookback=_env_int("BACKTEST_LOOKBACK", 300),

@@ -234,6 +234,11 @@ class Signal:
     # are recorded but don't block, so we can later compare their win-rates.
     against_regime: bool = False
     weak_strategy: bool = False
+    # What the learning engine would have done: BENCH, BOOST, PENALTY, or "".
+    # Recorded rather than applied, so the judgment can be scored against the
+    # outcomes of the very trades it wanted to suppress — which a bench makes
+    # impossible, because a benched symbol never trades again.
+    learning_action: str = ""
     # Composite-regime bounce guard. bounce_flagged: a SHORT emitted into
     # bounce/squeeze risk (recorded even in monitor mode for the what-if study).
     # risk_scale: position-size multiplier actually applied (1.0 = full size).
