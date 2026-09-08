@@ -1071,3 +1071,77 @@ def test_chase_drops_respect_the_diagnostic_window(store, fake_client, tracker_s
     diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows),
                     window_hours=24)
     assert diag["chase"]["n"] == 1
+
+
+# ── Evidence bucket ──────────────────────────────────────────────────────
+#
+# A score hides its own composition. PREDUMP reaches its threshold both from a
+# bearish divergence — the tell its docstring calls the strongest — and from
+# awards that are near-coin-flips in any uptrend. Pooled under one strategy
+# name the two populations answer neither question.
+
+def _predump_outcome(rows, *, r: float, primary: bool, n: int) -> None:
+    parts = {"vwap_premium": 15, "bear_fvg_above": 10,
+             "overbought_at_high": 25, "volume_fading": 15}
+    if primary:
+        parts["bear_divergence"] = 35
+    start = datetime.now(timezone.utc) - timedelta(hours=8) + timedelta(minutes=25 * n)
+    rows.append(Signal(
+        symbol=f"ALT{n}", signal_type="PREDUMP", direction="SHORT",
+        entry_price=100.0, tp=97.0, sl=101.5, strategy="PREDUMP",
+        score=sum(parts.values()), score_parts=parts,
+        tp_ladder=[{"level": 1, "price": 99.0}],
+        status=Status.TP_HIT.value if r > 0 else Status.SL_HIT.value,
+        pnl_pct=r * 1.5, r_multiple=r,
+        activated_at=start.isoformat(),
+        exit_time=(start + timedelta(hours=1)).isoformat(),
+        resolved_at=(start + timedelta(hours=1)).isoformat(),
+    ).to_dict())
+
+
+def test_the_card_splits_a_strategy_by_whether_it_had_primary_evidence(
+    store, fake_client, tracker_settings
+):
+    rows = []
+    for i in range(6):
+        _predump_outcome(rows, r=1.4, primary=True, n=i)
+    for i in range(6, 12):
+        _predump_outcome(rows, r=-1.0, primary=False, n=i)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+
+    ev = diag["by_evidence"]
+    assert set(ev) == {"PRIMARY", "THIN"}
+    assert ev["PRIMARY"]["n"] == 6 and ev["THIN"]["n"] == 6
+    assert ev["PRIMARY"]["mean_r"] > 0 > ev["THIN"]["mean_r"]
+
+    # The pooled strategy row hides exactly this: a 50% win rate made of a
+    # population that always won and one that never did.
+    assert diag["by_strategy"]["PREDUMP"]["win_rate"] == 50.0
+    assert "evidence:PRIMARY" in render_digest(diag)
+
+
+def test_signals_from_before_the_composition_was_recorded_are_not_called_thin(
+    store, fake_client, tracker_settings
+):
+    """An absent record is missing data, not a thin setup. Folding it into THIN
+    would manufacture a finding out of a schema change."""
+    rows = []
+    for i in range(8):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, strategy="PREDUMP", n=i)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert set(diag["by_evidence"]) == {"UNRECORDED"}
+    # A sentinel-only dimension says nothing, so it must not print a row.
+    assert "evidence:" not in render_digest(diag)
+
+
+def test_the_evidence_bucket_enters_the_fdr_family(store, fake_client, tracker_settings):
+    """Every bucket is corrected together — a dimension exempt from BH-FDR
+    would be the one row on the card allowed to look significant for free."""
+    rows = []
+    for i in range(6):
+        _predump_outcome(rows, r=1.4, primary=True, n=i)
+    for i in range(6, 12):
+        _predump_outcome(rows, r=-1.0, primary=False, n=i)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    for cell in diag["by_evidence"].values():
+        assert cell.get("p_adj") is not None

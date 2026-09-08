@@ -73,6 +73,16 @@ class SignalCandidate:
     # mode the flag is set but risk_scale stays 1.0 (observation only).
     bounce_flagged: bool = False
     risk_scale: float = 1.0
+    #: Which scored components actually fired, as ``{name: points}``.
+    #:
+    #: The ``reasons`` list is prose and is truncated to three entries on the
+    #: way into the ledger, so a resolved trade cannot be asked which evidence
+    #: it was built on. That matters because a total says nothing about its
+    #: composition: PREDUMP reaches its threshold both from a bearish
+    #: divergence — the tell its own docstring calls the strongest — and from a
+    #: pile of cheap awards that are simply true in an uptrend. Averaged
+    #: together, its meanR answers neither question.
+    score_parts: dict = field(default_factory=dict)
     #: Per-strategy override for the screener's ``max_chase_r``. A breakout
     #: setup is entered on the bar that resolves it, so the move it is meant to
     #: catch starts *at* the quote and running past it is the setup working, not
@@ -105,6 +115,13 @@ class Detector(ABC):
     #: is what a position held for days actually needs. Timeouts follow from
     #: this too — see TrackerSettings.
     timeframe: str = "15m"
+
+    #: The components of this detector's score that constitute real evidence
+    #: for its thesis, as opposed to context that merely fails to contradict
+    #: it. A signal carrying none of these cleared the threshold on context
+    #: alone; the diagnostic buckets on exactly that distinction, so the names
+    #: here must match the keys the detector writes into ``score_parts``.
+    primary_components: tuple[str, ...] = ()
 
     @abstractmethod
     def evaluate(

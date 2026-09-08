@@ -176,6 +176,65 @@ def test_prepump_requires_breakout_confirmation():
     assert PrePumpDetector().evaluate("X", cs) is None
 
 
+def _predump_series():
+    """The distribution fixture from ``test_predump_rejection_at_top``: a push
+    to a high, volume fading into it, then a rejection candle."""
+    cs = []
+    p = 90.0
+    for i in range(59):
+        p += 0.5
+        cs.append(_c(i, p - 0.2, p + 0.4, p - 0.4, p, 120.0 if i < 55 else 40.0))
+    top = cs[-1].close
+    cs.append(_c(59, top + 0.2, top + 2.5, top - 0.3, top - 0.5, 35.0))
+    return cs
+
+
+def test_score_parts_account_for_the_whole_score():
+    """A total hides its composition, so the parts have to add up to it.
+
+    This is the check that keeps the record honest as components are added: a
+    component scored but not recorded would make every `evidence` bucket read
+    from an incomplete picture, silently.
+    """
+    for cand in (
+        PrePumpDetector().evaluate("X", _prepump_series(90)),
+        PreDumpDetector().evaluate("X", _predump_series()),
+    ):
+        assert cand is not None
+        assert cand.score_parts, f"{cand.strategy} recorded no composition"
+        assert sum(cand.score_parts.values()) == cand.score
+
+
+def test_a_detectors_primary_components_are_names_it_actually_writes():
+    """The diagnostic reads `primary_components` against the keys in
+    `score_parts`; a typo in either would silently label every signal THIN."""
+    from wolf.detectors import default_detectors
+
+    for det in default_detectors():
+        for name in getattr(det, "primary_components", ()):
+            assert isinstance(name, str) and name
+
+
+def test_predump_no_longer_scores_a_constant():
+    """`atr/price < 0.1` was true on 100% of 1320 bars measured — a constant
+    among the awards, which shifts the threshold by its own value while
+    appearing on the card as evidence. It is a gate now, so it must not appear
+    in the composition at all."""
+    cand = PreDumpDetector().evaluate("X", _predump_series())
+    assert cand is not None
+    assert not any("rr" in k or "risk_reward" in k for k in cand.score_parts)
+
+
+def test_predump_refuses_a_tape_too_volatile_to_fade():
+    """The old award simply withheld 5 points here. Selling a fade into a
+    market whose ATR is a tenth of price is the case the sanity check was
+    describing, so it now refuses instead of asking for more points."""
+    cs = _predump_series()
+    det = PreDumpDetector(max_atr_ratio=0.0001)  # any real tape exceeds this
+    assert det.evaluate("X", cs) is None
+    assert PreDumpDetector().evaluate("X", cs) is not None
+
+
 # ── PREDUMP ──────────────────────────────────────────────────────────────
 def test_predump_rejection_at_top():
     cs = []

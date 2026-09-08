@@ -176,6 +176,48 @@ fixed cost against the risk unit, so a *bigger* 1R passes it more easily. Both
 gates are weakest exactly where the trade is worst, which is why the limit needs
 to be argued from recorded drops rather than from a number picked off a chart.
 
+### The evidence bucket — what a score was made of
+
+A total says nothing about its composition, and the components behind one are
+not interchangeable. `PREDUMP` reaches its threshold from a bearish RSI
+divergence — the tell its own module calls the strongest — and equally from a
+stack of awards that are close to coin-flips in any uptrend. Measured across
+1320 bars of randomly-shaped markets:
+
+| Component | Points | Fires on |
+|---|---|---|
+| `atr/price < 0.1` (was an award) | 5 | **100.0%** — a constant, now a hard gate |
+| `vwap_premium` | 15 | 50.3% |
+| `bear_fvg_above` | 10 | 49.5% |
+| `overbought_at_high` | 25 | 35.6% |
+| `volume_fading` | 15 | 32.7% |
+| `bearish_rejection` | 20 | 7.3% |
+| **`bear_divergence`** | 35 | **2.5%** |
+
+So roughly 23 of the 65 points needed can arrive from two near-coin-flips that
+say nothing about distribution, and 27% of the signals in that sweep carried
+neither a divergence nor a rejection candle — a composition that reads as a
+*healthy uptrend* rather than a top.
+
+Whether that costs anything is not yet known, and reweighting the awards on the
+strength of a sweep would be acting on a number no trade has earned. Instead
+every detector records `score_parts` on the signal, and the diagnostic carries
+an `evidence` dimension splitting each strategy in two:
+
+```
+evidence:PRIMARY       n=6 graded=6 wr=100.0 meanR=+1.400 t=+1.87 padj=0.723
+evidence:THIN          n=6 graded=6 wr=0.0   meanR=-1.000 t=-1.33 padj=0.723
+```
+
+`PRIMARY` carried the detector's own `primary_components`; `THIN` cleared the
+threshold on context alone. `UNRECORDED` is a third label for signals written
+before the composition was persisted — missing data, never folded into `THIN`.
+The comparison is paired *inside* a strategy, so the market move largely
+cancels, which is why it can resolve on a fraction of the sample a level
+question needs. It is deliberately two labels and not one per component:
+every bucket enters the same BH-FDR family, so cardinality is paid for by
+every other dimension on the card.
+
 Flagged signals carry `against_regime` / `weak_strategy` on the outcome record,
 and the periodic stats card shows a **Risk-gate monitor** comparing their
 win-rate to the overall — your evidence for whether to flip a gate to hard.

@@ -94,6 +94,10 @@ class PrePumpDetector(Detector):
     timeframe = "1h"
     min_candles = 60
 
+    #: The coil release and the compression that preceded it are what make this
+    #: a pre-pump rather than a breakout. The rest is context.
+    primary_components = ("bollinger_squeeze", "volume_coil")
+
     #: A squeeze breakout is entered on the bar that resolves it, so the entry
     #: is worth chasing further than a mean-reversion setup would be — the
     #: screener's global cap is sized for the latter and dropped these outright.
@@ -212,6 +216,22 @@ class PrePumpDetector(Detector):
 
         score = 0
         reasons: list[str] = []
+        parts: dict[str, int] = {}
+
+        def award(name: str, points: int, reason: str = "") -> None:
+            """Score a component and remember that it is what did the scoring.
+
+            A total says nothing about its composition, and the components here
+            are not interchangeable: this detector's band edges were calibrated
+            on replayed shapes rather than trades, so which of them a signal
+            actually leant on is the first thing the first real trades should be
+            asked about.
+            """
+            nonlocal score
+            score += points
+            parts[name] = parts.get(name, 0) + points
+            if reason:
+                reasons.append(reason)
 
         # 1. Bollinger squeeze — measured on the bars LEADING UP TO the breakout
         #    (excluding the current candle, which naturally widens the bands), so
@@ -219,8 +239,8 @@ class PrePumpDetector(Detector):
         #    Scored rather than gated: see the module docstring on why a
         #    percentile inside a long base cannot carry a hard decision.
         if self._squeezed(bb_widths_seq):
-            score += 30
-            reasons.append("Bollinger squeeze resolving — breakout from consolidation")
+            award("bollinger_squeeze", 30,
+                  "Bollinger squeeze resolving — breakout from consolidation")
         reasons.append(
             f"Coil released: breakout range {last_range / base_range:.1f}x the base"
         )
@@ -238,36 +258,30 @@ class PrePumpDetector(Detector):
             return None
 
         if not math.isnan(vr) and vr >= 1.8:
-            score += 25
-            reasons.append(
-                f"Coil released on the bid: {vr:.1f}x volume, "
-                f"{state.buy_share * 100:.0f}% taker buys"
-                if buyers_lead else f"Volume coil released: {vr:.1f}x average"
-            )
+            award("volume_coil", 25,
+                  f"Coil released on the bid: {vr:.1f}x volume, "
+                  f"{state.buy_share * 100:.0f}% taker buys"
+                  if buyers_lead else f"Volume coil released: {vr:.1f}x average")
         elif not math.isnan(vr) and vr >= 1.3:
-            score += 12
-            reasons.append(f"Volume building: {vr:.1f}x average")
+            award("volume_building", 12, f"Volume building: {vr:.1f}x average")
 
         # 3. Momentum — MACD positive already enforced as hard gate above;
         #    reward when RSI is also in the building zone (50-80). Above 80 the
         #    bar is already vertical and the setup reads as a chase.
         if 50 <= rsi < 80:
-            score += 20
-            reasons.append(f"Momentum building: RSI {rsi:.0f} in accumulation zone, MACD positive")
+            award("momentum_zone", 20,
+                  f"Momentum building: RSI {rsi:.0f} in accumulation zone, MACD positive")
         else:
-            score += 8
-            reasons.append(f"MACD positive, RSI {rsi:.0f}")
+            award("macd_positive", 8, f"MACD positive, RSI {rsi:.0f}")
 
         # 4. Money flow — bullish divergence
         div = struct.rsi_divergence(candles, lookback=25)
         if div.bull_score >= 10:
-            score += 15
-            reasons.append("Bullish RSI divergence — hidden accumulation")
+            award("bull_divergence", 15, "Bullish RSI divergence — hidden accumulation")
 
         # 5. Trend context
         if not math.isnan(ema50_last) and price > ema50_last:
-            score += 10
-            reasons.append("Price above EMA50 — uptrend context")
+            award("trend_context", 10, "Price above EMA50 — uptrend context")
 
         # 6. Value proximity — the breakout has not yet run away from VWAP.
         #    A squeeze resolving *at* fair value is the entry; the same squeeze
@@ -276,30 +290,28 @@ class PrePumpDetector(Detector):
         if not math.isnan(vwap_val) and vwap_val > 0:
             premium = price / vwap_val - 1
             if premium <= self.vwap_premium_max:
-                score += 15
-                reasons.append(
-                    f"Breaking out at value — {premium * 100:+.1f}% vs VWAP {vwap_val:.6g}"
-                )
+                award("value_proximity", 15,
+                      f"Breaking out at value — {premium * 100:+.1f}% vs VWAP {vwap_val:.6g}")
 
         # 7. Bullish FvG below price — structural support under the setup (+10)
         fvgs = ind.find_fvgs(candles, lookback=50)
         bull_fvg = next((g for g in fvgs if g["type"] == "BULL" and g["top"] <= price), None)
         if bull_fvg:
-            score += 10
-            reasons.append(f"Bullish FvG below ({bull_fvg['bottom']:.6g}–{bull_fvg['top']:.6g}) — demand zone support")
+            award("bull_fvg_below", 10,
+                  f"Bullish FvG below ({bull_fvg['bottom']:.6g}–{bull_fvg['top']:.6g}) — demand zone support")
 
         # 8. Derivatives confluence (optional) — negative funding = crowded
         #    shorts ripe for a squeeze; rising OI = fresh positioning.
         if context is not None:
             if context.funding_extreme_squeeze:
-                score += 15
-                reasons.append(f"Funding extreme {context.funding_rate:.3f}% — short squeeze imminent")
+                award("funding_extreme", 15,
+                      f"Funding extreme {context.funding_rate:.3f}% — short squeeze imminent")
             elif context.funding_squeeze:
-                score += 10
-                reasons.append(f"Funding negative {context.funding_rate:.3f}% — short squeeze potential")
+                award("funding_negative", 10,
+                      f"Funding negative {context.funding_rate:.3f}% — short squeeze potential")
             if context.oi_rising:
-                score += 8
-                reasons.append(f"OI rising {context.oi_change_pct:+.1f}% — accumulation")
+                award("oi_rising", 8,
+                      f"OI rising {context.oi_change_pct:+.1f}% — accumulation")
 
         if score < self.score_threshold:
             return None
@@ -325,4 +337,5 @@ class PrePumpDetector(Detector):
             entry_mode="MOMENTUM_NOW",
             tps=ladder,
             max_chase_r=self.max_chase_r,
+            score_parts=parts,
         )

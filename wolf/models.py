@@ -193,6 +193,15 @@ class Signal:
     score: int = 0
     confluence_level: str = ""
     reasons: list[str] = field(default_factory=list)
+    #: Which scored components produced ``score``, as ``{name: points}``.
+    #:
+    #: ``reasons`` is prose and is truncated to three entries below, so a
+    #: resolved trade could not be asked what evidence it was built on. A total
+    #: hides its own composition: a detector can reach the same score from its
+    #: primary tell or from a pile of context that is simply true in a trend,
+    #: and averaging both under one strategy name answers neither question.
+    #: Recorded at signal time, never updated — see the ``evidence`` bucket.
+    score_parts: dict = field(default_factory=dict)
     strategy: str = "CONFIRMED"
     #: Candle interval the setup was read on. Determines how wide the targets
     #: are and how long the trade is meant to be held.

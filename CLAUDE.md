@@ -63,6 +63,15 @@ make money" needs thousands of trades. "Is rule A better than B on these same
 trades" got a decisive answer at n=66, because the market move cancels. Reach
 for `/whatif` before reaching for patience.
 
+**A score hides its own composition, and a constant among the awards hides
+twice.** PREDUMP's `atr/price < 0.1` paid 5 points on 100% of 1320 bars
+measured: not a component but a threshold shift wearing evidence's clothes. It
+is a gate now, and the same sweep says `vwap_premium` lands on 50.3% of bars
+and `bear_fvg_above` on 49.5% against 2.5% for the divergence the docstring
+calls the strongest tell — so a quarter of its signals cleared the bar carrying
+neither primary. **Ask what fraction of bars each award fires on before reading
+any total; anything near 100% is a constant and anything near 50% is a coin.**
+
 **Two numbers under one name is how a component hides.** The cost card quoted
 an assumed round trip (fees + slippage) beside a measured one (fees + spread)
 and called both a round trip. The diag reported `eff_n_floor` on one line and
@@ -110,17 +119,18 @@ currently window on **resolution** time; that is a known, unfixed gap.
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
 
-Three entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
-`universe-volume-ranking-is-lagging` and `chase-gate-self-blinding`.
+Four entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
+`universe-volume-ranking-is-lagging`, `chase-gate-self-blinding` and
+`predump-thin-evidence`.
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-08, HEAD `chase-recorded`
+## Status — 2026-09-08, HEAD `evidence-bucket`
 
-971 tests green. Working tree clean.
+978 tests green. Working tree clean.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -169,6 +179,15 @@ the bottom five cards running (windows overlap heavily, so not five
 observations); `whale:WITH` has flipped sign four times; `learn:BENCH` won and
 `learn:BOOST` lost on n=1 and n=4.
 
+**New on the card: the `evidence` bucket.** Splits every strategy into
+`PRIMARY` (the signal carried its detector's own `primary_components`) and
+`THIN` (it cleared the threshold on context alone), with `UNRECORDED` for rows
+written before the composition was persisted — an absence of data, never folded
+into THIN. Read it the same way as any other bucket: `padj`, and shape across
+rows. It exists because a pooled strategy row can show a 50% win rate made of
+one population that always won and one that never did. This is the cheap way to
+ask about PREDUMP, because the comparison is paired *inside* a strategy.
+
 ## Broken / unfinished
 
 1. **On-chain valuation collector** asks for 15 symbols and returns 2. The card
@@ -186,7 +205,16 @@ observations); `whale:WITH` has flipped sign four times; `learn:BENCH` won and
    had run. Grading them needs one more piece that does not exist yet: a job
    that re-prices a recorded drop against later candles to say what it would
    have returned. Until that exists the record accumulates and settles nothing.
-6. **PREPUMP's band edges are calibrated on synthetic series, not on trades.**
+6. **PREDUMP shorts into strength and nothing stops it.** It is the only
+   directional detector with no market-context gating in effect: exempt from
+   the regime filter (`COUNTER_TREND_TYPES`), the bounce guard that covers it
+   is monitor-only, and its lone live veto reads four hours of tape rather than
+   a trend. Whether this actually costs anything is unmeasured — the claim that
+   PREDUMP performs badly has never been checked against a card, and at eff=3
+   could not be. The `evidence` bucket is the instrument; do not reweight its
+   awards or lift the exemption before it reports, which would repeat the
+   chase-gate mistake of moving a gate with no trade behind it.
+7. **PREPUMP's band edges are calibrated on synthetic series, not on trades.**
    The RSI ceiling (80), the VWAP premium (3%) and the expansion multiple
    (2.5×) were chosen against replayed candle shapes because the detector had
    never emitted a signal to fit them to. Replay is enough to prove a threshold
@@ -203,7 +231,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 971 tests, ~5s
+python -m pytest            # 978 tests, ~5s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

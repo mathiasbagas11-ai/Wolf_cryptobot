@@ -32,6 +32,7 @@ from __future__ import annotations
 import math
 import statistics
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Iterable, Optional
 
 from wolf.config import LadderSettings, state_is_persistent, volume_mount
@@ -296,6 +297,37 @@ def _abstain_reasons(outcomes: list) -> dict[str, int]:
             key = f"{key}: {rest.strip()}"
         reasons[key] = reasons.get(key, 0) + 1
     return dict(sorted(reasons.items(), key=lambda kv: -kv[1]))
+
+
+#: Built from the detectors themselves rather than restated here, so the set
+#: cannot drift from what the detectors actually write into ``score_parts``.
+#: Cached because the label function runs once per outcome per bucket, and
+#: constructing six detectors to read a class attribute is not free.
+@lru_cache(maxsize=1)
+def _primary_components() -> dict[str, frozenset]:
+    from wolf.detectors import default_detectors
+
+    return {
+        d.name: frozenset(getattr(d, "primary_components", ()) or ())
+        for d in default_detectors()
+    }
+
+
+def _evidence_label(outcome) -> str:
+    """PRIMARY when the signal carried its detector's own evidence, else THIN.
+
+    ``UNRECORDED`` is its own label and never folded into either: signals from
+    before the composition was persisted, and detectors that have not declared
+    a primary set, are absences of data rather than thin setups. Calling them
+    THIN would manufacture a finding out of a schema change.
+    """
+    parts = getattr(outcome, "score_parts", None)
+    if not parts:
+        return "UNRECORDED"
+    primaries = _primary_components().get(getattr(outcome, "strategy", ""), frozenset())
+    if not primaries:
+        return "UNRECORDED"
+    return "PRIMARY" if any(parts.get(name) for name in primaries) else "THIN"
 
 
 def _spread_status(tracker) -> str:
@@ -683,6 +715,30 @@ def diagnose(
         lambda o: getattr(o, "learning_action", "") or "NONE"
     )
 
+    # Did the signal carry its detector's own primary evidence, or did it clear
+    # the threshold on context alone?
+    #
+    # A score hides its composition, and the components behind one are not
+    # interchangeable. PREDUMP reaches its threshold from a bearish divergence —
+    # the tell its own docstring calls the strongest — and also from a stack of
+    # awards that are near-coin-flips in any uptrend: measured over 1320 bars,
+    # `vwap_premium` lands on 50.3% of them and `bear_fvg_above` on 49.5%,
+    # against 2.5% for the divergence. Roughly a quarter of the signals in that
+    # sweep carried neither a divergence nor a rejection candle, and read as a
+    # description of a healthy uptrend rather than of distribution.
+    #
+    # Pooled under one strategy name those two populations answer neither
+    # question, and this is the cheap way to separate them: the comparison is
+    # paired inside a strategy, so the market move largely cancels, and the
+    # standing lesson is that paired questions resolve at a fraction of the
+    # sample a level question needs.
+    #
+    # Kept to two labels on purpose. Bucketing on the full component set would
+    # be more informative per row and worse overall — every bucket enters the
+    # same BH-FDR family, so cardinality is paid for by every other dimension
+    # on the card.
+    by_evidence = _buckets_by(_evidence_label)
+
     # Each bucket above is measured against zero, which on a system whose
     # overall mean is negative answers a question nobody asked: every bucket
     # will read negative because every bucket pays the same costs. What decides
@@ -758,7 +814,7 @@ def diagnose(
     # point: the reader who scans the strategy rows is now scanning the AI rows
     # too, and the correction has to know that.
     families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict,
-                by_learning_action]
+                by_learning_action, by_evidence]
     if ai_edge is not None:
         families.append({"ai_edge": ai_edge})
     _apply_fdr(tuple(families))
@@ -850,6 +906,7 @@ def diagnose(
         "by_onchain_bias": by_onchain_bias,
         "by_ai_verdict": by_ai_verdict,
         "by_learning_action": by_learning_action,
+        "by_evidence": by_evidence,
         "ai_edge": ai_edge,
         "collector_status": {
             label: _collector_status(tracker, key)
@@ -1028,6 +1085,7 @@ def render_digest(diag: dict) -> str:
         ("onchain", "NO_DATA", diag.get("by_onchain_bias") or {}),
         ("ai", "NO_AI", diag.get("by_ai_verdict") or {}),
         ("learn", "NONE", diag.get("by_learning_action") or {}),
+        ("evidence", "UNRECORDED", diag.get("by_evidence") or {}),
     ):
         real = {k: v for k, v in buckets.items() if k != sentinel}
         if not real:
@@ -1117,7 +1175,7 @@ def render_digest(diag: dict) -> str:
     n_family = sum(
         len(diag.get(k) or {})
         for k in ("by_strategy", "by_whale_stance", "by_onchain_bias",
-                  "by_ai_verdict", "by_learning_action")
+                  "by_ai_verdict", "by_learning_action", "by_evidence")
     ) + (1 if diag.get("ai_edge") else 0)
     if n_family:
         lines.append(

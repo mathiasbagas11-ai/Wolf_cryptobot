@@ -878,6 +878,10 @@ class Screener:
                 score=candidate.score,
                 confluence_level=candidate.confluence_level,
                 reasons=candidate.reasons,
+                # Which components produced the score, so a resolved trade can
+                # be asked what evidence it was built on rather than only how
+                # much of it there was.
+                score_parts=candidate.score_parts,
                 strategy=candidate.strategy,
                 timeframe=candidate.timeframe,
                 entry_mode=candidate.entry_mode,
