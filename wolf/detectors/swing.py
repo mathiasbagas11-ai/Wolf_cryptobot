@@ -32,6 +32,13 @@ class SwingDetector(Detector):
     timeframe = "4h"
     min_candles = 80
 
+    #: What the hard gates do not already guarantee. Trend alignment, the
+    #: pullback and a rejection candle are all *required* above, so the 30, the
+    #: 20 and at least 5 of the wick award arrive on every signal this detector
+    #: emits — 55 of the 80 needed, constant, before any confluence is read.
+    #: Only the components below actually vary between one signal and the next.
+    primary_components = ("fvg", "order_block", "rejection_volume")
+
     def __init__(
         self, score_threshold: int = 80, ladder: LadderSettings = DEFAULT_LADDER
     ) -> None:
@@ -111,53 +118,57 @@ class SwingDetector(Detector):
 
         score = 0
         reasons: list[str] = []
+        parts: dict[str, int] = {}
 
-        # 1. Trend alignment (EMA slope already confirmed above)
-        score += 30
-        reasons.append(f"{'Up' if is_long else 'Down'}trend: EMA20 {'>' if is_long else '<'} EMA50 (slope confirmed)")
+        def award(name: str, points: int, reason: str = "") -> None:
+            """Score a component and remember that it is what did the scoring."""
+            nonlocal score
+            score += points
+            parts[name] = parts.get(name, 0) + points
+            if reason:
+                reasons.append(reason)
+
+        # 1. Trend alignment (EMA slope already confirmed above). Gated, so this
+        #    is a floor on the score rather than something that distinguishes
+        #    one signal from another.
+        award("trend_alignment", 30,
+              f"{'Up' if is_long else 'Down'}trend: EMA20 {'>' if is_long else '<'} EMA50 (slope confirmed)")
 
         # 2. Pullback to EMA20 (hard gate above; rewards precision)
-        score += 20
-        reasons.append("Pullback to EMA20 — retest zone")
+        award("pullback", 20, "Pullback to EMA20 — retest zone")
 
         # 3. Rejection candle confirmed (mandatory above); reward strong wicks
         if (is_long and lower_wick / rng >= 0.60) or (not is_long and upper_wick / rng >= 0.60):
-            score += 15
-            reasons.append("Strong rejection candle — deep wick demand/supply")
+            award("rejection_deep", 15, "Strong rejection candle — deep wick demand/supply")
         else:
-            score += 5
-            reasons.append("Rejection candle — wick demand/supply")
+            award("rejection_wick", 5, "Rejection candle — wick demand/supply")
 
         # 3. Fair Value Gap at the pullback — highest-quality structural entry
         fvgs = ind.find_fvgs(candles, lookback=60)
         fvg_kind = "BULL" if is_long else "BEAR"
         if ind.price_in_fvg(price, fvgs, fvg_kind):
-            score += 20
-            reasons.append(f"Pullback inside {fvg_kind} FvG — imbalance support")
+            award("fvg", 20, f"Pullback inside {fvg_kind} FvG — imbalance support")
 
         # 3b. Order Block: pullback into institutional demand/supply zone (+20)
         obs = struct.find_order_blocks(candles, lookback=50)
         ob_kind = "BULL" if is_long else "BEAR"
         if struct.price_in_ob(price, obs, ob_kind):
-            score += 20
-            reasons.append(f"Pullback inside {ob_kind} Order Block — institutional zone")
+            award("order_block", 20,
+                  f"Pullback inside {ob_kind} Order Block — institutional zone")
 
         # 4. VWAP as dynamic support/resistance
         vwap_val = ind.vwap(candles, lookback=50)
         if not math.isnan(vwap_val) and abs(price - vwap_val) <= atr:
-            score += 15
-            reasons.append(f"Price near VWAP {vwap_val:.6g} — fair-value anchor")
+            award("vwap_anchor", 15, f"Price near VWAP {vwap_val:.6g} — fair-value anchor")
 
         # 6. Volume on the rejection candle (confirms institutional participation)
         vr = ind.volume_ratio(candles, 20)
         if not math.isnan(vr) and vr >= 1.3:
-            score += 15
-            reasons.append(f"Rejection volume {vr:.1f}x average")
+            award("rejection_volume", 15, f"Rejection volume {vr:.1f}x average")
 
         # 7. RSI compression — already gated 35-65 above; reward the ideal band
         if (is_long and 40 <= rsi <= 55) or (not is_long and 45 <= rsi <= 60):
-            score += 10
-            reasons.append(f"RSI {rsi:.0f} — pullback compression ideal zone")
+            award("rsi_compression", 10, f"RSI {rsi:.0f} — pullback compression ideal zone")
 
         if score < self.score_threshold:
             return None
@@ -192,6 +203,7 @@ class SwingDetector(Detector):
             reasons=reasons,
             confluence_level="HIGH" if score >= 85 else "MEDIUM",
             timeframe=self.timeframe,
+            score_parts=parts,
             entry_mode="RETEST_WAIT",
             tps=ladder,
         )

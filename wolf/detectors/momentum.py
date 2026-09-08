@@ -35,6 +35,12 @@ class MomentumBreakoutDetector(Detector):
     timeframe = "1h"
     min_candles = 60
 
+    #: The breakout itself and the MACD confirmation are gated above, so they
+    #: arrive on every signal — 55 of the threshold before anything varies.
+    #: These are the components that actually distinguish one breakout from
+    #: the next.
+    primary_components = ("volume_surge", "structure_break", "fvg_launch")
+
     #: Deliberately left at the screener's default. A breakout arguably deserves
     #: a wider chase — the move it exists to catch begins at the quote — but
     #: MOMENTUM is most of the current sample, and widening it re-priced those
@@ -136,25 +142,33 @@ class MomentumBreakoutDetector(Detector):
 
         reasons: list[str] = []
         score = 0
-        score += verdict.points
-        if verdict.reason:
+        parts: dict[str, int] = {}
+
+        def award(name: str, points: int, reason: str = "") -> None:
+            """Score a component and remember that it is what did the scoring."""
+            nonlocal score
+            score += points
+            parts[name] = parts.get(name, 0) + points
+            if reason:
+                reasons.append(reason)
+
+        if verdict.points:
+            award("flow_agrees", verdict.points, verdict.reason)
+        elif verdict.reason:
             reasons.append(verdict.reason)
 
         ref_level = recent_high if direction == "LONG" else recent_low
-        score += 35
-        reasons.append(f"{'Break' if direction == 'LONG' else 'Break'}out {'above' if direction == 'LONG' else 'below'} {self.breakout_lookback}-candle level ({ref_level:.6g})")
+        award("breakout", 35,
+              f"{'Break' if direction == 'LONG' else 'Break'}out {'above' if direction == 'LONG' else 'below'} {self.breakout_lookback}-candle level ({ref_level:.6g})")
         reasons.append(f"RSI {rsi:.0f} — momentum confirms")
 
-        score += 20
-        reasons.append("MACD histogram confirms direction")
+        award("macd_confirms", 20, "MACD histogram confirms direction")
 
         # Volume bonus (already passed the 1.8x gate; reward higher expansion)
         if vol_ratio >= 2.5:
-            score += 20
-            reasons.append(f"Volume surge {vol_ratio:.1f}x — breakout conviction")
+            award("volume_surge", 20, f"Volume surge {vol_ratio:.1f}x — breakout conviction")
         else:
-            score += 10
-            reasons.append(f"Volume {vol_ratio:.1f}x average")
+            award("volume_ok", 10, f"Volume {vol_ratio:.1f}x average")
 
         # VWAP context: breakout should be with the fair-value bias (+20)
         # Breakouts against VWAP are not penalised here — the EMA trend gate
@@ -163,18 +177,18 @@ class MomentumBreakoutDetector(Detector):
         vwap_val = ind.vwap(candles, lookback=40)
         if not math.isnan(vwap_val):
             if direction == "LONG" and price > vwap_val:
-                score += 20
-                reasons.append(f"Breaking above VWAP {vwap_val:.6g} — momentum with fair value")
+                award("vwap_aligned", 20,
+                      f"Breaking above VWAP {vwap_val:.6g} — momentum with fair value")
             elif direction == "SHORT" and price < vwap_val:
-                score += 20
-                reasons.append(f"Breaking below VWAP {vwap_val:.6g} — momentum with fair value")
+                award("vwap_aligned", 20,
+                      f"Breaking below VWAP {vwap_val:.6g} — momentum with fair value")
 
         # FvG launch zone: breakout starting from inside an imbalance (+15)
         fvgs = ind.find_fvgs(candles, lookback=40)
         fvg_kind = "BULL" if direction == "LONG" else "BEAR"
         if ind.price_in_fvg(recent_low if direction == "LONG" else recent_high, fvgs, fvg_kind):
-            score += 15
-            reasons.append(f"Breakout launching from {fvg_kind} FvG — imbalance resolved")
+            award("fvg_launch", 15,
+                  f"Breakout launching from {fvg_kind} FvG — imbalance resolved")
 
         # BOS/ChoCh: breakout aligns with a structural break (+15 BOS, +20 ChoCh)
         sb = struct.find_structure_break(candles, lookback=40)
@@ -183,16 +197,16 @@ class MomentumBreakoutDetector(Detector):
             (direction == "SHORT" and sb.direction == "BEARISH")
         )
         if bos_match:
-            bonus = 20 if sb.kind == "CHOCH" else 15
-            score += bonus
-            reasons.append(
-                f"{'ChoCh' if sb.kind == 'CHOCH' else 'BOS'} {sb.direction} "
-                f"— structural break at {sb.broken_level:.6g}"
-            )
+            award("structure_break", 20 if sb.kind == "CHOCH" else 15,
+                  f"{'ChoCh' if sb.kind == 'CHOCH' else 'BOS'} {sb.direction} "
+                  f"— structural break at {sb.broken_level:.6g}")
 
         # Not over-extended
         if (direction == "LONG" and rsi < 75) or (direction == "SHORT" and rsi > 25):
-            score += 5
+            # Scored silently: five points that move the total without
+            # appearing among the reasons, so the card could not be reconciled
+            # with the score printed beside it.
+            award("not_overextended", 5, f"RSI {rsi:.0f} — not over-extended")
 
         if score < self.score_threshold:
             return None
@@ -221,4 +235,5 @@ class MomentumBreakoutDetector(Detector):
             entry_mode="MOMENTUM_NOW",
             tps=tps,
             max_chase_r=self.max_chase_r,
+            score_parts=parts,
         )

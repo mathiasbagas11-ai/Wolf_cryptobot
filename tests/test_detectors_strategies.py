@@ -176,6 +176,30 @@ def test_prepump_requires_breakout_confirmation():
     assert PrePumpDetector().evaluate("X", cs) is None
 
 
+def _scalp_series():
+    """The sweep fixture from ``test_scalp_liquidity_sweep``."""
+    cs = []
+    p = 100.0
+    for i in range(39):
+        p -= 0.4
+        cs.append(_c(i, p + 0.1, p + 0.3, p - 0.3, p, 100.0))
+    prior_low = min(x.low for x in cs[-20:])
+    cs.append(_c(39, p, p + 5, prior_low - 1.5, p + 4, 600.0))
+    return cs
+
+
+def _trap_series():
+    """The trap fixture from ``test_trap_bullish_sweep_high_conviction``."""
+    cs = []
+    p = 110.0
+    for i in range(59):
+        p -= 0.4
+        cs.append(_c(i, p + 0.1, p + 0.3, p - 0.3, p, 100.0))
+    prior_low = min(x.low for x in cs[-20:])
+    cs.append(_c(59, p, p + 1.0, prior_low - 3.0, p + 0.5, 600.0))
+    return cs
+
+
 def _predump_series():
     """The distribution fixture from ``test_predump_rejection_at_top``: a push
     to a high, volume fading into it, then a rejection candle."""
@@ -189,6 +213,46 @@ def _predump_series():
     return cs
 
 
+def test_every_detector_accepts_the_call_the_screener_actually_makes():
+    """The regression that cost TRAP nineteen days.
+
+    TRAP's ``evaluate`` was written before the screener passed a feature cache
+    and never grew the parameter, so every invocation raised TypeError — which
+    the screener catches and logs alongside the other detector faults, then
+    continues. It emitted nothing from 2026-08-20 onward, which is to say
+    through every era the bot has measured.
+
+    Nothing caught it because every test called ``evaluate("X", candles)`` with
+    two arguments, and the fake detectors in the screener tests all had the
+    right signature. Both halves were green while the real pairing was broken.
+    """
+    from wolf.detectors import default_detectors
+    from wolf.indicator_cache import CandleFeatures
+
+    candles = _flat(120)
+    features = CandleFeatures.build(candles)
+    for det in default_detectors():
+        # Exactly how Screener._best_candidate invokes it: four positional args.
+        det.evaluate("BTCUSDT", candles, None, features)
+        det.evaluate("BTCUSDT", candles, None, None)
+
+
+def test_no_detector_crashes_through_the_screener():
+    """The same guarantee one level up, so a signature drift cannot hide behind
+    the screener's own exception handler."""
+    from wolf.detectors import default_detectors
+    from wolf.screener import Screener
+
+    class _Tracker:
+        def stats(self):
+            return {}
+
+    for det in default_detectors():
+        screener = Screener(None, _Tracker(), [det], universe=[], interval=det.timeframe)
+        series = {det.timeframe: _flat(150)}
+        assert screener._best_candidate("BTCUSDT", series, None) is None
+
+
 def test_score_parts_account_for_the_whole_score():
     """A total hides its composition, so the parts have to add up to it.
 
@@ -199,10 +263,22 @@ def test_score_parts_account_for_the_whole_score():
     for cand in (
         PrePumpDetector().evaluate("X", _prepump_series(90)),
         PreDumpDetector().evaluate("X", _predump_series()),
+        ScalpDetector().evaluate("X", _scalp_series()),
+        LiquidityTrapDetector().evaluate("X", _trap_series()),
     ):
         assert cand is not None
         assert cand.score_parts, f"{cand.strategy} recorded no composition"
         assert sum(cand.score_parts.values()) == cand.score
+
+
+def test_every_detector_declares_primary_components():
+    """The `evidence` bucket labels a strategy UNRECORDED when it declares
+    none, which quietly exempts it from the one question the bucket exists to
+    ask."""
+    from wolf.detectors import default_detectors
+
+    for det in default_detectors():
+        assert det.primary_components, f"{det.name} declares no primary components"
 
 
 def test_a_detectors_primary_components_are_names_it_actually_writes():

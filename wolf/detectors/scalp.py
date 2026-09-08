@@ -33,6 +33,16 @@ class ScalpDetector(Detector):
     timeframe = "15m"
     min_candles = 40
 
+    #: The sweep is the setup; who stepped in on the reclaim, and how much
+    #: volume came with it, are what separate a real stop-hunt from the first
+    #: leg of a trend.
+    #:
+    #: ``vwap`` is deliberately not among them. A bullish sweep wicks *below*
+    #: recent lows, which is below fair value almost by construction: measured
+    #: over 5200 bars it lands on 95.0% of the ones that pass the gate, so it
+    #: is closer to a restatement of the sweep than to independent confluence.
+    primary_components = ("volume_spike", "absorption", "rsi_extreme")
+
     def __init__(
         self,
         score_threshold: int = 65,
@@ -72,33 +82,37 @@ class ScalpDetector(Detector):
 
         score = 0
         reasons: list[str] = []
+        parts: dict[str, int] = {}
 
-        # 1. Liquidity sweep (primary trigger)
-        pts = 30 if sweep.recovery >= 70 else 20
-        score += pts
-        reasons.append(f"{sweep.sweep_type} — {sweep.recovery:.0f}% recovery off {sweep.level:.6g}")
+        def award(name: str, points: int, reason: str = "") -> None:
+            """Score a component and remember that it is what did the scoring."""
+            nonlocal score
+            score += points
+            parts[name] = parts.get(name, 0) + points
+            if reason:
+                reasons.append(reason)
+
+        # 1. Liquidity sweep (primary trigger). Guaranteed once past the gate
+        #    above, so it is a floor on the score rather than a discriminator —
+        #    only the 30-vs-20 split carries information.
+        award("sweep", 30 if sweep.recovery >= 70 else 20,
+              f"{sweep.sweep_type} — {sweep.recovery:.0f}% recovery off {sweep.level:.6g}")
 
         # 2. Volume spike on the trigger candle
         if not math.isnan(vr) and vr >= 2.0:
-            score += 25
-            reasons.append(f"Volume spike {vr:.1f}x on sweep")
+            award("volume_spike", 25, f"Volume spike {vr:.1f}x on sweep")
         elif not math.isnan(vr) and vr >= 1.5:
-            score += 12
-            reasons.append(f"Volume {vr:.1f}x average")
+            award("volume_elevated", 12, f"Volume {vr:.1f}x average")
 
         # 3. RSI extreme recovering in the trade direction (tightened: 35/65)
         if is_long and rsi <= 35:
-            score += 25
-            reasons.append(f"RSI deeply oversold: {rsi:.0f}")
+            award("rsi_extreme", 25, f"RSI deeply oversold: {rsi:.0f}")
         elif is_long and rsi <= 40:
-            score += 10
-            reasons.append(f"RSI oversold: {rsi:.0f}")
+            award("rsi_leaning", 10, f"RSI oversold: {rsi:.0f}")
         elif not is_long and rsi >= 65:
-            score += 25
-            reasons.append(f"RSI deeply overbought: {rsi:.0f}")
+            award("rsi_extreme", 25, f"RSI deeply overbought: {rsi:.0f}")
         elif not is_long and rsi >= 60:
-            score += 10
-            reasons.append(f"RSI overbought: {rsi:.0f}")
+            award("rsi_leaning", 10, f"RSI overbought: {rsi:.0f}")
 
         # 4. Absorption on the reclaim: the aggressive side flipped on the
         #    candle that took the level back. A sweep trades hard *against* its
@@ -110,35 +124,29 @@ class ScalpDetector(Detector):
         if not math.isnan(last_bias):
             taking = last_bias if is_long else 1 - last_bias
             if taking >= 0.55:
-                score += 15
-                reasons.append(
-                    f"Absorption on reclaim — {taking * 100:.0f}% taker "
-                    f"{'buys' if is_long else 'sells'}"
-                )
+                award("absorption", 15,
+                      f"Absorption on reclaim — {taking * 100:.0f}% taker "
+                      f"{'buys' if is_long else 'sells'}")
 
         # 5. FvG confluence — sweep reached into an imbalance zone (+15)
         fvgs = ind.find_fvgs(candles, lookback=40)
         fvg_kind = "BULL" if is_long else "BEAR"
         if ind.price_in_fvg(sweep.level, fvgs, fvg_kind):
-            score += 15
-            reasons.append(f"Sweep into {fvg_kind} FvG — imbalance reclaimed")
+            award("fvg", 15, f"Sweep into {fvg_kind} FvG — imbalance reclaimed")
 
         # 6. VWAP: sweep reached below/above fair value (+10)
         vwap_val = ind.vwap(candles, lookback=40)
         if not math.isnan(vwap_val):
             if is_long and sweep.level <= vwap_val:
-                score += 10
-                reasons.append(f"Sweep below VWAP {vwap_val:.6g} — discount entry")
+                award("vwap", 10, f"Sweep below VWAP {vwap_val:.6g} — discount entry")
             elif not is_long and sweep.level >= vwap_val:
-                score += 10
-                reasons.append(f"Sweep above VWAP {vwap_val:.6g} — premium entry")
+                award("vwap", 10, f"Sweep above VWAP {vwap_val:.6g} — premium entry")
 
         # 7. Order Block: sweep targeted a smart-money institutional zone (+10)
         obs = struct.find_order_blocks(candles, lookback=40)
         ob_kind = "BULL" if is_long else "BEAR"
         if struct.price_in_ob(sweep.level, obs, ob_kind):
-            score += 10
-            reasons.append(f"Sweep into {ob_kind} OB — smart-money zone hunted")
+            award("order_block", 10, f"Sweep into {ob_kind} OB — smart-money zone hunted")
 
         if score < self.score_threshold:
             return None
@@ -172,4 +180,5 @@ class ScalpDetector(Detector):
             timeframe=self.timeframe,
             entry_mode="MOMENTUM_NOW",
             tps=ladder,
+            score_parts=parts,
         )

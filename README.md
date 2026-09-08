@@ -176,6 +176,27 @@ fixed cost against the risk unit, so a *bigger* 1R passes it more easily. Both
 gates are weakest exactly where the trade is worst, which is why the limit needs
 to be argued from recorded drops rather than from a number picked off a chart.
 
+### A detector that cannot be called looks like a detector being strict
+
+`TRAP.evaluate` was written taking `(symbol, candles, context)` and never grew
+the `features` parameter the screener started passing on 2026-08-20. Every
+invocation raised `TypeError`, which `Screener._best_candidate` catches
+alongside genuine detector faults and steps over. TRAP emitted nothing for
+nineteen days and sixty-five commits — through every era boundary the project
+records, so it contributed zero signals to every measured era.
+
+Two things kept it hidden. Its own docstring pre-explains the silence
+("deliberately strict — threshold 80, HIGH conviction only"), so zero signals
+read as working as designed. And the tests were green from both sides: every
+TRAP test called `evaluate` with two arguments, while every fake detector in
+the screener tests carried the correct four-argument signature. Both halves
+passed; the pairing was broken.
+
+`test_every_detector_accepts_the_call_the_screener_actually_makes` and
+`test_no_detector_crashes_through_the_screener` close that gap by invoking each
+*real* detector the way production does — the second through the screener
+itself, so a future drift cannot hide behind its exception handler.
+
 ### The evidence bucket — what a score was made of
 
 A total says nothing about its composition, and the components behind one are
@@ -199,10 +220,20 @@ say nothing about distribution, and 27% of the signals in that sweep carried
 neither a divergence nor a rejection candle — a composition that reads as a
 *healthy uptrend* rather than a top.
 
-Whether that costs anything is not yet known, and reweighting the awards on the
-strength of a sweep would be acting on a number no trade has earned. Instead
-every detector records `score_parts` on the signal, and the diagnostic carries
-an `evidence` dimension splitting each strategy in two:
+PREDUMP is not alone in this. Counting only bars that pass each detector's own
+hard gate, SCALP's `sweep` lands on 100% and its `vwap` award on 95.0% (a
+bullish sweep wicks *below* recent lows, which is below fair value almost by
+construction) against `order_block` on 0.3%; TRAP's `rejection_wick` lands on
+86.4% because the gate already demands the reclaim that makes the wick
+dominant. SWING awards 55 of its 80 for conditions it has already gated, and
+MOMENTUM 55 of its 65.
+
+Whether any of that costs anything is not yet known, and reweighting awards on
+the strength of a sweep would be acting on a number no trade has earned. Unlike
+PREDUMP's `atr/price`, none of these is a clean constant either, so none can be
+converted to a gate with provably identical decisions. Instead all six
+detectors record `score_parts` on the signal, and the diagnostic carries an
+`evidence` dimension splitting each strategy in two:
 
 ```
 evidence:PRIMARY       n=6 graded=6 wr=100.0 meanR=+1.400 t=+1.87 padj=0.723

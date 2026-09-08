@@ -89,6 +89,18 @@ produce one, never that the score it achieved cleared the bar it was graded
 against. **When a component gates and scores the same bar, check the two sets
 can intersect.**
 
+**A detector that cannot be called looks exactly like a detector being
+strict.** TRAP's `evaluate` never grew the `features` parameter the screener
+started passing on 2026-08-20, so every call raised TypeError — caught by
+`_best_candidate`'s own handler, logged beside real detector faults, and
+stepped over. Nineteen days, sixty-five commits, zero signals through every
+era the bot has measured. Its docstring pre-explains the silence
+("deliberately strict — threshold 80, HIGH conviction only"), so nothing on
+any card contradicted it. The tests were green from both sides: every TRAP
+test called `evaluate` with two arguments, and every fake detector in the
+screener tests carried the correct four-argument one. **Test the pairing, not
+the halves — invoke the real collaborators the way production invokes them.**
+
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
 unrelated remedies. The provider almost always already said which; the bug was
@@ -107,7 +119,8 @@ a 1h detector six times.
 | ~2026-09-03 | `MAX_COST_R=0.15` gate landed (median 1R 1.14% → 2.2%, cost −46%) |
 | 2026-09-04 | AI `thinking` disabled — verdicts changed character, not just availability |
 | 2026-09-07 | learning moved to monitor mode |
-| **2026-09-08** | PREPUMP made satisfiable, universe mover lane — **current sample starts here** |
+| 2026-08-20 | TRAP silently uncallable (signature drift) — **zero TRAP signals from here until 2026-09-08** |
+| **2026-09-08** | PREPUMP made satisfiable, universe mover lane, TRAP revived — **current sample starts here** |
 
 Eras should be segmented by signal **creation** date. `/diag` and `/whatif`
 currently window on **resolution** time; that is a known, unfixed gap.
@@ -119,18 +132,19 @@ currently window on **resolution** time; that is a known, unfixed gap.
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
 
-Four entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
-`universe-volume-ranking-is-lagging`, `chase-gate-self-blinding` and
-`predump-thin-evidence`.
+Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
+`universe-volume-ranking-is-lagging`, `chase-gate-self-blinding`,
+`predump-thin-evidence`, `trap-detector-dead-19-days` and
+`gated-awards-are-constants`.
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-08, HEAD `evidence-bucket`
+## Status — 2026-09-08, HEAD `trap-revived`
 
-978 tests green. Working tree clean.
+981 tests green. Working tree clean.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -179,6 +193,10 @@ the bottom five cards running (windows overlap heavily, so not five
 observations); `whale:WITH` has flipped sign four times; `learn:BENCH` won and
 `learn:BOOST` lost on n=1 and n=4.
 
+**TRAP is emitting again**, for the first time since 2026-08-20. Expect a small
+handful of signals a day — the sweep audit puts it at ~0.23% of bars. Its
+absence was a crashed signature, not strictness; see Lessons.
+
 **New on the card: the `evidence` bucket.** Splits every strategy into
 `PRIMARY` (the signal carried its detector's own `primary_components`) and
 `THIN` (it cleared the threshold on context alone), with `UNRECORDED` for rows
@@ -205,7 +223,16 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    had run. Grading them needs one more piece that does not exist yet: a job
    that re-prices a recorded drop against later candles to say what it would
    have returned. Until that exists the record accumulates and settles nothing.
-6. **PREDUMP shorts into strength and nothing stops it.** It is the only
+6. **How much of each score is decided before any confluence is read.**
+   Counting only bars past each detector's own gate: SCALP's `sweep` 100% and
+   `vwap` 95.0% against `order_block` 0.3%; TRAP's `sweep` 100% and
+   `rejection_wick` 86.4% — the gate already demands the reclaim that makes the
+   wick dominant — against `divergence` 3.8%; SWING awards 55 of its 80 for
+   things it already gated, MOMENTUM 55 of its 65. Unlike PREDUMP's
+   `atr/price`, none of these is a clean constant, so none can be removed with
+   provably identical decisions. Do not reweight them from the sweep; that is
+   the chase-gate mistake. The `evidence` bucket now covers all six strategies.
+7. **PREDUMP shorts into strength and nothing stops it.** It is the only
    directional detector with no market-context gating in effect: exempt from
    the regime filter (`COUNTER_TREND_TYPES`), the bounce guard that covers it
    is monitor-only, and its lone live veto reads four hours of tape rather than
@@ -214,7 +241,7 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    could not be. The `evidence` bucket is the instrument; do not reweight its
    awards or lift the exemption before it reports, which would repeat the
    chase-gate mistake of moving a gate with no trade behind it.
-7. **PREPUMP's band edges are calibrated on synthetic series, not on trades.**
+8. **PREPUMP's band edges are calibrated on synthetic series, not on trades.**
    The RSI ceiling (80), the VWAP premium (3%) and the expansion multiple
    (2.5×) were chosen against replayed candle shapes because the detector had
    never emitted a signal to fit them to. Replay is enough to prove a threshold
@@ -231,7 +258,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 978 tests, ~5s
+python -m pytest            # 981 tests, ~5s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
