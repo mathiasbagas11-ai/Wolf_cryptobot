@@ -236,3 +236,58 @@ def test_a_stale_collector_reads_differently_from_one_that_never_ran():
         {"onchain_valuation": {"ts": recent, "symbols": {}}},
     ))
     assert "carries no symbols" in empty
+
+
+def test_the_shortfall_is_named_with_its_denominator():
+    """Two symbols means nothing without knowing how many were asked for.
+
+    The collector requests the top of the scan universe and records the count;
+    discarding it here turned a producer-side fault — "it got two of the fifteen
+    it wanted" — into a reader-side note about coverage, which sends anyone
+    chasing it to the wrong half of the system.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=43)).isoformat()
+    digest = render_digest(_diag(
+        [_outcome(Status.TP_HIT.value, 2.0)],
+        {"onchain_valuation": {
+            "ts": recent, "requested": 15, "rate_limited": False,
+            "symbols": {"SOL": {"bias": "SUPPORTS_LONG"}, "AVAX": {"bias": "NEUTRAL"}},
+        }},
+    ))
+    assert "2 of 15 symbols" in digest
+    assert "rate limited" not in digest
+
+
+def test_a_rate_limited_run_says_so_rather_than_looking_like_missing_data():
+    """The collector already knew; only the diagnostic was throwing it away.
+
+    A run cut short by a 429 and a run that simply found nothing are the same
+    two-symbol snapshot, and they are not the same problem.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=43)).isoformat()
+    digest = render_digest(_diag(
+        [_outcome(Status.TP_HIT.value, 2.0)],
+        {"onchain_valuation": {
+            "ts": recent, "requested": 15, "rate_limited": True,
+            "symbols": {"SOL": {"bias": "SUPPORTS_LONG"}},
+        }},
+    ))
+    assert "1 of 15 symbols (rate limited)" in digest
+
+
+def test_an_older_snapshot_without_the_count_still_renders():
+    """Snapshots written before the denominator existed must not break the card."""
+    from datetime import datetime, timedelta, timezone
+
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    digest = render_digest(_diag(
+        [_outcome(Status.TP_HIT.value, 2.0)],
+        {"onchain_valuation": {"ts": recent, "symbols": {"SOL": {}}}},
+    ))
+    # The count renders bare, with no invented denominator.
+    assert "1 symbols" in digest
+    assert "1 of " not in digest

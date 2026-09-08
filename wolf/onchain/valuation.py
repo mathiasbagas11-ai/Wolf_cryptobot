@@ -432,8 +432,13 @@ class ValuationCollector:
         is more useful than none, and every reader staleness-checks the timestamp
         anyway.
         """
+        # Materialised, because the count of what was asked for is part of the
+        # record. A snapshot holding two symbols means something very different
+        # depending on whether two were requested or fifteen were, and without
+        # the denominator a reader downstream can only see the numerator.
+        wanted = list(symbols)
         out: dict[str, dict] = {}
-        for symbol in symbols:
+        for symbol in wanted:
             try:
                 view = self.valuation(symbol)
             except (KeyError, ValueError, TypeError):
@@ -444,12 +449,13 @@ class ValuationCollector:
 
         doc = {
             "symbols": out,
+            "requested": len(wanted),
             "ts": datetime.now(timezone.utc).isoformat(),
             "rate_limited": self.rate_limited,
         }
         self._store.write(STATE_KEY, doc)
-        log.info("Valuation snapshot: %d symbol(s)%s",
-                 len(out), " (rate limited)" if self.rate_limited else "")
+        log.info("Valuation snapshot: %d of %d symbol(s)%s",
+                 len(out), len(wanted), " (rate limited)" if self.rate_limited else "")
         return doc
 
 

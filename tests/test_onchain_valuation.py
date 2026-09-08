@@ -323,3 +323,22 @@ def test_collector_uses_override_map_without_search(store):
 
     assert collector.coin_id("BTCUSDT") == "bitcoin"
     assert not any("/search" in c for c in session.calls)
+
+
+def test_the_snapshot_records_what_it_asked_for(store):
+    """The denominator is part of the record, not something to recompute later."""
+    collector = ValuationCollector(store, session=_StubSession({"/coins/markets": _MARKETS}))
+    doc = collector.collect(["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+
+    assert doc["requested"] == 3
+    assert "rate_limited" in doc
+
+
+def test_a_generator_of_symbols_is_still_counted(store):
+    """collect() takes an Iterable, and a generator is consumed by the loop.
+
+    Counting it afterwards would report zero for every run that used one.
+    """
+    collector = ValuationCollector(store, session=_StubSession({"/coins/markets": _MARKETS}))
+    doc = collector.collect(s for s in ("BTCUSDT", "ETHUSDT"))
+    assert doc["requested"] == 2

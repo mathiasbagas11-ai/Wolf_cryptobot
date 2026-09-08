@@ -358,9 +358,24 @@ def _collector_status(tracker, key: str) -> str:
         # An undated snapshot is treated as stale everywhere else; say so here
         # rather than quoting a coverage count nothing will act on.
         return f"snapshot is undated, so it is never used ({covered} symbols)"
+
+    # The collector already records what it asked for and whether a rate limit
+    # cut the run short. Both were being discarded here, which turned a
+    # producer-side fault — "it only got two of the fifteen it wanted" — into a
+    # reader-side observation about coverage, and sent anyone chasing it to the
+    # wrong half of the system.
+    requested = doc.get("requested")
+    scope = (
+        f"{covered} of {requested} symbols"
+        if isinstance(requested, int) and requested > 0 else f"{covered} symbols"
+    )
+    limited = " (rate limited)" if doc.get("rate_limited") else ""
     if not covered:
-        return f"snapshot {when} but carries no symbols"
-    return f"snapshot {when}, {covered} symbols — none of them traded in this window"
+        return f"snapshot {when} but carries no symbols{limited}"
+    return (
+        f"snapshot {when}, {scope}{limited} — "
+        f"none of them traded in this window"
+    )
 
 
 def _measured_cost(rows: list, taker_fee_bps: float, round_trip_bps: float) -> dict:

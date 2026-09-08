@@ -334,6 +334,14 @@ Three states, three different remedies, none of them a code change: absent means
 the collector never wrote, stale means it stopped, and a fresh snapshot covering
 symbols the bot does not trade means the two universes have drifted apart.
 
+A partial snapshot is reported **with its denominator and its cause**. The
+valuation collector asks for the top `ONCHAIN_VALUATION_MAX_SYMBOLS` of the scan
+universe and records both that count and whether a 429 cut the run short — so
+"2 of 15 symbols (rate limited)" and "2 of 15 symbols" are told apart, and
+neither reads as the coverage note it used to. Two symbols means nothing without
+knowing how many were asked for, and a run stopped by a rate limit is a
+producer-side fault, not an observation about which coins happened to trade.
+
 ### Learning records its judgment instead of enforcing it
 
 `LearningEngine` adjusts a candidate's score after 5 trades and benches a
