@@ -39,6 +39,21 @@ log = logging.getLogger("wolf.screener")
 #: Where the last book-spread fetch outcome is stored, for the digest to read.
 SPREAD_STATUS_KEY = "spread_status"
 
+#: Where candidates dropped by the chase gate are recorded.
+#:
+#: The gate is the fourth instance of this project's signature fault: it decides
+#: what does not happen, so what it drops never becomes an outcome and its own
+#: correctness cannot be judged. Widening it would only move the blind spot, and
+#: there is no trade in the ledger that would justify a new limit. Recording the
+#: drops changes no behaviour and is the only thing that makes the question
+#: answerable later — how often the gate fires, on which strategy, and how far
+#: past the quote the price had actually gone.
+CHASE_DROPS_KEY = "chase_drops"
+
+#: How many drops to keep. A rolling window, because the question is a rate over
+#: recent cycles, not a permanent audit log the store would have to grow forever.
+CHASE_DROPS_MAX = 300
+
 # Reversal setups intentionally fade the trend, so the regime filter exempts
 # them — only trend-following detectors are gated for fighting the tape.
 COUNTER_TREND_TYPES: frozenset[str] = frozenset({"SCALP", "PREDUMP", "TRAP"})
@@ -574,6 +589,7 @@ class Screener:
                 "Skip %s %s: ran %.2fR past the %.6g entry before the alert (limit %.2f)",
                 candidate.symbol, candidate.direction, drift / risk, quoted, limit,
             )
+            self._record_chase_drop(candidate, quoted, live, drift / risk, limit)
             return True
         # Moved the other way and through the stop: the setup is already dead.
         if (is_long and live <= sl) or (not is_long and live >= sl):
@@ -764,6 +780,39 @@ class Screener:
             })
         except Exception:  # never let bookkeeping break a scan cycle
             log.debug("Could not record spread status", exc_info=True)
+
+    def _record_chase_drop(
+        self, candidate: SignalCandidate, quoted: float, live: float,
+        chase_r: float, limit: float,
+    ) -> None:
+        """Persist one chase-gate rejection so the gate can be judged later.
+
+        Enough of the setup is kept to grade the drop after the fact — the
+        symbol, when it happened, and the price it would have been entered at.
+        Nothing here reaches ``record_signal``: the candidate is still dropped
+        and the paper ledger is unchanged. The point is to stop the gate being
+        the one filter whose output nobody can see.
+        """
+        try:
+            row = {
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "symbol": candidate.symbol,
+                "strategy": candidate.strategy,
+                "direction": candidate.direction,
+                "score": candidate.score,
+                "quoted": quoted,
+                "live": live,
+                "sl": candidate.sl,
+                "chase_r": round(chase_r, 3),
+                "limit": limit,
+            }
+            self._tracker._store.update(
+                CHASE_DROPS_KEY,
+                lambda cur: ((cur or []) + [row])[-CHASE_DROPS_MAX:],
+                default=[],
+            )
+        except Exception:  # never let bookkeeping break a scan cycle
+            log.debug("Could not record chase drop", exc_info=True)
 
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""

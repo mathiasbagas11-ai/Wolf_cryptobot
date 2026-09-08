@@ -35,10 +35,18 @@ class MomentumBreakoutDetector(Detector):
     timeframe = "1h"
     min_candles = 60
 
-    #: A breakout is entered on the bar that resolves it, so the move it exists
-    #: to catch begins at the quote. The screener's global chase cap is sized
-    #: for mean reversion and drops these before they are ever sent.
-    max_chase_r = 1.5
+    #: Deliberately left at the screener's default. A breakout arguably deserves
+    #: a wider chase — the move it exists to catch begins at the quote — but
+    #: MOMENTUM is most of the current sample, and widening it re-priced those
+    #: trades rather than merely adding some: the stop does not move with the
+    #: re-quote, so the risk unit stretches and the ladder, rebuilt at the same
+    #: R multiples, demands a far larger price move for the same nominal 3R
+    #: (5.0% -> 11.6% of entry at 1.5R of chase; 15% -> 35% to the last rung).
+    #: Both ratio gates get *weaker* there — nominal R:R is unchanged and a
+    #: bigger 1R passes the cost gate more easily — so the change is invisible
+    #: to them. What the drop needs is measurement, not a wider limit picked
+    #: from replayed shapes; the screener now records every one.
+    max_chase_r = None
 
     def __init__(
         self,

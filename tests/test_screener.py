@@ -56,8 +56,10 @@ def _weak_bucket() -> dict:
 class _FakeTracker:
     """Minimal tracker exposing only stats() for auto-pause unit tests."""
 
-    def __init__(self, stats: dict) -> None:
+    def __init__(self, stats: dict, store=None) -> None:
         self._stats = stats
+        if store is not None:
+            self._store = store
 
     def stats(self) -> dict:
         return self._stats
@@ -886,6 +888,69 @@ def test_market_entry_is_requoted_and_the_ladder_follows(fake_client):
     assert cand.tp == 119.0
     rr = (cand.tp - cand.entry_price) / (cand.entry_price - cand.sl)
     assert round(rr, 6) == 3.0
+
+
+def test_a_chase_drop_is_recorded_so_the_gate_can_be_judged(fake_client, store):
+    """The gate drops candidates before ``record_signal``, so what it rejects
+    never becomes an outcome and its own correctness is unmeasurable — the same
+    self-blinding shape as the AI and whale vetoes. Recording the drop changes
+    no behaviour and is the only thing that makes the question answerable.
+    """
+    screener = Screener(fake_client, _FakeTracker({}, store), [], universe=[],
+                        max_chase_r=0.5)
+    fake_client.prices["BTCUSDT"] = 104.0   # 0.8R past the 100 quote
+    assert screener._reprice_at_market(_market_cand()) is True
+
+    rows = store.read("chase_drops", default=[])
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["symbol"] == "BTCUSDT"
+    assert row["strategy"] == "MOMENTUM"
+    assert row["quoted"] == 100 and row["live"] == 104.0
+    assert row["chase_r"] == 0.8 and row["limit"] == 0.5
+    # The stop is kept because grading the drop later needs the risk unit the
+    # setup was actually placed against.
+    assert row["sl"] == 95
+
+
+def test_a_kept_entry_records_no_chase_drop(fake_client, store):
+    screener = Screener(fake_client, _FakeTracker({}, store), [], universe=[],
+                        max_chase_r=0.5)
+    fake_client.prices["BTCUSDT"] = 101.0   # 0.2R — inside the limit
+    assert screener._reprice_at_market(_market_cand()) is False
+    assert store.read("chase_drops", default=[]) == []
+
+
+def test_chase_drops_are_a_rolling_window(fake_client, store):
+    """A rate over recent cycles, not an audit log the store grows forever."""
+    from wolf.screener import CHASE_DROPS_MAX
+
+    screener = Screener(fake_client, _FakeTracker({}, store), [], universe=[],
+                        max_chase_r=0.5)
+    fake_client.prices["BTCUSDT"] = 104.0
+    for _ in range(CHASE_DROPS_MAX + 5):
+        screener._reprice_at_market(_market_cand())
+    assert len(store.read("chase_drops", default=[])) == CHASE_DROPS_MAX
+
+
+def test_recording_a_drop_never_breaks_a_scan_cycle(fake_client):
+    """Bookkeeping runs inside the scan loop; a store that cannot answer must
+    cost a record, not the cycle."""
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[],
+                        max_chase_r=0.5)  # tracker has no _store at all
+    fake_client.prices["BTCUSDT"] = 104.0
+    assert screener._reprice_at_market(_market_cand()) is True
+
+
+def test_momentum_uses_the_screener_default_chase_limit():
+    """MOMENTUM is most of the current sample. Widening its chase would not
+    merely add trades: the stop does not move with the re-quote, so the risk
+    unit stretches and the ladder — rebuilt at the same R multiples — demands a
+    far larger price move for the same nominal 3R. Both ratio gates get weaker
+    exactly there, so the change is invisible to them."""
+    from wolf.detectors import MomentumBreakoutDetector
+
+    assert MomentumBreakoutDetector.max_chase_r is None
 
 
 def test_a_detector_may_raise_its_own_chase_limit(fake_client):

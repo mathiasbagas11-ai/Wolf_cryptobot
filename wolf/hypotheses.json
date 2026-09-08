@@ -135,6 +135,14 @@
       "settled_on": "2026-09-08",
       "evidence": "A coin enters the top-N by 24h quote volume because it already pumped. PREPUMP looks for quiet accumulation — low volume by definition — so the selector and the detector are each other's negation. Observed: a token running +127% in a day whose candles the bot had never evaluated, and a second at $4.4M turnover below the $10M floor outright.",
       "note": "ERA BOUNDARY. Mover lane added: lower floor ($3M), ranked by |24h change| >= 8%, capped at 15 symbols, both directions. Does NOT buy a shorter sample — eff_n = n / mean_open and more symbols raises both, per the standing lesson. What it buys is reachability: symbols that could not produce a signal at all now can. Still reactive: the market overview carries no volume baseline, so genuine pre-move accumulation is not detectable from that call and catching the base itself needs per-symbol volume history. Scan load 105 -> max 150 klines per 10-minute cycle."
+    },
+    {
+      "id": "chase-gate-self-blinding",
+      "question": "Is the 0.5R chase gate right, and can widening it be judged from anything the bot has recorded?",
+      "status": "OPEN",
+      "settled_on": "",
+      "evidence": "Not measured, and until 2026-09-08 not measurable: the gate drops candidates before record_signal, so what it rejects appears in no count, bucket or strategy row. A gate rejecting most of a strategy's setups and one that never fires produced an identical card. Drops now persist to `chase_drops` (symbol, time, quoted, live, sl, chase_r, limit) and the diag card reports count, split by strategy, and median/max chase.",
+      "note": "Fourth instance of the self-blinding shape after the AI veto (rejected), the whale veto (identified) and the learning blacklist (fixed). A first attempt widened the limit to 1.5R on both breakout detectors and was withdrawn the same day: widening does not cure self-blinding, it relocates the blind spot, and it re-prices every trade admitted past the old line rather than merely adding some. The stop does not move with the re-quote, so the risk unit stretches and the ladder — rebuilt at the same R multiples — demands a far larger absolute move for the same nominal 3R: at 1.5R of chase, 1R goes 5.0% to 11.6% of entry and the last rung from +15% to +35%. Both ratio gates weaken exactly there, since nominal R:R is unchanged and a bigger 1R passes the cost gate more easily, so neither would have flagged it. PREPUMP keeps 1.5R because it has never emitted a signal and has nothing to contaminate. Grading the record needs a re-pricing job that does not exist yet — until then the drops accumulate and settle nothing."
     }
   ]
 }

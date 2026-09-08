@@ -46,11 +46,17 @@ confidence.
 ## Lessons that cost real time
 
 **Self-blinding.** A live veto cannot be judged: what it drops never becomes an
-outcome, so the veto's own correctness is unmeasurable. Found three times —
-the AI veto (rejected), the whale veto (identified, still hard-blocking), and
-the learning blacklist (fixed 2026-09-07, and the worst of the three because a
-bench is an absorbing state). **Whenever a component decides what does not
-happen, ask what it makes unmeasurable.**
+outcome, so the veto's own correctness is unmeasurable. Found four times — the
+AI veto (rejected), the whale veto (identified, still hard-blocking), the
+learning blacklist (fixed 2026-09-07, and the worst of them because a bench is
+an absorbing state), and the chase gate (made visible 2026-09-08). **Whenever a
+component decides what does not happen, ask what it makes unmeasurable.**
+
+The chase gate also shows the wrong remedy. The first fix widened the limit,
+which does not cure self-blinding — it relocates the blind spot, and pays for
+the move by changing the geometry of every trade admitted past the old line.
+**Recording what a gate drops costs nothing and answers the question; moving a
+gate costs a sample and answers a different one.**
 
 **Level questions are unaffordable; paired questions are not.** "Does the bot
 make money" needs thousands of trades. "Is rule A better than B on these same
@@ -92,7 +98,7 @@ a 1h detector six times.
 | ~2026-09-03 | `MAX_COST_R=0.15` gate landed (median 1R 1.14% → 2.2%, cost −46%) |
 | 2026-09-04 | AI `thinking` disabled — verdicts changed character, not just availability |
 | 2026-09-07 | learning moved to monitor mode |
-| **2026-09-08** | PREPUMP made satisfiable, universe mover lane, breakout chase limit 0.5R → 1.5R — **current sample starts here** |
+| **2026-09-08** | PREPUMP made satisfiable, universe mover lane — **current sample starts here** |
 
 Eras should be segmented by signal **creation** date. `/diag` and `/whatif`
 currently window on **resolution** time; that is a known, unfixed gap.
@@ -104,29 +110,41 @@ currently window on **resolution** time; that is a known, unfixed gap.
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
 
-Two entries added 2026-09-08: `prepump-unsatisfiable-threshold` and
-`universe-volume-ranking-is-lagging`.
+Three entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
+`universe-volume-ranking-is-lagging` and `chase-gate-self-blinding`.
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-08, HEAD `prepump-reachable`
+## Status — 2026-09-08, HEAD `chase-recorded`
 
-963 tests green. Working tree clean.
+971 tests green. Working tree clean.
 
-**The sample was just reset, deliberately, and it is worth knowing what it
-cost.** Three things changed signal composition at once: PREPUMP can now emit
-at all (it could not — see below), the universe gained a mover lane, and both
-breakout detectors carry a 1.5R chase limit instead of the global 0.5R. The
-first is a bug fix and allowed under rule 1 at any time. The other two are
-strategy changes made during an open sample, on the reasoning that a fix which
-makes a detector reachable is worth little if the symbols it reads are never
-scanned and its entries are dropped for running too fast. MOMENTUM's behaviour
-changed with it, and MOMENTUM is the strategy the current sample is mostly
-made of. Reverting just that piece is one line: drop `max_chase_r = 1.5` from
-`wolf/detectors/momentum.py`.
+**The sample was reset, deliberately.** Two things changed signal composition:
+PREPUMP can now emit at all (it could not — see below), and the universe gained
+a mover lane. The first is a bug fix, allowed under rule 1 at any time; the
+second is a strategy change, made because a detector made reachable is worth
+little while the symbols it reads go unscanned.
+
+A third change was made and then withdrawn the same day, which is the part
+worth remembering. Both breakout detectors briefly carried a 1.5R chase limit
+in place of the global 0.5R. Widening it does not merely admit more trades: the
+stop does not move with the re-quote, so the risk unit stretches and the ladder,
+rebuilt at the same R multiples, demands a far larger price move for the same
+nominal 3R — at 1.5R of chase, 1R goes 5.0% → 11.6% of entry and the last rung
+moves from +15% to +35%. Both ratio gates get *weaker* exactly there: nominal
+R:R is unchanged, and a bigger 1R passes the cost gate more easily. MOMENTUM is
+most of the current sample and would have carried it, so it is back on the
+default and the sample stays one population.
+
+The gate itself is still a self-blinding veto, and now a visible one: every
+drop is recorded (`chase_drops`) and the diag card reports the count, the split
+by strategy, and how far past the quote price had run. **Do not re-argue the
+limit from replayed candle shapes — argue it from those drops.** PREPUMP keeps
+1.5R only because it has never emitted a signal, so there is nothing there to
+contaminate.
 
 ```
 /diag 24h: n=9 eff=3 mean_open=2.36
@@ -162,7 +180,13 @@ observations); `whale:WITH` has flipped sign four times; `learn:BENCH` won and
 3. **Windowing uses resolution time** where era hygiene wants creation time.
 4. `wolf/reports/conviction.py` (AI conviction ranking) arrived via PR #32 from
    another session and has never been measured.
-5. **PREPUMP's band edges are calibrated on synthetic series, not on trades.**
+5. **The chase limit is still unargued.** 0.5R was never derived from a trade
+   and neither was the 1.5R that briefly replaced it. Drops are now recorded, so
+   from ~2026-09-15 the card can say how often the gate fires and how far price
+   had run. Grading them needs one more piece that does not exist yet: a job
+   that re-prices a recorded drop against later candles to say what it would
+   have returned. Until that exists the record accumulates and settles nothing.
+6. **PREPUMP's band edges are calibrated on synthetic series, not on trades.**
    The RSI ceiling (80), the VWAP premium (3%) and the expansion multiple
    (2.5×) were chosen against replayed candle shapes because the detector had
    never emitted a signal to fit them to. Replay is enough to prove a threshold
@@ -179,7 +203,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 950 tests, ~5s
+python -m pytest            # 971 tests, ~5s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

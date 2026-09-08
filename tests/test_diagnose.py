@@ -1013,3 +1013,61 @@ def test_an_engine_with_nothing_to_say_prints_no_learning_rows(
     )
     assert "learn:" not in digest
     assert "no learn label" not in digest      # never a collector diagnosis
+
+
+# ── Chase gate visibility ────────────────────────────────────────────────
+
+def _chase_row(*, n=0, strategy="MOMENTUM", chase_r=0.8, hours_ago=1.0) -> dict:
+    at = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    return {
+        "at": at.isoformat(timespec="seconds"),
+        "symbol": f"BTCUSDT{n}", "strategy": strategy, "direction": "LONG",
+        "score": 80, "quoted": 100.0, "live": 104.0, "sl": 95.0,
+        "chase_r": chase_r, "limit": 0.5,
+    }
+
+
+def test_the_card_reports_what_the_chase_gate_rejected(store, fake_client, tracker_settings):
+    """A gate rejecting most of a strategy's setups and a gate that never fires
+    produced an identical card, because drops never reach ``record_signal`` and
+    so appear in no count, bucket or strategy row on it."""
+    rows = []
+    for i in range(10):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=i)
+    store.write("chase_drops", [
+        _chase_row(n=0, chase_r=0.7), _chase_row(n=1, chase_r=0.9),
+        _chase_row(n=2, strategy="SCALP", chase_r=1.4),
+    ])
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert diag["chase"]["n"] == 3
+    assert diag["chase"]["by_strategy"] == {"MOMENTUM": 2, "SCALP": 1}
+    assert diag["chase"]["max_chase_r"] == 1.4
+
+    card = render_digest(diag)
+    assert "chase" in card and "MOMENTUM=2" in card
+    assert "never reached the ledger" in card
+
+
+def test_a_gate_that_did_not_fire_says_nothing(store, fake_client, tracker_settings):
+    """Silence here is a real reading — the gate rejected nothing this window —
+    so it must not be padded with a zero row that looks like a finding."""
+    rows = []
+    for i in range(10):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=i)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert diag["chase"] == {}
+    assert "chase" not in render_digest(diag)
+
+
+def test_chase_drops_respect_the_diagnostic_window(store, fake_client, tracker_settings):
+    """Era hygiene applies to the gate too: a drop from before the window is
+    not evidence about the window."""
+    rows = []
+    for i in range(10):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=i)
+    store.write("chase_drops", [
+        _chase_row(n=0, hours_ago=1.0), _chase_row(n=1, hours_ago=200.0),
+    ])
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows),
+                    window_hours=24)
+    assert diag["chase"]["n"] == 1

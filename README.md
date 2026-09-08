@@ -150,6 +150,32 @@ hard block (`REGIME_HARD_BLOCK` / `AUTOPAUSE_HARD_BLOCK`). Configured under
 | **Drawdown throttle** | **hard** | Tracks the paper equity's high-water mark and pauses **all** new entries once the balance falls a set % below its peak — stops a correction from giving back realized gains. | `DRAWDOWN_PAUSE_PCT` |
 | **Auto-pause** | monitor | Pauses a strategy only when it is *confidently* losing: with enough graded trades, the one-sided upper bound of its expectancy in R (`avg_r + z·se_r`) must still sit below the floor. Judging a bare average against a threshold flags noise — see below. | `AUTOPAUSE_MIN_TRADES`, `AUTOPAUSE_MIN_EXPECTANCY_R`, `AUTOPAUSE_CONFIDENCE_Z`, `AUTOPAUSE_HARD_BLOCK` |
 
+### The chase gate, and why it is recorded rather than widened
+
+`_reprice_at_market` drops a market entry that has already run `MAX_CHASE_R`
+past the price the detector quoted. That drop happens before `record_signal`, so
+what it rejects appears in no count, no bucket and no strategy row on the diag
+card — a gate rejecting most of a strategy's setups and a gate that never fires
+looked identical. Every drop is now persisted to `chase_drops` and the card
+reports the count, the split by strategy, and how far past the quote price had
+gone. Behaviour is unchanged; only the gate's output became visible.
+
+Widening the limit is the tempting fix and the wrong one. The stop does not move
+with the re-quote, so a chased entry stretches the risk unit, and the ladder —
+rebuilt at the same R multiples — then demands a far larger absolute move for the
+same nominal 3R:
+
+| Chase | Entry | 1R | Move to the last rung | Loss at stop |
+|---|---|---|---|---|
+| 0.2R | 101 | 5.9% | +17.8% | −5.9% |
+| 0.6R | 103 | 7.8% | +23.3% | −7.8% |
+| 1.5R | 107.5 | 11.6% | **+34.9%** | −11.6% |
+
+Neither ratio gate objects: nominal R:R is unchanged, and `MAX_COST_R` compares a
+fixed cost against the risk unit, so a *bigger* 1R passes it more easily. Both
+gates are weakest exactly where the trade is worst, which is why the limit needs
+to be argued from recorded drops rather than from a number picked off a chart.
+
 Flagged signals carry `against_regime` / `weak_strategy` on the outcome record,
 and the periodic stats card shows a **Risk-gate monitor** comparing their
 win-rate to the overall — your evidence for whether to flip a gate to hard.

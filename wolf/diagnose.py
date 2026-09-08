@@ -315,6 +315,54 @@ def _spread_status(tracker) -> str:
     return f"{status} @ {at}" if status and at else status
 
 
+def _chase_drops(tracker, window_hours=None) -> dict:
+    """What the chase gate rejected, and how far past the quote it had run.
+
+    The gate drops candidates before ``record_signal``, so nothing it rejects
+    appears anywhere else on this card — not in ``traded``, not in a bucket, not
+    in the strategy rows. That is the same self-blinding shape as the AI and
+    whale vetoes, and it is worse here for being invisible: a gate rejecting
+    most of a strategy's setups and a gate that never fires produce an identical
+    card. This says which, and by how much, so the limit can eventually be
+    argued from drops rather than from a number somebody picked.
+    """
+    try:
+        rows = tracker._store.read("chase_drops", default=None) or []
+    except Exception:
+        return {}
+    if not isinstance(rows, list) or not rows:
+        return {}
+    if window_hours:
+        cut = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+        kept = []
+        for r in rows:
+            try:
+                if datetime.fromisoformat(str(r.get("at"))) >= cut:
+                    kept.append(r)
+            except ValueError:
+                continue
+        rows = kept
+    if not rows:
+        return {}
+    by_strategy: dict[str, int] = {}
+    chases: list[float] = []
+    for r in rows:
+        by_strategy[str(r.get("strategy") or "?")] = (
+            by_strategy.get(str(r.get("strategy") or "?"), 0) + 1
+        )
+        try:
+            chases.append(float(r.get("chase_r")))
+        except (TypeError, ValueError):
+            continue
+    chases.sort()
+    return {
+        "n": len(rows),
+        "by_strategy": dict(sorted(by_strategy.items(), key=lambda kv: -kv[1])),
+        "median_chase_r": chases[len(chases) // 2] if chases else None,
+        "max_chase_r": chases[-1] if chases else None,
+    }
+
+
 #: The store keys the on-chain collectors write, and the bucket prefix each one
 #: feeds. A block that renders as nothing has to be able to say which.
 _COLLECTOR_KEYS = {
@@ -793,6 +841,7 @@ def diagnose(
             ),
             "spread_status": _spread_status(tracker),
         },
+        "chase": _chase_drops(tracker, window_hours),
         "overall": overall,
         "ladder": ladder,
         "by_strategy": by_strategy,
@@ -913,6 +962,27 @@ def _fdr_col(bucket: dict) -> str:
     return f"padj={bucket['p_adj']:.3f}{mark} "
 
 
+def _chase_lines(chase: dict) -> list[str]:
+    """One line for what the chase gate rejected, or nothing when it did not.
+
+    Silence here means the gate did not fire in this window, which is a real
+    reading. Before the drops were recorded, silence and "the gate rejected most
+    of MOMENTUM's setups" looked exactly the same on this card.
+    """
+    if not chase or not chase.get("n"):
+        return []
+    by = " ".join(f"{k}={v}" for k, v in (chase.get("by_strategy") or {}).items())
+    med, mx = chase.get("median_chase_r"), chase.get("max_chase_r")
+    tail = ""
+    if med is not None and mx is not None:
+        tail = f" — chase median {med:.2f}R max {mx:.2f}R"
+    return [
+        f"chase    {chase['n']} candidate(s) dropped for running past the quote "
+        f"({by}){tail}",
+        f"         never reached the ledger — not in traded, not in any bucket",
+    ]
+
+
 def render_digest(diag: dict) -> str:
     """Render the diagnostic as a compact fixed-shape text block.
 
@@ -929,6 +999,7 @@ def render_digest(diag: dict) -> str:
         f"cost     {c['round_trip_bps']:g}bps / 1R={c['median_1r_pct']:.2f}% => {c['cost_r']:.3f}R",
         *_gate_lines(c),
         *_measured_cost_lines(c),
+        *_chase_lines(diag.get("chase") or {}),
         f"overall  meanR={o['mean_r']:+.3f} sdR={o['sd_r']:.2f} n={o['n']} "
         f"eff={o.get('eff_n', o['n'])} se={o['se_r']:.3f} t={o['t']:+.2f} "
         f"(nom {o.get('t_nominal', o['t']):+.2f}) "
