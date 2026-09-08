@@ -73,6 +73,14 @@ class SignalCandidate:
     # mode the flag is set but risk_scale stays 1.0 (observation only).
     bounce_flagged: bool = False
     risk_scale: float = 1.0
+    #: Per-strategy override for the screener's ``max_chase_r``. A breakout
+    #: setup is entered on the bar that resolves it, so the move it is meant to
+    #: catch starts *at* the quote and running past it is the setup working, not
+    #: the setup expiring. A mean-reversion setup is the opposite: price leaving
+    #: the level is what invalidates it. One global cap cannot serve both, and
+    #: the tight one silently dropped every fast breakout. ``None`` keeps the
+    #: screener's configured default.
+    max_chase_r: Optional[float] = None
     #: True once the screener has re-quoted ``entry_price`` at the live market
     #: price. Detectors leave it False, because they price off the last closed
     #: bar of their timeframe — and the tracker has to know which of the two it

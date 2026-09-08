@@ -544,6 +544,13 @@ class Screener:
         but abandoned. The stop has not moved, so chasing buys a smaller move
         for the same loss — and the part of the move that was meant to pay has
         already happened without us.
+
+        A detector may raise that limit for itself via
+        :attr:`SignalCandidate.max_chase_r`. How far a setup may run before it
+        stops being the same setup is a property of the setup, not of the bot:
+        the global default is sized for mean reversion, where price leaving the
+        level is what invalidates it, and applied unchanged to a breakout it
+        rejects the move the breakout was placed to catch.
         """
         if candidate.entry_mode.upper() != EntryMode.MOMENTUM_NOW.value:
             return False  # a pending entry is a level, not a quote
@@ -561,10 +568,11 @@ class Screener:
 
         is_long = candidate.direction.upper() == Direction.LONG.value
         drift = (live - quoted) if is_long else (quoted - live)
-        if drift / risk > self._max_chase_r:
+        limit = candidate.max_chase_r if candidate.max_chase_r is not None else self._max_chase_r
+        if drift / risk > limit:
             log.info(
                 "Skip %s %s: ran %.2fR past the %.6g entry before the alert (limit %.2f)",
-                candidate.symbol, candidate.direction, drift / risk, quoted, self._max_chase_r,
+                candidate.symbol, candidate.direction, drift / risk, quoted, limit,
             )
             return True
         # Moved the other way and through the stop: the setup is already dead.

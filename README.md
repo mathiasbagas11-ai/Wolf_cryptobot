@@ -79,7 +79,7 @@ and unit-tested.
 | Detector | Bias | Trigger | Threshold |
 |----------|------|---------|-----------|
 | `MOMENTUM` | both | Range breakout + RSI/MACD/volume confirmation | ≥65 |
-| `PREPUMP` | LONG | Bollinger squeeze + volume coil + momentum (pre-breakout accumulation) | ≥65 |
+| `PREPUMP` | LONG | Coil release (breakout bar ≥2.5× the base's range) + volume + momentum, near VWAP | ≥65 |
 | `PREDUMP` | SHORT | Bearish RSI divergence + over-extension + rejection (distribution) | ≥65 |
 | `SCALP` | both | Liquidity sweep (stop-hunt) + volume spike + RSI extreme | ≥60 |
 | `SWING` | both | Trend (EMA align) + pullback to EMA20 + rejection candle | ≥65 |
@@ -93,6 +93,45 @@ in `wolf/detectors/__init__.py` — nothing else changes.
 Binance futures: negative/extreme funding boosts a PREPUMP short-squeeze case,
 overheated positive funding boosts a PREDUMP. The bonus is purely additive, so
 detectors still work candle-only when futures data is unavailable.
+
+### When a detector's own gates contradict its scoring
+
+`PREPUMP` emitted nothing for months, and not because the market lacked the
+setup. Its mandatory breakout gate — close above the prior 10-bar high, on a
+bullish bar — could not be true at the same time as several of the components it
+was graded on:
+
+| Award | Required | Why the gate forbade it |
+|---|---|---|
+| VWAP discount, 15 | `price <= vwap` | The gate demands a close above the base *and* above EMA50; VWAP is back in the base |
+| Quiet accumulation, 12 | volume **not** expanding | The volume-coil award on the same bar requires that it is |
+| RSI 50-68, 20 | a calm bar | A close above a 10-bar high on 1.8× volume prints RSI in the seventies |
+| Bullish divergence, 15 | a lower low | A breakout is a higher high |
+
+Replaying a real base shape through it put the honest ceiling on a breakout bar
+at **73** against a threshold of **78**. The detector was not mistuned; it was
+unsatisfiable, and the difference matters because no amount of market activity
+would have produced a signal.
+
+The unit test stayed green throughout because its fixture used an 18-bar base —
+short enough that the Bollinger width was still falling monotonically into the
+breakout and an FvG from the preceding ramp was still inside the 50-bar lookback.
+Stretching that same fixture to a realistic 60+ bars drops it to 73 and it goes
+silent. `test_prepump_fires_on_a_realistically_long_base` is that case, and
+`test_prepump_scoring_is_reachable_on_the_bar_its_gate_requires` asserts the
+arithmetic directly, so an unsatisfiable threshold fails loudly instead of
+quietly emitting nothing.
+
+The fix rebalanced the budget onto things a breakout bar can actually be — value
+*proximity* to VWAP rather than a discount, RSI 50-80, no reward for absent
+volume — and moved the hard decision off Bollinger compression. Inside a base
+occupying most of the 150 candles on hand there is no longer history to call the
+base "compressed" against, so any percentile cut passes that fraction of its bars
+by construction. What separates a coil releasing from an ordinary breakout is
+measurable without that contrast: **the breakout bar's range against the range of
+the bars it broke out of**. A base is quiet by definition, so a genuine release
+prints a bar several times anything inside it. Compression is still scored, where
+a coin flip costs points instead of the whole signal.
 
 ## Risk gates
 
@@ -444,6 +483,34 @@ other ecosystems rotate in as they heat up instead of only the same hardcoded
 majors. Set `UNIVERSE_DYNAMIC=false` to scan the fixed majors list only.
 Tuned via `UNIVERSE_TOP_N` and `UNIVERSE_MIN_QUOTE_VOLUME`.
 
+### The mover lane
+
+Ranking by 24h volume is a **lagging** filter, and it lags exactly where it costs
+most. A coin enters the top-N by volume only *because* it already pumped — which
+puts that lane in direct contradiction with the detector meant to catch a move
+early. `PREPUMP` looks for quiet accumulation, low volume by definition, on a
+symbol the volume lane cannot see until the accumulation is over. A token can run
++127% in a day without the bot ever having evaluated one of its candles.
+
+A second lane runs alongside it with a *lower* liquidity floor, ranked by the size
+of the 24h move rather than by volume, so a mid-cap already moving gets scanned
+while the move is young instead of after it has grown into a market-wide volume
+leader. Both directions qualify — a token down 20% is a candidate for the short
+detectors the same way one up 20% is for the long side.
+
+It is still reactive, and worth being clear about why: the 24h snapshot carries no
+volume *baseline*, so genuine pre-move accumulation is not detectable from that one
+call. What the lane buys is the difference between "after the pump" and "early in
+the pump", which is where the detectors can still do something. Catching the base
+itself needs a per-symbol volume history the overview does not carry.
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `UNIVERSE_MOVER_LANE` | `true` | Enable the second lane |
+| `UNIVERSE_MOVER_TOP_N` | `15` | Extra symbols it may add per cycle |
+| `UNIVERSE_MOVER_MIN_QUOTE_VOLUME` | `3000000` | Its own (lower) liquidity floor |
+| `UNIVERSE_MOVER_MIN_CHANGE_PCT` | `8.0` | \|24h change\| needed to qualify |
+
 ## Data sources (multi-exchange fallback)
 
 Market data is fetched through a `MarketDataClient` that tries an ordered list of
@@ -781,10 +848,12 @@ what its own setup needs:
 * **MOMENTUM / PREDUMP** reject a setup the aggressive side opposes. Scored
   small on purpose — the gate's job is to reject, not to nudge borderline
   setups over the threshold.
-* **PREPUMP** refuses a squeeze that releases on selling, and credits patient
-  bid absorption during the coil. It skips the directional test deliberately: a
-  pre-pump is flat by definition, so demanding a price move would reject the
-  very setup it looks for.
+* **PREPUMP** refuses a squeeze that releases on selling. It skips the
+  directional test deliberately: a pre-pump is flat by definition, so demanding
+  a price move would reject the very setup it looks for. It no longer credits
+  patient bid absorption — that award required the volume *not* to be expanding
+  on the same bar the breakout gate requires it to expand, so it was unreachable
+  points padding a threshold nothing could clear (see below).
 * **SCALP** never vetoes. A sweep trades hard against its own eventual direction
   on the way through the level — that flush *is* the setup — so it checks the
   aggressor flip on the reclaim candle instead.

@@ -63,6 +63,17 @@ and called both a round trip. The diag reported `eff_n_floor` on one line and
 undiscounted `t` on the next. In both cases the reader was left to reconcile
 figures that were never the same quantity.
 
+**A threshold nobody can reach reads exactly like a market with no setups.**
+PREPUMP scored zero signals for months and every reading of that was wrong,
+because its hard gate forbade three of the things it awarded points for —
+a ceiling of 73 against a threshold of 78. Silence from an unsatisfiable rule
+carries no information at all, yet it is indistinguishable on every card from
+silence that means "conditions are absent". The tests missed it for the same
+reason they usually do: they asserted a signal appeared on a fixture built to
+produce one, never that the score it achieved cleared the bar it was graded
+against. **When a component gates and scores the same bar, check the two sets
+can intersect.**
+
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
 unrelated remedies. The provider almost always already said which; the bug was
@@ -80,7 +91,8 @@ a 1h detector six times.
 | `cf2adac` | buggy era dropped whole |
 | ~2026-09-03 | `MAX_COST_R=0.15` gate landed (median 1R 1.14% → 2.2%, cost −46%) |
 | 2026-09-04 | AI `thinking` disabled — verdicts changed character, not just availability |
-| **2026-09-07** | learning moved to monitor mode — **current sample starts here** |
+| 2026-09-07 | learning moved to monitor mode |
+| **2026-09-08** | PREPUMP made satisfiable, universe mover lane, breakout chase limit 0.5R → 1.5R — **current sample starts here** |
 
 Eras should be segmented by signal **creation** date. `/diag` and `/whatif`
 currently window on **resolution** time; that is a known, unfixed gap.
@@ -92,14 +104,29 @@ currently window on **resolution** time; that is a known, unfixed gap.
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
 
+Two entries added 2026-09-08: `prepump-unsatisfiable-threshold` and
+`universe-volume-ranking-is-lagging`.
+
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-08, HEAD `8719ecb`
+## Status — 2026-09-08, HEAD `prepump-reachable`
 
-950 tests green. Working tree clean.
+963 tests green. Working tree clean.
+
+**The sample was just reset, deliberately, and it is worth knowing what it
+cost.** Three things changed signal composition at once: PREPUMP can now emit
+at all (it could not — see below), the universe gained a mover lane, and both
+breakout detectors carry a 1.5R chase limit instead of the global 0.5R. The
+first is a bug fix and allowed under rule 1 at any time. The other two are
+strategy changes made during an open sample, on the reasoning that a fix which
+makes a detector reachable is worth little if the symbols it reads are never
+scanned and its entries are dropped for running too fast. MOMENTUM's behaviour
+changed with it, and MOMENTUM is the strategy the current sample is mostly
+made of. Reverting just that piece is one line: drop `max_chase_r = 1.5` from
+`wolf/detectors/momentum.py`.
 
 ```
 /diag 24h: n=9 eff=3 mean_open=2.36
@@ -135,6 +162,14 @@ observations); `whale:WITH` has flipped sign four times; `learn:BENCH` won and
 3. **Windowing uses resolution time** where era hygiene wants creation time.
 4. `wolf/reports/conviction.py` (AI conviction ranking) arrived via PR #32 from
    another session and has never been measured.
+5. **PREPUMP's band edges are calibrated on synthetic series, not on trades.**
+   The RSI ceiling (80), the VWAP premium (3%) and the expansion multiple
+   (2.5×) were chosen against replayed candle shapes because the detector had
+   never emitted a signal to fit them to. Replay is enough to prove a threshold
+   is *reachable*; it says nothing about whether it is *right*. Treat the first
+   PREPUMP trades as a check on these three numbers, and note that synthetic
+   bases inflate RSI — a very tight coil makes any breakout print RSI in the
+   nineties, which real bases do not.
 
 Not yet built, offered and not taken: Deflated Sharpe Ratio (the registry is
 its trial counter); splitting `sentiment` from `materiality` in

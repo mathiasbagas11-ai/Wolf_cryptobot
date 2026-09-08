@@ -70,7 +70,7 @@
       "status": "REJECTED",
       "settled_on": "2026-09-04",
       "evidence": "DeepSeek V4 has no non-thinking model name: deepseek-v4-flash reasons by default at high effort, and deepseek-v4-pro more so",
-      "note": "The fault was never the model choice. Thinking is a request parameter, and turning it off is what fixes it. Raising DEBATE_ARBITER_MAX_TOKENS is only a bridge, and a narrow one \u2014 the hardcoded 30s HTTP timeout is the other wall."
+      "note": "The fault was never the model choice. Thinking is a request parameter, and turning it off is what fixes it. Raising DEBATE_ARBITER_MAX_TOKENS is only a bridge, and a narrow one — the hardcoded 30s HTTP timeout is the other wall."
     },
     {
       "id": "post-cost-gate-era",
@@ -78,15 +78,15 @@
       "status": "ADOPTED",
       "settled_on": "2026-09-04",
       "evidence": "First post-gate day: median 1R 1.14%->2.13%, cost/trade 0.175R->0.094R, ladder bar 55.6%->45.2%, rung fill tp3 5%->21%",
-      "note": "ERA BOUNDARY \u2014 count to 350 restarts here, segmented by signal creation date rather than resolution date. The gate appears to have delivered the cost lever and part of the exit-geometry lever at once, which would reorder the lever ranking if it holds. It is one day at n=24 with se 0.243; the cost figures are arithmetic and trustworthy, the ladder figures are observations worth watching, and meanR/netR are noise."
+      "note": "ERA BOUNDARY — count to 350 restarts here, segmented by signal creation date rather than resolution date. The gate appears to have delivered the cost lever and part of the exit-geometry lever at once, which would reorder the lever ranking if it holds. It is one day at n=24 with se 0.243; the cost figures are arithmetic and trustworthy, the ladder figures are observations worth watching, and meanR/netR are noise."
     },
     {
       "id": "exit-geometry-recut",
       "question": "Does re-cutting the TP ladder lower the required win rate enough to matter?",
       "status": "REJECTED",
       "settled_on": "2026-09-04",
-      "evidence": "/whatif ladder over 74 signals, all open=0: no variant beat live (best diff -0.048R, t=-1.55, padj=0.627). Tightening is strictly worse \u2014 need rises 50.8 -> 54.8 -> 60.6 as the ratio tightens. Widening is flat: 2rung/backload/even all within 0.005R of live",
-      "note": "This was ranked the largest lever at 9.4pp. Measured, it does not move. The curve says live sits at a local optimum with a flat gradient on the wide side and a steep penalty on the tight side. The sign test is far stronger than the mean test \u2014 rr2.5 changed 38 trades, 33 of them for the worse, which is p~1e-5 as a direction even though the magnitude is not resolvable. Direction certain, magnitude negligible."
+      "evidence": "/whatif ladder over 74 signals, all open=0: no variant beat live (best diff -0.048R, t=-1.55, padj=0.627). Tightening is strictly worse — need rises 50.8 -> 54.8 -> 60.6 as the ratio tightens. Widening is flat: 2rung/backload/even all within 0.005R of live",
+      "note": "This was ranked the largest lever at 9.4pp. Measured, it does not move. The curve says live sits at a local optimum with a flat gradient on the wide side and a steep penalty on the tight side. The sign test is far stronger than the mean test — rr2.5 changed 38 trades, 33 of them for the worse, which is p~1e-5 as a direction even though the magnitude is not resolvable. Direction certain, magnitude negligible."
     },
     {
       "id": "backtest-without-the-cost-gate",
@@ -94,14 +94,14 @@
       "status": "ADOPTED",
       "settled_on": "2026-09-04",
       "evidence": "Depth raised (lookback 50->300, candle_limit 250->1000) AND the live MAX_COST_R gate applied inside the engine, which previously applied no gates at all",
-      "note": "Depth alone would have made things worse: an ungated backtest accumulates the tiny-1R population the gate now rejects, so the deeper the history the more of a dead strategy it describes. /whatif history is deliberately NOT deepened \u2014 its 1000x15m reach is ~10.4 days, which rolls the pre-gate era out of the sample on its own."
+      "note": "Depth alone would have made things worse: an ungated backtest accumulates the tiny-1R population the gate now rejects, so the deeper the history the more of a dead strategy it describes. /whatif history is deliberately NOT deepened — its 1000x15m reach is ~10.4 days, which rolls the pre-gate era out of the sample on its own."
     },
     {
       "id": "whale-veto-direction",
       "question": "Is the whale veto filtering the wrong side?",
       "status": "INCONCLUSIVE",
-      "evidence": "/whatif whale 168 (one era, overlap-discounted): drop WITH gap +0.349R, t=+0.89, padj=0.528 at eff_n=28 from n=165 with mean_open=5.83. The all-era undiscounted version read padj=0.002 and was an artefact of both. Direction survives the strategy confound \u2014 the gap reappears in 3 of 3 comparable strategies (SCALP +0.251 n=59v40, MOMENTUM +0.209 n=17v7, PREDUMP +0.906 but only n=2 on one side) \u2014 so it is not a strategy mix relabelled",
-      "note": "Direction consistent, magnitude unresolvable. Worth noting what it would buy even taken at face value: netR -0.116 to -0.003, i.e. breakeven, not profit \u2014 and dropping WITH RAISES cost per trade from 0.14R to 0.18R because those trades carry wider stops, eating 26% of the gross gain. Still UNANSWERABLE as posed: the veto drops candidates before record_signal, so the strongly-opposed setups it refuses have no outcomes. Settling it needs the veto in monitor mode, which is a strategy change. This remains the one queued item whose cost grows while it waits.",
+      "evidence": "/whatif whale 168 (one era, overlap-discounted): drop WITH gap +0.349R, t=+0.89, padj=0.528 at eff_n=28 from n=165 with mean_open=5.83. The all-era undiscounted version read padj=0.002 and was an artefact of both. Direction survives the strategy confound — the gap reappears in 3 of 3 comparable strategies (SCALP +0.251 n=59v40, MOMENTUM +0.209 n=17v7, PREDUMP +0.906 but only n=2 on one side) — so it is not a strategy mix relabelled",
+      "note": "Direction consistent, magnitude unresolvable. Worth noting what it would buy even taken at face value: netR -0.116 to -0.003, i.e. breakeven, not profit — and dropping WITH RAISES cost per trade from 0.14R to 0.18R because those trades carry wider stops, eating 26% of the gross gain. Still UNANSWERABLE as posed: the veto drops candidates before record_signal, so the strongly-opposed setups it refuses have no outcomes. Settling it needs the veto in monitor mode, which is a strategy change. This remains the one queued item whose cost grows while it waits.",
       "settled_on": "2026-09-04"
     },
     {
@@ -109,8 +109,8 @@
       "question": "Is 350 nominal trades enough to settle whether the bot has an edge?",
       "status": "REJECTED",
       "settled_on": "2026-09-06",
-      "evidence": "At mean_open 5.34, 350 nominal is 66 independent observations: se 0.145, so it can only resolve an edge of +0.29R or larger. The observed netR is +0.233 \u2014 below its own bar",
-      "note": "The target was set as a count, and what a count buys depends on overlap. Even if today's netR is real and holds, 350 trades still return INCONCLUSIVE. Revised target: ~540 nominal (~100 effective, ~38 days at 14/day) to resolve +0.233R at t=2. If the true edge is half that, ~2,100 trades and five months; at +0.05R it is over two years. Adding symbols does not help \u2014 more signals in the same window raise mean_open proportionally and leave the effective count where it was."
+      "evidence": "At mean_open 5.34, 350 nominal is 66 independent observations: se 0.145, so it can only resolve an edge of +0.29R or larger. The observed netR is +0.233 — below its own bar",
+      "note": "The target was set as a count, and what a count buys depends on overlap. Even if today's netR is real and holds, 350 trades still return INCONCLUSIVE. Revised target: ~540 nominal (~100 effective, ~38 days at 14/day) to resolve +0.233R at t=2. If the true edge is half that, ~2,100 trades and five months; at +0.05R it is over two years. Adding symbols does not help — more signals in the same window raise mean_open proportionally and leave the effective count where it was."
     },
     {
       "id": "learning-engine-monitor-mode",
@@ -118,7 +118,23 @@
       "status": "ADOPTED",
       "settled_on": "2026-09-07",
       "evidence": "A coin-flip symbol returns <=2 wins from 8 trades 14.5% of the time, so ~1 symbol per 30 is benched per rotation on luck alone. Blacklist thresholds: 8 trades. Score adjustment: 5 trades. Sample needed to resolve the observed edge: ~540",
-      "note": "ERA BOUNDARY \u2014 the third deliberate one, and the reason the others were leaking. Every score delta and every bench was a silent strategy change, so the count toward a stable-strategy sample was counting something that never stopped moving. Now monitor-only: flags recorded to by_learning_action, nothing applied, LEARNING_HARD_BLOCK=1 to restore. The score delta is withheld as well as the bench, because score decides which detector wins a symbol and gates bounce-risk shorts. Third instance of the same self-blinding shape after the AI veto (rejected) and the whale veto (identified) \u2014 this one was an absorbing state, which made it the worst of the three."
+      "note": "ERA BOUNDARY — the third deliberate one, and the reason the others were leaking. Every score delta and every bench was a silent strategy change, so the count toward a stable-strategy sample was counting something that never stopped moving. Now monitor-only: flags recorded to by_learning_action, nothing applied, LEARNING_HARD_BLOCK=1 to restore. The score delta is withheld as well as the bench, because score decides which detector wins a symbol and gates bounce-risk shorts. Third instance of the same self-blinding shape after the AI veto (rejected) and the whale veto (identified) — this one was an absorbing state, which made it the worst of the three."
+    },
+    {
+      "id": "prepump-unsatisfiable-threshold",
+      "question": "Was PREPUMP's silence a market condition, a mistuning, or an unreachable threshold?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-08",
+      "evidence": "Replaying a base-then-breakout series bar by bar: the mandatory breakout gate (close above the prior 10-bar high, bullish bar, price above EMA50) forbids the VWAP-discount award (15, needs price <= VWAP), the quiet-accumulation award (12, needs volume not expanding while the volume-coil award on the same bar needs it to), and makes RSI 50-68 (20) a band a breakout bar does not sit in. Ceiling on a real breakout bar 73, threshold 78. Zero signals over a synthetic +140% pump; MOMENTUM scored 100 on the same bars.",
+      "note": "ERA BOUNDARY. Not a mistuning — unsatisfiable, so no market condition would have produced a signal and the zero count carried no information about the strategy. The unit test passed throughout on an 18-bar base, short enough that Bollinger width was still falling monotonically into the breakout and an FvG from the preceding ramp was still inside the 50-bar lookback; the same fixture at 60 bars scores 73 and goes silent. Generalises: a scored component that contradicts a hard gate is invisible in every test that does not assert the achieved score against the threshold. Compression moved from gate to score (inside a base occupying most of 150 candles there is no history left to call it compressed against, so any percentile cut passes that fraction by construction); the gate is now the breakout bar's range against the range of the bars it broke out of."
+    },
+    {
+      "id": "universe-volume-ranking-is-lagging",
+      "question": "Can a volume-ranked universe ever show the bot a pre-pump?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-08",
+      "evidence": "A coin enters the top-N by 24h quote volume because it already pumped. PREPUMP looks for quiet accumulation — low volume by definition — so the selector and the detector are each other's negation. Observed: a token running +127% in a day whose candles the bot had never evaluated, and a second at $4.4M turnover below the $10M floor outright.",
+      "note": "ERA BOUNDARY. Mover lane added: lower floor ($3M), ranked by |24h change| >= 8%, capped at 15 symbols, both directions. Does NOT buy a shorter sample — eff_n = n / mean_open and more symbols raises both, per the standing lesson. What it buys is reachability: symbols that could not produce a signal at all now can. Still reactive: the market overview carries no volume baseline, so genuine pre-move accumulation is not detectable from that call and catching the base itself needs per-symbol volume history. Scan load 105 -> max 150 klines per 10-minute cycle."
     }
   ]
 }

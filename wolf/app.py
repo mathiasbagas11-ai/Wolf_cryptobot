@@ -297,6 +297,10 @@ def build_application(settings: Settings | None = None) -> Application:
             top_n=settings.universe.top_n,
             min_quote_volume=settings.universe.min_quote_volume,
             quote=settings.universe.quote,
+            mover_lane=settings.universe.mover_lane,
+            mover_top_n=settings.universe.mover_top_n,
+            mover_min_quote_volume=settings.universe.mover_min_quote_volume,
+            mover_min_change_pct=settings.universe.mover_min_change_pct,
         )
         if settings.universe.dynamic
         else None

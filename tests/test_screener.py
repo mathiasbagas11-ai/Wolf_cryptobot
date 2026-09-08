@@ -888,6 +888,26 @@ def test_market_entry_is_requoted_and_the_ladder_follows(fake_client):
     assert round(rr, 6) == 3.0
 
 
+def test_a_detector_may_raise_its_own_chase_limit(fake_client):
+    """A breakout is entered on the bar that resolves it, so the move it exists
+    to catch begins at the quote — running past it is the setup working. The
+    global default is sized for mean reversion, where price leaving the level is
+    what invalidates it, and applied unchanged it dropped fast breakouts before
+    they were ever sent.
+    """
+    screener = Screener(fake_client, _FakeTracker({}), [], universe=[], max_chase_r=0.5)
+    fake_client.prices["BTCUSDT"] = 103.0   # 0.6R past the 100 quote
+    cand = _market_cand()
+    cand.max_chase_r = 1.5
+    assert screener._reprice_at_market(cand) is False
+    assert cand.entry_price == 103.0
+
+    # ...and the override narrows as well as widens.
+    tight = _market_cand()
+    tight.max_chase_r = 0.1
+    assert screener._reprice_at_market(tight) is True
+
+
 def test_a_setup_that_already_ran_is_not_chased(fake_client):
     """Past half the risk unit the move has begun without us.
 

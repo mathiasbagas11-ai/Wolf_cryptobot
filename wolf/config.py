@@ -481,6 +481,19 @@ class UniverseSettings:
     top_n: int = 30                       # how many volume leaders to scan
     min_quote_volume: float = 10_000_000  # liquidity floor (USDT 24h quote vol)
     quote: str = "USDT"
+    # Mover lane — a second selection pass with a lower liquidity floor,
+    # ranked by the size of the 24h move instead of by volume.
+    #
+    # Ranking by volume is a lagging filter: a coin enters the top-N *because*
+    # it already pumped, so the detectors meant to catch a move early never see
+    # the symbol until the move is over. This lane scans mid-caps while they are
+    # moving but before they are volume leaders. It is deliberately capped and
+    # floored — the point is to widen the funnel, not to scan illiquid pairs the
+    # bot could never get filled on.
+    mover_lane: bool = True
+    mover_top_n: int = 15                     # extra symbols this lane may add
+    mover_min_quote_volume: float = 3_000_000  # its own (lower) liquidity floor
+    mover_min_change_pct: float = 8.0          # |24h change| to qualify
 
 
 @dataclass(frozen=True)
@@ -1132,6 +1145,10 @@ class Settings:
             dynamic=_env_bool("UNIVERSE_DYNAMIC", True),
             top_n=_env_int("UNIVERSE_TOP_N", 30),
             min_quote_volume=_env_float("UNIVERSE_MIN_QUOTE_VOLUME", 10_000_000),
+            mover_lane=_env_bool("UNIVERSE_MOVER_LANE", True),
+            mover_top_n=_env_int("UNIVERSE_MOVER_TOP_N", 15),
+            mover_min_quote_volume=_env_float("UNIVERSE_MOVER_MIN_QUOTE_VOLUME", 3_000_000),
+            mover_min_change_pct=_env_float("UNIVERSE_MOVER_MIN_CHANGE_PCT", 8.0),
         )
         ai = AISettings(
             enabled=_env_bool("AI_DEBATE_ENABLED", False),

@@ -78,6 +78,90 @@ def test_prepump_no_signal_flat():
     assert PrePumpDetector().evaluate("X", _flat(80)) is None
 
 
+def _prepump_series(coil_bars: int, breakout_mult: float = 1.0):
+    """Ramp -> base of ``coil_bars`` -> one breakout bar closing above it.
+
+    ``coil_bars`` is the knob that mattered: the original fixture used 18, short
+    enough that the Bollinger width was still falling monotonically into the
+    breakout and an FvG from the ramp was still inside the 50-bar lookback.
+    Real bases run for days, and the identical setup scored 10 points lower on
+    one — under the threshold, silently, for every symbol the bot scanned.
+    """
+    cs = []
+    p = 90.0
+    for i in range(41):
+        p += 0.4
+        cs.append(_c(i, p - 0.1, p + 0.3, p - 0.2, p, 100.0))
+    base = cs[-1].close
+    for k in range(coil_bars):
+        cs.append(_c(41 + k, base, base + 0.25, base - 0.25,
+                     base + (0.05 if k % 2 else -0.05), 90.0))
+    move = 1.3 * breakout_mult
+    cs.append(_c(41 + coil_bars, base, base + move * 1.25, base - 0.1, base + move, 260.0))
+    return cs
+
+
+def test_prepump_fires_on_a_realistically_long_base():
+    """The regression the 18-bar fixture could not see.
+
+    A base of 60-150 bars is what a 1h pre-pump actually looks like; the
+    detector emitted nothing on one for months while this file stayed green.
+    """
+    for coil in (60, 90, 150):
+        cand = PrePumpDetector().evaluate("X", _prepump_series(coil))
+        assert cand is not None, f"no signal on a {coil}-bar base"
+        assert cand.signal_type == "PREPUMP"
+        assert cand.direction == "LONG"
+        assert _valid_geometry(cand)
+
+
+def test_prepump_scoring_is_reachable_on_the_bar_its_gate_requires():
+    """No scored component may contradict the mandatory breakout gate.
+
+    The detector went silent because several did — a VWAP *discount* award and
+    an RSI band that a breakout bar cannot sit in — leaving a ceiling below the
+    threshold. Asserting the achieved score clears the bar it is graded against
+    is what makes that arithmetic visible instead of invisible.
+    """
+    cand = PrePumpDetector().evaluate("X", _prepump_series(90))
+    assert cand is not None
+    assert cand.score >= PrePumpDetector().score_threshold
+
+
+def test_prepump_ignores_a_breakout_with_no_coil_to_release():
+    """A breakout bar the size of its neighbours is MOMENTUM's setup, not this
+    one — the market was already moving, nothing was compressed."""
+    cs = []
+    p = 90.0
+    for i in range(100):
+        p += 0.5
+        cs.append(_c(i, p - 0.1, p + 0.9, p - 0.8, p, 100.0))
+    cs.append(_c(100, p, p + 1.2, p - 0.1, p + 1.0, 260.0))
+    assert PrePumpDetector().evaluate("X", cs) is None
+
+
+def test_prepump_declines_to_chase_a_move_already_underway():
+    """Same coil, but entered several expansion bars late: price has left VWAP
+    behind and the base is no longer in the lookback window. That is somebody
+    else's exit liquidity, not an entry."""
+    cs = _prepump_series(90)
+    p = cs[-1].close
+    for k in range(6):  # keep expanding, well past the release
+        o = p
+        p *= 1.12
+        cs.append(_c(200 + k, o, p * 1.03, o * 0.99, p, 300.0))
+    assert PrePumpDetector().evaluate("X", cs) is None
+
+
+def test_prepump_carries_a_wider_chase_limit_than_the_global_default():
+    """A breakout is entered on the bar that resolves it, so the move it exists
+    to catch starts at the quote. The screener's mean-reversion default dropped
+    these before they were ever sent."""
+    cand = PrePumpDetector().evaluate("X", _prepump_series(90))
+    assert cand is not None
+    assert cand.max_chase_r is not None and cand.max_chase_r > 0.5
+
+
 def test_prepump_requires_breakout_confirmation():
     # Same squeeze, but the last candle stays INSIDE the range (no breakout) —
     # must not fire (the 0/8 mid-squeeze failure mode).

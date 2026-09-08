@@ -35,6 +35,11 @@ class MomentumBreakoutDetector(Detector):
     timeframe = "1h"
     min_candles = 60
 
+    #: A breakout is entered on the bar that resolves it, so the move it exists
+    #: to catch begins at the quote. The screener's global chase cap is sized
+    #: for mean reversion and drops these before they are ever sent.
+    max_chase_r = 1.5
+
     def __init__(
         self,
         rsi_long: float = 60.0,
@@ -207,4 +212,5 @@ class MomentumBreakoutDetector(Detector):
             timeframe=self.timeframe,
             entry_mode="MOMENTUM_NOW",
             tps=tps,
+            max_chase_r=self.max_chase_r,
         )
