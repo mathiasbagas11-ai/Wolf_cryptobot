@@ -78,11 +78,11 @@ and unit-tested.
 
 | Detector | Bias | Trigger | Threshold |
 |----------|------|---------|-----------|
-| `MOMENTUM` | both | Range breakout + RSI/MACD/volume confirmation | ≥65 |
+| `MOMENTUM` | both | Range breakout + RSI/MACD/volume confirmation | ≥80 |
 | `PREPUMP` | LONG | Coil release (breakout bar ≥2.5× the base's range) + volume + momentum, near VWAP | ≥65 |
 | `PREDUMP` | SHORT | Bearish RSI divergence + over-extension + rejection (distribution) | ≥65 |
-| `SCALP` | both | Liquidity sweep (stop-hunt) + volume spike + RSI extreme | ≥60 |
-| `SWING` | both | Trend (EMA align) + pullback to EMA20 + rejection candle | ≥65 |
+| `SCALP` | both | Liquidity sweep (stop-hunt) + volume spike + RSI extreme | ≥65 |
+| `SWING` | both | Trend (EMA align) + pullback to EMA20 + rejection candle | ≥80 |
 | `TRAP` | both | Failed-breakout reversal: sweep + reclaim + volume climax + VWAP grab + exhaustion (anti exit-liquidity) | ≥80 (HIGH only) |
 
 Add a detector by writing one module and appending it to `default_detectors()`
@@ -196,6 +196,48 @@ passed; the pairing was broken.
 `test_no_detector_crashes_through_the_screener` close that gap by invoking each
 *real* detector the way production does — the second through the screener
 itself, so a future drift cannot hide behind its exception handler.
+
+### When the gates decide and the threshold does not
+
+Two detectors were audited for the reverse of PREPUMP's problem — not a
+threshold nothing can reach, but one nothing can miss.
+
+`MOMENTUM`'s gates guarantee `breakout` (35), `macd_confirms` (20) and at least
+the lower volume tier (10), and `vwap_aligned` (20) fired on **100%** of 7020
+bars swept: a close beyond a 50-candle extreme is above the 40-candle VWAP in
+all but contrived cases. That is a floor of **85** against a threshold of
+**80** — lowest score observed exactly 85, median 100. Every bar clearing the
+gates becomes a signal, and `confluence_level` (HIGH at ≥85) is therefore always
+HIGH.
+
+It also paid 15 points for an FvG-launch test that could never be satisfied.
+The test asked whether the 50-candle extreme the breakout had just cleared sat
+inside a Fair Value Gap drawn from the last 40 candles — but the windows
+overlap, so a bull gap's lower edge is `c1.high` for a candle inside the
+breakout window, and that window's minimum low is at or below it by
+construction. Zero hits across 3738 breakout bars, never within 0.43 of an
+edge. Removed: 15 points that never arrived, so no decision changes, and it had
+also been claimed as a `primary_component`, which rested the `PRIMARY` label on
+a test that could not fire.
+
+`not_overextended` (5) is dead in practice for the same family of reasons — it
+wants RSI under 75 on a long, and the calmest breakout swept printed 77, median
+98 — but it is not *forbidden*, so it stays. Neither it nor `vwap_aligned` is
+provable the way PREDUMP's `atr/price` was: VWAP(40) includes the breakout
+candle, whose typical price can exceed its close on a long upper wick with
+dominant volume. Only a provable constant can become a gate with provably
+identical decisions.
+
+Two things follow and neither is acted on, because both are strategy changes
+with no trade behind them. Raising the threshold above the floor would make the
+score mean something again. And `Screener._best_candidate` picks one candidate
+per symbol with `max(score)` across floors of 0 (`PREPUMP`, `PREDUMP`), 20
+(`SCALP`), 22 (`TRAP`), 55 (`SWING`) and 85 (`MOMENTUM`) — so MOMENTUM takes a
+contested symbol on its scoring floor rather than on the strength of the read.
+
+`SWING` came out the healthiest of the six: a floor of 55 against a threshold
+of 80, every one of its nine components observed firing, and a score that
+genuinely rejects.
 
 ### The evidence bucket — what a score was made of
 

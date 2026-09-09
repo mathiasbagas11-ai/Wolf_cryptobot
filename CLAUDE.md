@@ -63,6 +63,16 @@ make money" needs thousands of trades. "Is rule A better than B on these same
 trades" got a decisive answer at n=66, because the market move cancels. Reach
 for `/whatif` before reaching for patience.
 
+**An award whose condition the gate has already defined away is free to add
+and never pays.** MOMENTUM paid 15 points for an FvG-launch test that probed
+the 50-candle extreme it had just cleared against gaps drawn from the last 40
+candles. The windows overlap, so a bull gap's lower edge is some in-window
+candle's high and the window's minimum low is at or below it by construction —
+zero hits over 3738 breakout bars. It read as confluence on the card and as a
+`primary_component` in the evidence bucket. **Before trusting an award, ask
+which window each side of its comparison comes from; if the gate already fixed
+one of them, the test is vacuous.**
+
 **A score hides its own composition, and a constant among the awards hides
 twice.** PREDUMP's `atr/price < 0.1` paid 5 points on 100% of 1320 bars
 measured: not a component but a threshold shift wearing evidence's clothes. It
@@ -135,16 +145,17 @@ duplicate its content into this file** — one of them would go stale.
 Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
 `universe-volume-ranking-is-lagging`, `chase-gate-self-blinding`,
 `predump-thin-evidence`, `trap-detector-dead-19-days` and
-`gated-awards-are-constants`.
+`gated-awards-are-constants`. One added 2026-09-09:
+`momentum-score-cannot-reject`.
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-08, HEAD `trap-revived`
+## Status — 2026-09-09, HEAD `momentum-audited`
 
-981 tests green. Working tree clean.
+983 tests green. Working tree clean.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -197,6 +208,16 @@ observations); `whale:WITH` has flipped sign four times; `learn:BENCH` won and
 handful of signals a day — the sweep audit puts it at ~0.23% of bars. Its
 absence was a crashed signature, not strictness; see Lessons.
 
+**MOMENTUM's threshold decides nothing, and this is not fixed.** Its gates
+guarantee 65 and `vwap_aligned` fires on 100% of bars, so the floor is 85
+against a threshold of 80 — lowest score seen 85, median 100, `confluence_level`
+always HIGH. Two consequences worth holding: the score carries almost no
+information about a MOMENTUM signal, and `screener._best_candidate` picks one
+candidate per symbol with `max(score)` across floors of 0 (PREPUMP, PREDUMP),
+20 (SCALP), 22 (TRAP), 55 (SWING) and 85 (MOMENTUM) — so MOMENTUM takes a
+contested symbol on its floor rather than on the read. Both remedies are
+strategy changes; they wait.
+
 **New on the card: the `evidence` bucket.** Splits every strategy into
 `PRIMARY` (the signal carried its detector's own `primary_components`) and
 `THIN` (it cleared the threshold on context alone), with `UNRECORDED` for rows
@@ -228,10 +249,16 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    `vwap` 95.0% against `order_block` 0.3%; TRAP's `sweep` 100% and
    `rejection_wick` 86.4% — the gate already demands the reclaim that makes the
    wick dominant — against `divergence` 3.8%; SWING awards 55 of its 80 for
-   things it already gated, MOMENTUM 55 of its 65. Unlike PREDUMP's
-   `atr/price`, none of these is a clean constant, so none can be removed with
-   provably identical decisions. Do not reweight them from the sweep; that is
-   the chase-gate mistake. The `evidence` bucket now covers all six strategies.
+   things it already gated and MOMENTUM 85 of its 80, which is the one case
+   where the threshold has stopped deciding anything at all (see Status).
+   MOMENTUM's `not_overextended` (5) is dead in practice too — the calmest
+   breakout swept printed RSI 77 against a ceiling of 75, median 98. Unlike
+   PREDUMP's `atr/price`, none of these is a clean constant, so none can be
+   removed with provably identical decisions; the one that could — an FvG probe
+   the gate forbade outright — is gone. Do not reweight the rest from the
+   sweep; that is the chase-gate mistake. SWING is the healthiest of the six:
+   floor 55 against 80, no unreachable component, and its score genuinely
+   rejects. The `evidence` bucket covers all six strategies.
 7. **PREDUMP shorts into strength and nothing stops it.** It is the only
    directional detector with no market-context gating in effect: exempt from
    the regime filter (`COUNTER_TREND_TYPES`), the bounce guard that covers it
@@ -258,7 +285,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 981 tests, ~5s
+python -m pytest            # 983 tests, ~6s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

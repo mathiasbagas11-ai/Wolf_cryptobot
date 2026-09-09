@@ -8,6 +8,9 @@ confirms no false positives.
 
 from __future__ import annotations
 
+import inspect
+import pathlib
+
 from wolf.detectors import (
     LiquidityTrapDetector,
     PreDumpDetector,
@@ -289,6 +292,50 @@ def test_a_detectors_primary_components_are_names_it_actually_writes():
     for det in default_detectors():
         for name in getattr(det, "primary_components", ()):
             assert isinstance(name, str) and name
+
+
+def test_momentum_does_not_score_the_extreme_it_just_cleared():
+    """MOMENTUM used to pay 15 points for an FvG-launch test that could not be
+    satisfied, and this is the shape of the mistake rather than the mistake.
+
+    It asked whether the 50-candle extreme the breakout had just cleared sat
+    inside a Fair Value Gap drawn from the last 40 candles. The two windows
+    overlap: a bull gap's lower edge is `c1.high` for some candle inside the
+    breakout window, so that window's minimum low is at or below the edge by
+    construction, and the short side mirrors it. Measured over 3738 breakout
+    bars it was inside a gap zero times, never within 0.43 of an edge.
+
+    Asserting the removal keeps the audit from having to be redone: a future
+    confluence award that probes a level the gate has already defined away
+    would be invisible again, since it costs nothing and simply never pays.
+    """
+    from wolf.detectors import MomentumBreakoutDetector
+
+    assert "fvg_launch" not in MomentumBreakoutDetector.primary_components
+    src = inspect.getsource(MomentumBreakoutDetector.evaluate)
+    assert "price_in_fvg" not in src
+
+
+def test_thresholds_match_what_the_readme_documents():
+    """Two detectors ran at 80 while the README said 65 for months, which is
+    the same class of drift as a stale docstring: whoever reads the table to
+    decide whether a threshold is reasonable is reading a different bot."""
+    import re
+
+    from wolf.detectors import default_detectors
+
+    readme = (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text()
+    documented = {
+        m.group(1): int(m.group(2))
+        # Tolerant of trailing notes in the cell (TRAP's reads "≥80 (HIGH only)").
+        for m in re.finditer(r"\| `(\w+)` \|[^|]*\|[^|]*\| ≥(\d+)", readme)
+    }
+    for det in default_detectors():
+        if det.name in documented:
+            assert documented[det.name] == det.score_threshold, (
+                f"README says {det.name} ≥{documented[det.name]}, "
+                f"code uses {det.score_threshold}"
+            )
 
 
 def test_predump_no_longer_scores_a_constant():

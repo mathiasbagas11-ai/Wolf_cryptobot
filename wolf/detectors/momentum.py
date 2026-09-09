@@ -1,15 +1,35 @@
 """Momentum breakout detector.
 
-Fires on a clean breakout above/below a **30-candle structural level** — a
-longer lookback than the old 20-candle window, producing stronger reference
-points. Three hard gates filter noise before scoring begins:
-  1. MACD histogram must confirm the breakout direction.
-  2. Volume must be >= 1.8x average (real momentum, not a fake-out).
-  3. RSI must show conviction (>= 58 long / <= 42 short).
+Fires on a clean breakout above/below a **50-candle structural level**. Four
+hard gates filter noise before scoring begins:
+  1. EMA20/EMA50 must agree with the breakout direction.
+  2. MACD histogram must confirm it.
+  3. Volume must be >= 2.0x average (real momentum, not a fake-out).
+  4. RSI must show conviction (>= 60 long / <= 40 short), and the aggressive
+     side of the tape must not be opposing — a level taken out on selling is a
+     trap, not a long.
 
-VWAP context and a Fair Value Gap launch zone add bonus points, rewarding
-breakouts that start from a structurally significant area rather than random
-mid-range price action.
+VWAP context and a structural break (BOS/ChoCh) add bonus points.
+
+What the score does and does not decide
+---------------------------------------
+Almost nothing, and that is worth knowing before reading one. The gates above
+guarantee `breakout` (35), `macd_confirms` (20) and at least the lower volume
+tier (10); `vwap_aligned` (20) landed on 100% of 7020 bars swept, because a
+close beyond a 50-candle extreme is above the 40-candle VWAP in all but
+contrived cases. That is a floor of 85 against a threshold of 80, and the
+lowest score observed was exactly 85 with a median of 100. Every bar that
+clears the gates becomes a signal, and `confluence_level` is therefore always
+HIGH.
+
+Two consequences. `not_overextended` (5) asks for RSI below 75 on a long,
+which the sweep never once saw — a close above a 50-candle high printed RSI 77
+at its calmest, median 98 — so it is dead in practice, though not forbidden
+the way the removed FvG award was. And the screener picks one candidate per
+symbol with `max(score)`: this floor of 85 sits above PREPUMP's and SCALP's
+entire ranges, so MOMENTUM wins a contested symbol on its scoring floor rather
+than on the strength of the read. Raising the threshold would fix that and is
+a strategy change, so it waits for the sample.
 """
 
 from __future__ import annotations
@@ -36,10 +56,12 @@ class MomentumBreakoutDetector(Detector):
     min_candles = 60
 
     #: The breakout itself and the MACD confirmation are gated above, so they
-    #: arrive on every signal — 55 of the threshold before anything varies.
-    #: These are the components that actually distinguish one breakout from
-    #: the next.
-    primary_components = ("volume_surge", "structure_break", "fvg_launch")
+    #: arrive on every signal — 55 of the threshold before anything varies, and
+    #: `vwap_aligned` brings it to 85 against a threshold of 80. These two are
+    #: what actually distinguish one breakout from the next: measured over 7020
+    #: bars they land on 56.5% and 55.3% of the signals emitted, and 78% carry
+    #: at least one.
+    primary_components = ("volume_surge", "structure_break")
 
     #: Deliberately left at the screener's default. A breakout arguably deserves
     #: a wider chase — the move it exists to catch begins at the quote — but
@@ -183,12 +205,19 @@ class MomentumBreakoutDetector(Detector):
                 award("vwap_aligned", 20,
                       f"Breaking below VWAP {vwap_val:.6g} — momentum with fair value")
 
-        # FvG launch zone: breakout starting from inside an imbalance (+15)
-        fvgs = ind.find_fvgs(candles, lookback=40)
-        fvg_kind = "BULL" if direction == "LONG" else "BEAR"
-        if ind.price_in_fvg(recent_low if direction == "LONG" else recent_high, fvgs, fvg_kind):
-            award("fvg_launch", 15,
-                  f"Breakout launching from {fvg_kind} FvG — imbalance resolved")
+        # An FvG-launch award used to sit here, worth 15, and it could never be
+        # paid. It asked whether the 50-candle extreme this breakout had just
+        # cleared sat inside a Fair Value Gap drawn from the last 40 candles —
+        # two overlapping windows, which is what makes the test vacuous. A bull
+        # gap's lower edge is some candle's high, and that candle is inside the
+        # breakout window too, so the window's minimum low is at or below that
+        # edge by construction; the short side mirrors it. Measured over 3738
+        # breakout bars the extreme was inside a gap zero times, never closer
+        # than 0.43 to an edge, and only a zero-range candle could tie it.
+        #
+        # Removing it changes no decision — 15 points that never arrived — but
+        # it stops the score advertising a component the gate forbids. See
+        # `test_momentum_does_not_score_the_extreme_it_just_cleared`.
 
         # BOS/ChoCh: breakout aligns with a structural break (+15 BOS, +20 ChoCh)
         sb = struct.find_structure_break(candles, lookback=40)
