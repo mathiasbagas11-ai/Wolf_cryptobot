@@ -798,6 +798,12 @@ class Screener:
                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "symbol": candidate.symbol,
                 "strategy": candidate.strategy,
+                # The tracker keys its timeout off signal_type, not strategy,
+                # and the two differ for MOMENTUM ("SCREENER"). Grading a drop
+                # means replaying it under the timeout it would have had, so
+                # the type is recorded rather than guessed back from the name.
+                "signal_type": candidate.signal_type,
+                "timeframe": candidate.timeframe,
                 "direction": candidate.direction,
                 "score": candidate.score,
                 "quoted": quoted,

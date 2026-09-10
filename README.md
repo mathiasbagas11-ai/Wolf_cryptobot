@@ -239,6 +239,44 @@ contested symbol on its scoring floor rather than on the strength of the read.
 of 80, every one of its nine components observed firing, and a score that
 genuinely rejects.
 
+### Grading what the gate threw away
+
+Recording the chase drops made the gate visible; it did not make it judged. A
+count says how often the gate fires and says nothing about whether what it
+rejected would have paid — and without that, the limit can only be argued from
+replayed candle shapes, which is how 1.5R was picked and then withdrawn.
+
+`wolf/chase_audit.py` closes that loop. Each recorded drop is reconstituted as
+the signal the screener *would* have written had the gate not fired, and
+replayed through the same evaluator that grades real trades, over the candles
+that actually followed. A re-quote only ever moves one of three things, which
+is why the record is enough:
+
+| | |
+|---|---|
+| **entry** | becomes the live price — the drop is decided *after* it is read |
+| **stop** | stays put; it marks a level, which is why chasing stretches the risk unit |
+| **ladder** | rebuilt on that stretched unit at the R multiples the policy sets |
+
+`entry_quoted_live` is set on the rebuild, which is not cosmetic: it tells the
+replay the entry was priced at the drop instant rather than at an earlier bar
+close, so the gap between them is neither credited to the entry nor hidden from
+the stop — on exactly the fast moves the gate fires on.
+
+Read the **distance split** first. It compares drops that ran far past the
+quote against drops that ran less far, within one population, and can argue the
+limit without a second sample. The **`vs taken`** line compares drops against
+the trades the bot took, which are different setups — so it is a level question,
+priced as one (Welch, charged the live book's `mean_open`), and it will say
+nothing for a long time. Unresolved drops are reported separately and never
+folded in silently: one whose history ran out is marked to the last close,
+which is a guess about a position that was never closed.
+
+```
+/whatif chase          # Telegram
+GET /whatif/chase      # one klines request per drop, hence a command
+```
+
 ### The evidence bucket — what a score was made of
 
 A total says nothing about its composition, and the components behind one are

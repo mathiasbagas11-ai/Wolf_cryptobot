@@ -38,6 +38,7 @@ _HELP = (
     "<code>/whatif cost</code> — what each max_cost_r would have kept\n"
     "<code>/whatif ladder</code> — re-cut the TP ladder on the same trades\n"
     "<code>/whatif whale</code> — what each whale-veto policy would have kept\n"
+    "<code>/whatif chase</code> — what the chase gate threw away, replayed\n"
     "<code>/ai</code> — is the debate layer actually answering?\n"
     "<code>/tested</code> — what has already been tried, and what settled it\n"
     "<code>/help</code> — this message"
@@ -118,6 +119,24 @@ class CommandRouter:
             f"<code>{esc(st.get('reason') or 'unknown')}</code>"
         )
 
+    def _mean_open(self) -> float:
+        """Mean concurrent positions, for charging an unpaired comparison.
+
+        The chase drops were never open positions and have no concurrency of
+        their own, so the honest discount is whatever the live book was
+        carrying while they were being dropped. Falls back to 1.0 — no
+        discount — rather than to a guess, because overstating overlap would
+        flatter nothing and understating it would manufacture confidence.
+        """
+        try:
+            from wolf.diagnose import diagnose
+
+            diag = diagnose(self._app.tracker, window_hours=168)
+            return float(diag.get("concurrency", {}).get("mean_open") or 1.0) or 1.0
+        except Exception:
+            log.debug("Could not read mean_open for the chase audit", exc_info=True)
+            return 1.0
+
     def _whatif(self, arg: str) -> str:
         """Re-score resolved signals under a rule that was not the one in force.
 
@@ -133,6 +152,18 @@ class CommandRouter:
         )
 
         try:
+            if arg.lower().startswith("chase"):
+                # The one gate whose output was invisible until its drops were
+                # recorded: they never reach record_signal, so nothing on the
+                # daily card counts them. Replaying them is the only way the
+                # limit gets argued from trades instead of from candle shapes.
+                from wolf.chase_audit import grade_chase_drops, render as render_chase
+
+                overlap = self._mean_open()
+                report = grade_chase_drops(
+                    self._app.tracker, ladder=self._app.settings.ladder, overlap=overlap
+                )
+                return "<pre>" + esc(render_chase(report)) + "</pre>"
             if arg.lower().startswith("ladder"):
                 return (
                     "<pre>"

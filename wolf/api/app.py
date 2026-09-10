@@ -27,6 +27,7 @@ from wolf.app import Application, ai_status, build_application, build_deepdive
 from wolf.config import Settings
 from wolf.diagnose import diagnose, render_digest
 from wolf.logging_setup import setup_logging
+from wolf.chase_audit import grade_chase_drops, render as render_chase
 from wolf.whatif import compare_stop_rules, render as render_whatif
 
 
@@ -196,6 +197,32 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             "sample": report.get("sample", 0),
             "results": [asdict(r) for r in report.get("results", [])],
         }
+
+    @api.get("/whatif/chase")
+    def whatif_chase(limit: int = 200, overlap: float = 0.0, format: str = "text"):
+        """Replay the candidates the chase gate dropped before they were logged.
+
+        The gate rejects a market entry that has already run past the price its
+        detector quoted, and it does so before ``record_signal`` — so nothing it
+        drops appears in ``traded``, in a bucket, or in a strategy row. The
+        drops are persisted for exactly this: each is rebuilt as the signal the
+        re-quote would have written and graded over the candles that followed.
+
+        Costs one klines request per drop, like ``/whatif/stops``, which is why
+        it is asked for rather than folded into the digest. ``overlap`` charges
+        the comparison an independence discount; 0 reads the live book's own
+        mean_open, matching what the digest charges everything else.
+        """
+        if overlap <= 0:
+            diag = diagnose(app_obj.tracker, window_hours=168)
+            overlap = float(diag.get("concurrency", {}).get("mean_open") or 1.0) or 1.0
+        report = grade_chase_drops(
+            app_obj.tracker, ladder=app_obj.settings.ladder,
+            limit=limit, overlap=overlap,
+        )
+        if format == "text":
+            return PlainTextResponse(render_chase(report))
+        return report
 
     @api.post("/signals/outcomes/import", dependencies=[Depends(require_api_key)])
     def import_outcomes(payload: Any = Body(...)) -> dict:

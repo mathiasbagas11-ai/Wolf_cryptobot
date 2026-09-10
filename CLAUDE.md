@@ -153,9 +153,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-09, HEAD `momentum-audited`
+## Status — 2026-09-10, HEAD `chase-graded`
 
-983 tests green. Working tree clean.
+993 tests green. Working tree clean.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -182,22 +182,51 @@ limit from replayed candle shapes — argue it from those drops.** PREPUMP keeps
 contaminate.
 
 ```
-/diag 24h: n=9 eff=3 mean_open=2.36
-meanR +0.338  se 0.546  t +0.62 (nom +0.95)  netR +0.244  => INCONCLUSIVE
-cost 0.094R assumed / 0.060R measured, spread 9/9
-ladder avgWin +1.01R avgLoss -1.00R => needs WR>49.8%, fill 67/44/11
-ai CONFIRM=3 NEUTRAL=5 REJECT=1 — abstain 0%, two days running
-all 13 buckets padj = 1.000
+/diag 24h 2026-09-09: n=40 eff=9 mean_open=4.04
+meanR -0.335  se 0.299  t -1.12 (nom -2.26)  netR -0.403  => INCONCLUSIVE
+cost 0.068R assumed / 0.061R measured, spread 40/40 (first full coverage)
+by strategy: TRAP +0.051 (n=12) | PREDUMP -0.161 | SWING -0.250 | MOMENTUM -0.433 | SCALP -0.850 (n=10, wr=10)
+ladder avgWin +0.83R avgLoss -0.96R => needs WR>53.7%, fill 30/12/0
+chase 13 dropped (SCALP=9 TRAP=4) median 0.68R max 0.83R
+all 18 buckets padj = 1.000
 ```
 
-Volume 14 → 15 → 9 per day, trending down.
+Volume 9 → 40 per day. **`n` rose 4.4x and `eff` only 3x** — the mover lane and
+TRAP's revival bought less than the count suggests, exactly as the standing
+lesson says. The `t -1.12` against `nom -2.26` is the clearest illustration the
+card has produced of why rule 3 exists: read nominally it looks like evidence
+of losing, discounted it is nothing.
 
-**Sample target is not a fixed count.** ~77 independent observations are needed
-to resolve netR +0.244 at t=2. In nominal trades that is ~182 at `mean_open`
-2.36 and ~411 at 5.34 — so 3–6 weeks, and the number moves with overlap.
+**Sample target moved with the effect.** At `meanR -0.335` and `sd 0.94`,
+resolving at `|t|=2` needs `eff ≈ 31`; at ~9/day that is roughly 2–3 days, not
+weeks. The earlier 3–6 week figure was computed against a smaller effect.
 
-Read `/diag 72` for now; the daily card is too thin. From ~2026-09-14 a
-`/diag 168` window is one clean era.
+**Era hygiene on that card is only partial, and this matters.** Windowing is on
+resolution time (Broken #3), so with a 24h window: TRAP (4h timeout) and SCALP
+(10h) are provably one era — 22 of the 40 — while MOMENTUM and PREDUMP (48h)
+reach back to 09-07 and SWING (168h) to 09-02. Do not compare the last three
+against earlier cards.
+
+Read `/diag 72` for now. From ~2026-09-14 a `/diag 168` window is one clean era.
+
+**Watch, do not act.** `learn:BOOST` (n=24, -0.607) below `learn:PENALTY`
+(-0.208) below `learn:NONE` (+0.431) — monotonically inverted, and clean
+because learning is monitor-only. `ai:CONFIRM` (n=32, -0.410) below
+`ai:NEUTRAL` (+0.078), sixth card running. `padj = 1.000` on both.
+
+**Two things the 09-09 card said about instruments rather than markets.**
+PREPUMP still emitted **nothing** in 24h despite being fixed — 24h is short for
+a 1h detector needing a coil and a release, but if 72h is still zero there is
+another gate nobody has found. And the `evidence` bucket split 33 PRIMARY / 7
+UNRECORDED / **0 THIN**: with the primaries as chosen, everything qualifies, so
+the instrument cannot yet answer the PREDUMP question it was built for. If THIN
+is still empty after a few days the primary sets are too permissive and need
+tightening.
+
+TRAP's frequency was also badly mis-estimated here: the synthetic sweep said
+~0.23% of bars, about 1–3 signals a day. It produced 12 traded plus 4 chase
+drops in 24h — 5–16x the estimate, making it the second most productive
+detector rather than the rarest.
 
 **Watch list — patterns, not findings, do not act:** `ai:CONFIRM` at or near
 the bottom five cards running (windows overlap heavily, so not five
@@ -238,12 +267,18 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
 3. **Windowing uses resolution time** where era hygiene wants creation time.
 4. `wolf/reports/conviction.py` (AI conviction ranking) arrived via PR #32 from
    another session and has never been measured.
-5. **The chase limit is still unargued.** 0.5R was never derived from a trade
-   and neither was the 1.5R that briefly replaced it. Drops are now recorded, so
-   from ~2026-09-15 the card can say how often the gate fires and how far price
-   had run. Grading them needs one more piece that does not exist yet: a job
-   that re-prices a recorded drop against later candles to say what it would
-   have returned. Until that exists the record accumulates and settles nothing.
+5. **The chase limit is still unargued, but it is now answerable.** 0.5R was
+   never derived from a trade and neither was the 1.5R that briefly replaced
+   it. The first live reading (2026-09-09) says the gate is not a marginal
+   filter: 13 drops in 24h, SCALP=9 TRAP=4, and SCALP had 10 signals in the
+   ledger against 9 drops — **47% of its candidates rejected**. Every drop sat
+   below 1.5R, so the limit withdrawn on 09-08 would have admitted all
+   thirteen. `wolf/chase_audit.py` now grades them (`/whatif chase`, or
+   `GET /whatif/chase`): each is rebuilt as the signal the re-quote would have
+   written and replayed through the tracker's own evaluator. Read the
+   **distance split** first — it is within-population and can argue the limit
+   on its own. The `vs taken` line is unpaired, priced as a level question, and
+   will say nothing for a long time; that is correct, not a defect.
 6. **How much of each score is decided before any confluence is read.**
    Counting only bars past each detector's own gate: SCALP's `sweep` 100% and
    `vwap` 95.0% against `order_block` 0.3%; TRAP's `sweep` 100% and
@@ -285,7 +320,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 983 tests, ~6s
+python -m pytest            # 993 tests, ~6s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -296,6 +331,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/diagnose.py` | the diagnostic card — the project's centre of gravity |
 | `wolf/stats.py` | BH-FDR, Student-t, Welch gap with the overlap discount |
 | `wolf/whatif.py` | paired re-scoring: stop rules, ladder geometry, whale policies |
+| `wolf/chase_audit.py` | grades what the chase gate dropped — the one filter with no outcomes |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |
 
