@@ -58,6 +58,17 @@ the move by changing the geometry of every trade admitted past the old line.
 **Recording what a gate drops costs nothing and answers the question; moving a
 gate costs a sample and answers a different one.**
 
+**A measurement whose reach shrinks with time has to be taken on a schedule,
+not on demand.** The chase audit replayed drops when asked, and its first live
+run lost 21 of 48 to "no history reaching back". The replay needs 15m candles
+from now back to the drop, so the bars required grow every hour and a venue
+serving fewer returns a window that opens too late — which means the skips
+correlate with age and with which venue serves the symbol, and the surviving
+sample leans toward recent drops on liquid pairs. A 44% loss on a non-random
+criterion can manufacture the whole effect it was built to detect. Grading now
+runs hourly, once per drop, close to the event, and the verdict is stored.
+**Ask when a measurement stops being possible, not only whether it is correct.**
+
 **Level questions are unaffordable; paired questions are not.** "Does the bot
 make money" needs thousands of trades. "Is rule A better than B on these same
 trades" got a decisive answer at n=66, because the market move cancels. Reach
@@ -153,9 +164,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-10, HEAD `chase-graded`
+## Status — 2026-09-14, HEAD `chase-graded-on-schedule`
 
-993 tests green. Working tree clean.
+1003 tests green. Working tree clean.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -279,6 +290,14 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    **distance split** first — it is within-population and can argue the limit
    on its own. The `vs taken` line is unpaired, priced as a level question, and
    will say nothing for a long time; that is correct, not a defect.
+
+   First run (2026-09-13, 48 drops) said: near `<=0.83R` +0.427 (n=14) vs far
+   `>0.83R` +0.306 (n=13) — **no decay across the observed 0.5–1.2R**, though
+   the far cell leans on 4 marks-to-close. It also exposed the instrument's own
+   fault, so **none of it was acted on**: 21 of 48 were unreplayable on a
+   criterion correlated with age. Grading is now hourly and stored (see
+   Lessons); from ~2026-09-16 the sample should be near-complete rather than
+   56%, and only then is the limit worth re-arguing.
 6. **How much of each score is decided before any confluence is read.**
    Counting only bars past each detector's own gate: SCALP's `sweep` 100% and
    `vwap` 95.0% against `order_block` 0.3%; TRAP's `sweep` 100% and
@@ -320,7 +339,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 993 tests, ~6s
+python -m pytest            # 1003 tests, ~5s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

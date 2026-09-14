@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from wolf.chase_audit import CHASE_DROPS_KEY, _as_signal, grade_chase_drops, render
+from wolf.chase_audit import (
+    CHASE_DROPS_KEY, _as_signal, grade_chase_drops, grade_pending_drops, render,
+)
 from wolf.config import LadderSettings, TrackerSettings
 from wolf.models import Candle, EntryMode, Signal, Status
 from wolf.tracker import OUTCOMES_KEY, Tracker
@@ -138,8 +140,9 @@ def test_an_ungradeable_drop_is_counted_not_hidden(store):
     ])
     report = grade_chase_drops(_tracker(store, {"WINNER": _rising()}))
     assert report["overall"]["n"] == 1
-    assert report["skipped_unbuildable"] == 1
-    assert report["skipped_nohistory"] == 1
+    assert report["skipped"]["unbuildable"] == 1
+    assert report["skipped"]["no_data"] == 1
+    assert report["skipped"]["too_old"] == 0
     assert "skipped" in render(report)
 
 
@@ -213,3 +216,113 @@ def test_nothing_recorded_says_so_rather_than_reporting_zero(store):
     report = grade_chase_drops(_tracker(store))
     assert report["scored"] == []
     assert "no chase drops recorded" in render(report)
+
+
+# ── Scheduled grading ────────────────────────────────────────────────────
+#
+# The audit used to replay on demand and the first live run lost 21 of 48
+# drops, all to "no history reaching back". That is structural, not bad luck:
+# the replay asks for candles from now back to the drop, so the bars required
+# grow every hour and skips correlate with age. Grading near the event and
+# storing the verdict is the fix; these cover it.
+
+def test_a_drop_is_graded_once_and_the_verdict_is_stored(store):
+    store.write(CHASE_DROPS_KEY, [_drop(symbol="WINNER", hours_ago=12.0)])
+    tracker = _tracker(store, {"WINNER": _rising()})
+
+    result = grade_pending_drops(tracker)
+    assert result["graded"] == 1
+
+    row = store.read(CHASE_DROPS_KEY)[0]
+    assert row["graded"]["r"] > 0
+    assert row["graded"]["resolved"] is True
+
+    # Re-running does not re-grade: the verdict is the record, not a cache.
+    assert grade_pending_drops(tracker)["graded"] == 0
+
+
+def test_a_drop_too_young_to_have_settled_is_left_alone(store):
+    """The floor is the strategy's own timeout, so the replay has had as long
+    as the trade would have. SCALP times out at 10h."""
+    store.write(CHASE_DROPS_KEY, [_drop(symbol="WINNER", hours_ago=2.0)])
+    assert grade_pending_drops(_tracker(store, {"WINNER": _rising()}))["graded"] == 0
+    assert "graded" not in store.read(CHASE_DROPS_KEY)[0]
+
+
+def test_a_drop_past_the_ceiling_is_never_graded_late(store):
+    """Beyond the ceiling the replay cannot be trusted to reach back, and an
+    answer computed from the wrong prices is worse than no answer."""
+    store.write(CHASE_DROPS_KEY, [_drop(symbol="WINNER", hours_ago=200.0)])
+    tracker = _tracker(store, {"WINNER": _rising()})
+    result = grade_pending_drops(tracker)
+    assert result["graded"] == 0 and result["expired"] == 1
+
+
+def test_a_transient_fetch_failure_leaves_the_drop_pending(store):
+    """A venue that answers nothing this hour may answer the next. Recording a
+    verdict would spend the drop's one chance on a network blip."""
+    store.write(CHASE_DROPS_KEY, [_drop(symbol="LATER", hours_ago=12.0)])
+    tracker = _tracker(store, {})                      # serves nothing
+    assert grade_pending_drops(tracker)["failed"] == 1
+    assert "graded" not in store.read(CHASE_DROPS_KEY)[0]
+
+    tracker = _tracker(store, {"LATER": _rising()})    # venue comes back
+    assert grade_pending_drops(tracker)["graded"] == 1
+
+
+def test_an_unbuildable_drop_is_recorded_rather_than_retried_forever(store):
+    """Unbuildable is permanent — an inverted geometry does not heal — so it is
+    settled once instead of costing a fetch every hour until it ages out."""
+    store.write(CHASE_DROPS_KEY, [_drop(symbol="WINNER", sl=101.0, hours_ago=12.0)])
+    tracker = _tracker(store, {"WINNER": _rising()})
+    grade_pending_drops(tracker)
+    assert store.read(CHASE_DROPS_KEY)[0]["graded"]["error"] == "unbuildable"
+    assert grade_pending_drops(tracker)["considered"] == 0
+
+
+def test_the_audit_prefers_a_stored_verdict_over_a_fresh_replay(store):
+    """The stored verdict was taken when the history still reached. Refetching
+    would answer the same question from a worse vantage point, and on old drops
+    would not answer it at all."""
+    # The path has to span the drop's age, or the grader fails for the very
+    # reason this test is about — 20h needs 80 bars of 15m, not 60.
+    store.write(CHASE_DROPS_KEY, [_drop(symbol="GONE", hours_ago=20.0)])
+    assert grade_pending_drops(_tracker(store, {"GONE": _rising(n=120)}))["graded"] == 1
+
+    # The venue now serves nothing for that symbol; the answer survives anyway.
+    report = grade_chase_drops(_tracker(store, {}))
+    assert report["overall"]["n"] == 1
+    assert report["from_store"] == 1
+    assert sum(report["skipped"].values()) == 0
+    assert "graded near the event" in render(report)
+
+
+def test_the_skip_breakdown_names_the_fault(store):
+    """One number covering three faults with three different remedies is what
+    let a 44% loss read as incidental."""
+    store.write(CHASE_DROPS_KEY, [
+        _drop(symbol="WINNER", hours_ago=12.0),
+        _drop(symbol="WINNER", hours_ago=300.0),          # past the ceiling
+        _drop(symbol="NOSERVE", hours_ago=12.0),          # venue serves nothing
+        _drop(symbol="WINNER", sl=101.0, hours_ago=12.0),  # cannot be rebuilt
+    ])
+    report = grade_chase_drops(_tracker(store, {"WINNER": _rising()}))
+    assert report["skipped"] == {"too_old": 1, "no_data": 1, "unbuildable": 1}
+    card = render(report)
+    assert "aged out" in card and "no candles served" in card
+
+
+def test_the_grading_job_is_scheduled():
+    """A measurement job whose schedule is the point: it has to run while the
+    drops it grades are still reachable."""
+    from wolf.chase_audit import is_gradeable
+
+    settings = TrackerSettings()
+    now = datetime.now(timezone.utc)
+    # SCALP times out at 10h, the ceiling is 60h.
+    assert not is_gradeable(_drop(hours_ago=2.0), settings, now)
+    assert is_gradeable(_drop(hours_ago=12.0), settings, now)
+    assert not is_gradeable(_drop(hours_ago=80.0), settings, now)
+    # MOMENTUM times out at 48h, inside the ceiling with slack to spare.
+    momentum = _drop(strategy="MOMENTUM", signal_type="SCREENER", hours_ago=50.0)
+    assert is_gradeable(momentum, settings, now)

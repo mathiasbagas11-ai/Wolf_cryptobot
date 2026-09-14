@@ -794,8 +794,13 @@ class Screener:
         the one filter whose output nobody can see.
         """
         try:
+            now = datetime.now(timezone.utc)
             row = {
-                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                # Stable identity so the grading job can write a verdict back
+                # onto this exact row. The store holds a rolling window, so an
+                # index is not a name — it shifts as older drops age out.
+                "id": f"{candidate.symbol}_{int(now.timestamp() * 1000)}",
+                "at": now.isoformat(timespec="seconds"),
                 "symbol": candidate.symbol,
                 "strategy": candidate.strategy,
                 # The tracker keys its timeout off signal_type, not strategy,

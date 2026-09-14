@@ -514,6 +514,24 @@ class TrackerSettings:
     timeout_swing_h: int = 168     # 4h candles — a real swing runs for days
     timeout_trap_h: int = 4        # 15m — liquidity-trap reversals resolve fast
     timeout_news_h: int = 4        # news-driven signals expire quickly
+
+    # ── Chase-drop grading ──
+    #
+    # A drop is graded on a schedule rather than on demand, because the window
+    # in which it *can* be graded closes. The replay needs 15m candles reaching
+    # back to the drop, and the number of bars that takes grows with every hour
+    # — so an audit run days later silently loses the oldest drops, and loses
+    # them on a criterion correlated with age and with which venue serves the
+    # symbol. The first live run lost 21 of 48 exactly that way.
+    #
+    # ``chase_grade_max_age_h`` is the ceiling: 60h is 240 bars, comfortably
+    # inside what every venue in the fallback chain serves. A drop older than
+    # this is not replayable and is reported as such rather than dropped
+    # quietly. The floor is the strategy's own timeout, so the replay has had
+    # long enough to settle; where a timeout exceeds the ceiling the drop is
+    # still graded at the ceiling and its record says it was never settled.
+    chase_grade_max_age_h: int = 60
+    chase_grade_interval_min: int = 60
     # Per-strategy dedup windows (minutes).  Tighter for fast setups (SCALP
     # expires in 2 h so there is no point blocking a fresh sweep for 30 min),
     # wider for slow setups (SWING holds 24 h, so 60 min avoids noise re-entries).
@@ -1100,6 +1118,9 @@ class Settings:
             timeout_prepump_h=_env_int("TRACKER_TIMEOUT_PREPUMP_H", _t.timeout_prepump_h),
             timeout_predump_h=_env_int("TRACKER_TIMEOUT_PREDUMP_H", _t.timeout_predump_h),
             timeout_scalp_h=_env_int("TRACKER_TIMEOUT_SCALP_H", _t.timeout_scalp_h),
+            chase_grade_max_age_h=_env_int("CHASE_GRADE_MAX_AGE_H", _t.chase_grade_max_age_h),
+            chase_grade_interval_min=_env_int(
+                "CHASE_GRADE_INTERVAL_MIN", _t.chase_grade_interval_min),
             timeout_swing_h=_env_int("TRACKER_TIMEOUT_SWING_H", _t.timeout_swing_h),
             max_outcomes=_env_int("TRACKER_MAX_OUTCOMES", _t.max_outcomes),
             tp1_banks_win=_env_bool("TRACKER_TP1_BANKS_WIN", _t.tp1_banks_win),

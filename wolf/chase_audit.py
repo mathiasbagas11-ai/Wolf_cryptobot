@@ -80,6 +80,18 @@ CHASE_DROPS_KEY = "chase_drops"
 _LEGACY_SIGNAL_TYPE = {"MOMENTUM": "SCREENER"}
 
 
+def drop_key(row: dict) -> str:
+    """Stable name for one drop, for writing a verdict back onto it.
+
+    Newer rows carry an ``id``. Older ones predate it, so the key falls back to
+    the fields that together identify a drop: one symbol cannot be dropped
+    twice in the same second by the same strategy at the same quote.
+    """
+    if row.get("id"):
+        return str(row["id"])
+    return "|".join(str(row.get(k, "")) for k in ("at", "symbol", "strategy", "quoted"))
+
+
 def _as_signal(row: dict, ladder_cfg: LadderSettings) -> Optional[Signal]:
     """Rebuild the signal this drop would have been, or ``None`` if it cannot.
 
@@ -128,6 +140,121 @@ def _as_signal(row: dict, ladder_cfg: LadderSettings) -> Optional[Signal]:
         # the replay must open strictly after it.
         entry_quoted_live=True,
     )
+
+
+# ── Scheduled grading ────────────────────────────────────────────────────
+#
+# The audit used to replay every drop on demand. That was the wrong shape, and
+# the first live run proved it: 21 of 48 drops came back unreplayable, all for
+# "no history reaching back". The cause is structural rather than incidental —
+# the replay asks for 15m candles from now back to the drop, so the bars
+# required grow with every hour that passes, and a venue that serves fewer than
+# that returns a window opening after the drop. Skips therefore correlate with
+# age, and with which venue serves the symbol, which is to say the surviving
+# sample is biased toward recent drops on liquid pairs.
+#
+# Grading on a schedule fixes it at the source. A drop is graded once, close to
+# the event, while every venue can still reach it; the verdict is written onto
+# the record and never recomputed. The sample then accumulates instead of
+# decaying, which is how the tracker has always graded real signals.
+
+
+def _age_hours(row: dict, now: datetime) -> Optional[float]:
+    try:
+        return (now - _parse_iso(str(row["at"]))).total_seconds() / 3600
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def is_gradeable(row: dict, settings, now: datetime) -> bool:
+    """True when this drop is old enough to have settled and young enough to reach.
+
+    The floor is the strategy's own timeout, so the replay has had as long as
+    the trade would have. Where that exceeds the ceiling the drop is still
+    graded at the ceiling — a record marked to the last close is worth more
+    than a drop that ages out ungraded, and ``resolved`` says which it is.
+    """
+    if row.get("graded"):
+        return False
+    age = _age_hours(row, now)
+    if age is None:
+        return False
+    ceiling = settings.chase_grade_max_age_h
+    strategy = str(row.get("strategy") or "")
+    signal_type = str(
+        row.get("signal_type") or _LEGACY_SIGNAL_TYPE.get(strategy, strategy) or "SCREENER"
+    )
+    floor = min(settings.timeout_for(signal_type), ceiling)
+    return floor <= age <= ceiling
+
+
+def grade_pending_drops(tracker: Tracker, ladder: LadderSettings = DEFAULT_LADDER) -> dict:
+    """Grade every drop that has come of age, and write the verdicts back.
+
+    Runs on the scheduler. Each drop is replayed exactly once: the verdict is
+    stored on its own row, so a later audit reads it rather than refetching
+    candles that may no longer reach. Rows are re-read inside the store's
+    atomic update so a concurrent write cannot clobber a verdict.
+    """
+    now = datetime.now(timezone.utc)
+    rows = tracker._store.read(CHASE_DROPS_KEY, default=[]) or []
+    if not isinstance(rows, list) or not rows:
+        return {"considered": 0, "graded": 0, "failed": 0, "expired": 0}
+
+    pending = [r for r in rows if isinstance(r, dict) and is_gradeable(r, tracker._settings, now)]
+    verdicts: dict[str, dict] = {}
+    failed = 0
+    for row in pending:
+        sig = _as_signal(row, ladder)
+        if sig is None:
+            # Unbuildable is permanent, so it is recorded as a verdict rather
+            # than retried every hour until the drop ages out.
+            verdicts[drop_key(row)] = {"error": "unbuildable", "at": now.isoformat(timespec="seconds")}
+            continue
+        try:
+            candles = _history(tracker, sig)
+        except Exception:
+            log.exception("History fetch failed grading chase drop on %s", sig.symbol)
+            candles = None
+        replay = _replay_one(tracker, sig, candles) if candles else None
+        if replay is None:
+            failed += 1  # transient: leave it pending and try again next run
+            continue
+        verdicts[drop_key(row)] = {
+            "r": round(replay.r, 4),
+            "resolved": replay.resolved,
+            "at": now.isoformat(timespec="seconds"),
+        }
+
+    if verdicts:
+        def _apply(current):
+            out = []
+            for row in (current or []):
+                if isinstance(row, dict):
+                    verdict = verdicts.get(drop_key(row))
+                    if verdict and not row.get("graded"):
+                        row = {**row, "graded": verdict}
+                out.append(row)
+            return out
+
+        tracker._store.update(CHASE_DROPS_KEY, _apply, default=[])
+
+    expired = sum(
+        1 for r in rows
+        if isinstance(r, dict) and not r.get("graded")
+        and (_age_hours(r, now) or 0) > tracker._settings.chase_grade_max_age_h
+    )
+    if verdicts or failed or expired:
+        log.info(
+            "Chase grading: %d considered, %d graded, %d deferred, %d aged out ungraded",
+            len(pending), len(verdicts), failed, expired,
+        )
+    return {
+        "considered": len(pending),
+        "graded": len(verdicts),
+        "failed": failed,
+        "expired": expired,
+    }
 
 
 def _chase_of(row: dict) -> Optional[float]:
@@ -201,28 +328,58 @@ def grade_chase_drops(
         return {"error": "no chase drops recorded yet", "sample": 0, "scored": []}
     rows = rows[-limit:]
 
+    now = datetime.now(timezone.utc)
+    ceiling = getattr(tracker._settings, "chase_grade_max_age_h", 60)
+
     scored: list[dict] = []
-    skipped_unbuildable = 0
-    skipped_nohistory = 0
+    # Each skip is named, because "no history reaching back" covered three
+    # different faults with three different remedies: a drop the scheduler
+    # never reached before it aged out, a venue that served nothing for a
+    # symbol it should have, and a record too thin to rebuild. Reporting them
+    # as one number is what let a 44% loss read as incidental.
+    skipped = {"unbuildable": 0, "too_old": 0, "no_data": 0}
+    from_store = 0
     for row in rows:
         if not isinstance(row, dict):
-            skipped_unbuildable += 1
+            skipped["unbuildable"] += 1
             continue
+
+        stored = row.get("graded")
+        if isinstance(stored, dict) and stored.get("error"):
+            skipped["unbuildable"] += 1
+            continue
+        if isinstance(stored, dict) and stored.get("r") is not None:
+            # Graded near the event, when the history still reached. This is
+            # the path that is supposed to carry the sample.
+            from_store += 1
+            scored.append({
+                "symbol": str(row.get("symbol") or ""),
+                "strategy": str(row.get("strategy") or ""),
+                "chase_r": _chase_of(row),
+                "r": float(stored["r"]),
+                "resolved": bool(stored.get("resolved")),
+                "source": "stored",
+            })
+            continue
+
         sig = _as_signal(row, ladder)
         if sig is None:
-            skipped_unbuildable += 1
+            skipped["unbuildable"] += 1
+            continue
+        age = _age_hours(row, now)
+        if age is not None and age > ceiling:
+            # Beyond the ceiling the replay cannot be trusted to reach, and an
+            # answer computed from the wrong prices is worse than none.
+            skipped["too_old"] += 1
             continue
         try:
             candles = _history(tracker, sig)
         except Exception:
             log.exception("History fetch failed for chase drop on %s", sig.symbol)
             candles = None
-        if not candles:
-            skipped_nohistory += 1
-            continue
-        replay = _replay_one(tracker, sig, candles)
+        replay = _replay_one(tracker, sig, candles) if candles else None
         if replay is None:
-            skipped_nohistory += 1
+            skipped["no_data"] += 1
             continue
         scored.append({
             "symbol": sig.symbol,
@@ -230,14 +387,15 @@ def grade_chase_drops(
             "chase_r": _chase_of(row),
             "r": replay.r,
             "resolved": replay.resolved,
+            "source": "replayed",
         })
 
     if not scored:
         return {
-            "error": "no recorded drop could be replayed — history did not reach back",
+            "error": "no recorded drop could be graded — see the skip breakdown",
             "sample": len(rows),
-            "skipped_unbuildable": skipped_unbuildable,
-            "skipped_nohistory": skipped_nohistory,
+            "skipped": skipped,
+            "from_store": 0,
             "scored": [],
         }
 
@@ -274,8 +432,8 @@ def grade_chase_drops(
     return {
         "error": "",
         "sample": len(rows),
-        "skipped_unbuildable": skipped_unbuildable,
-        "skipped_nohistory": skipped_nohistory,
+        "skipped": skipped,
+        "from_store": from_store,
         "overall": _summarise("all", scored),
         "by_strategy": by_strategy,
         "by_distance": by_distance,
@@ -301,18 +459,32 @@ def _line(row: dict) -> str:
 def render(report: dict) -> str:
     """Render the audit as a compact block, in the diagnostic's own idiom."""
     if report.get("error"):
-        return f"CHASE-AUDIT | {report['error']}"
+        sk = report.get("skipped") or {}
+        detail = ""
+        if sk:
+            detail = (f" | too_old={sk.get('too_old', 0)} no_data={sk.get('no_data', 0)} "
+                      f"unbuildable={sk.get('unbuildable', 0)}")
+        return f"CHASE-AUDIT | {report['error']}{detail}"
 
     lines = [
         f"CHASE-AUDIT | {datetime.now(timezone.utc).isoformat(timespec='seconds')} "
         f"| drops={report['sample']} replayed={report['overall']['n']}",
         _line(report["overall"]),
     ]
-    skipped = report.get("skipped_unbuildable", 0) + report.get("skipped_nohistory", 0)
-    if skipped:
+    sk = report.get("skipped") or {}
+    total_skipped = sum(sk.values())
+    if total_skipped:
         lines.append(
-            f"{'skipped':<10} {skipped} — {report.get('skipped_nohistory', 0)} had no history "
-            f"reaching back, {report.get('skipped_unbuildable', 0)} could not be rebuilt"
+            f"{'skipped':<10} {total_skipped} — {sk.get('too_old', 0)} aged out before the "
+            f"grader reached them, {sk.get('no_data', 0)} had no candles served, "
+            f"{sk.get('unbuildable', 0)} could not be rebuilt"
+        )
+    stored = report.get("from_store", 0)
+    live = report["overall"]["n"] - stored
+    if report["overall"]["n"]:
+        lines.append(
+            f"{'source':<10} {stored} graded near the event (trusted), "
+            f"{live} replayed now (only as far back as a venue still serves)"
         )
     for row in report.get("by_strategy", {}).values():
         lines.append(_line(row))

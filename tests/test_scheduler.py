@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from wolf.scheduler import _valuation_universe, build_scheduler
 
 
+from wolf.config import LadderSettings, TrackerSettings
+
+
 class _Settings(SimpleNamespace):
     pass
 
@@ -30,6 +33,10 @@ def _app(*, notifier_enabled: bool = False, **overrides):
     )
     settings = _Settings(
         tracker_interval_min=5, screener_interval_min=10, stats_report_hours=24,
+        # The real Settings always carries these; the fake has to as well, or a
+        # job that reads them passes its own test while failing on boot.
+        tracker=TrackerSettings(),
+        ladder=LadderSettings(),
         news=SimpleNamespace(interval_min=30),
         reports=SimpleNamespace(
             majors_interval_min=60, radar_interval_min=30,
@@ -112,6 +119,22 @@ def test_collector_intervals_come_from_settings():
 def test_flow_report_job_added_when_reporter_and_notifier_are_live():
     app = _app(notifier_enabled=True, flow=SimpleNamespace(build=lambda: "text"))
     assert "flow_report" in _job_ids(app)
+
+
+def test_the_chase_grading_job_is_scheduled():
+    """Its schedule is the whole point. Graded on demand instead, the first
+    live run lost 21 of 48 drops to histories that no longer reached back —
+    a loss correlated with age, so the surviving sample was biased."""
+    sched = build_scheduler(_app())
+    job = sched.get_job("chase_grade")
+    assert job is not None
+    assert job.trigger.interval.total_seconds() == 60 * 60
+
+
+def test_the_chase_grading_job_can_be_switched_off():
+    app = _app()
+    app.settings.tracker = TrackerSettings(chase_grade_interval_min=0)
+    assert build_scheduler(app).get_job("chase_grade") is None
 
 
 def test_flow_report_job_skipped_without_a_reporter():

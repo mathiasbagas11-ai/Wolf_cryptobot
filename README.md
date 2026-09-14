@@ -272,9 +272,36 @@ nothing for a long time. Unresolved drops are reported separately and never
 folded in silently: one whose history ran out is marked to the last close,
 which is a guess about a position that was never closed.
 
+**Graded on a schedule, not on demand.** This was got wrong first and the
+mistake is worth keeping: the audit originally replayed every drop when asked,
+and its first live run lost 21 of 48 to "no history reaching back". That is
+structural. The replay needs 15m candles from now back to the drop, so the bars
+required grow with every hour that passes, and a venue serving fewer than that
+returns a window opening after the drop. Skips therefore correlate with age and
+with which venue serves the symbol — the survivors lean toward recent drops on
+liquid pairs, and a 44% loss on a non-random criterion can manufacture the very
+effect the audit exists to detect.
+
+So an hourly job grades each drop exactly once, between its strategy's timeout
+(long enough to have settled) and a 60h ceiling — 240 bars, comfortably inside
+what every venue in the fallback chain serves. The verdict is written onto the
+record and never recomputed, so the sample accumulates instead of decaying,
+which is how the tracker has always graded real signals. The audit reads stored
+verdicts first and replays only what is still ungraded.
+
+Skips name their own fault, because one number covering three of them is what
+let the original loss read as incidental:
+
+| | |
+|---|---|
+| `too_old` | aged out before the grader reached it — history can no longer be trusted |
+| `no_data` | young enough, but no venue served candles for the symbol |
+| `unbuildable` | the record cannot be turned into a signal (inverted geometry, missing stop) |
+
 ```
 /whatif chase          # Telegram
-GET /whatif/chase      # one klines request per drop, hence a command
+GET /whatif/chase      # reads stored verdicts; replays only what is ungraded
+CHASE_GRADE_MAX_AGE_H=60      CHASE_GRADE_INTERVAL_MIN=60
 ```
 
 ### The evidence bucket — what a score was made of

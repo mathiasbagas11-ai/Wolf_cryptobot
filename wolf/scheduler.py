@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from wolf.chase_audit import grade_pending_drops
+
 from wolf.app import Application, ai_status
 from wolf.diagnose import diagnose, render_digest
 from wolf.reports import build_coordination_alerts
@@ -97,6 +99,26 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
         coalesce=True,
         next_run_time=_soon(),
     )
+
+    # Grade chase drops while they can still be reached.
+    #
+    # This is a measurement job, not a reporting one, and its schedule is the
+    # whole point: the replay needs 15m candles back to the drop, so the bars
+    # required grow every hour and a drop left long enough becomes ungradeable.
+    # Running hourly catches each one inside its window; the verdict is written
+    # onto the record and never recomputed, so the sample accumulates instead
+    # of decaying. Asking on demand instead lost 21 of the first 48.
+    if app.settings.tracker.chase_grade_interval_min > 0:
+        scheduler.add_job(
+            _guarded(lambda: grade_pending_drops(app.tracker, app.settings.ladder),
+                     "chase_grade"),
+            "interval",
+            minutes=app.settings.tracker.chase_grade_interval_min,
+            id="chase_grade",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=_soon(),
+        )
 
     # Periodic performance summary to Telegram (0 hours disables it).
     stats_hours = app.settings.stats_report_hours
