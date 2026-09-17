@@ -33,15 +33,18 @@ class ScalpDetector(Detector):
     timeframe = "15m"
     min_candles = 40
 
-    #: The sweep is the setup; who stepped in on the reclaim, and how much
-    #: volume came with it, are what separate a real stop-hunt from the first
-    #: leg of a trend.
+    #: Who stepped in on the reclaim, and how much volume came with it. Those
+    #: are what separate a real stop-hunt from the first leg of a trend; the
+    #: sweep itself is the gate, not evidence on top of it.
     #:
-    #: ``vwap`` is deliberately not among them. A bullish sweep wicks *below*
-    #: recent lows, which is below fair value almost by construction: measured
-    #: over 5200 bars it lands on 95.0% of the ones that pass the gate, so it
-    #: is closer to a restatement of the sweep than to independent confluence.
-    primary_components = ("volume_spike", "absorption", "rsi_extreme")
+    #: ``vwap`` is out because a bullish sweep wicks *below* recent lows, which
+    #: is below fair value almost by construction — 95.0% of gated bars, closer
+    #: to a restatement of the sweep than to confluence. ``rsi_extreme`` is out
+    #: because with it the three primaries together covered **100%** of the
+    #: signals this detector emits, so the evidence bucket could never contrast
+    #: anything; it also describes the state of the market rather than who
+    #: absorbed the flush, which is the thesis being tested.
+    primary_components = ("volume_spike", "absorption")
 
     def __init__(
         self,

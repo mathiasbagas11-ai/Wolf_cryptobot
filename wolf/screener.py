@@ -39,6 +39,16 @@ log = logging.getLogger("wolf.screener")
 #: Where the last book-spread fetch outcome is stored, for the digest to read.
 SPREAD_STATUS_KEY = "spread_status"
 
+#: Where the losers of the per-symbol ``max(score)`` contest are recorded.
+#:
+#: Written only once the winner has actually become a signal, which is the
+#: point rather than a limitation: a contest whose winner was itself dropped
+#: later has no outcome to pair against, so recording it would add rows the
+#: comparison can never use. What lands here is always a matched pair — one
+#: real outcome, one replayable alternative, same symbol, same bar.
+CONTESTS_KEY = "score_contests"
+CONTESTS_MAX = 300
+
 #: Where candidates dropped by the chase gate are recorded.
 #:
 #: The gate is the fourth instance of this project's signature fault: it decides
@@ -99,6 +109,27 @@ def drop_forming(candles: list, interval: str, now_ms: Optional[int] = None) -> 
         return candles
     now = now_ms if now_ms is not None else int(time.time() * 1000)
     return candles[:-1] if candles[-1].time + span > now else candles
+
+
+def _loser_spec(candidate: SignalCandidate) -> dict:
+    """Everything needed to replay a displaced candidate, and nothing else.
+
+    The geometry is copied rather than rebuilt: a loser carries the entry, stop
+    and ladder its own detector chose, and re-deriving them later from a policy
+    would grade a trade the detector never proposed.
+    """
+    return {
+        "strategy": candidate.strategy,
+        "signal_type": candidate.signal_type,
+        "direction": candidate.direction,
+        "score": candidate.score,
+        "entry_price": candidate.entry_price,
+        "sl": candidate.sl,
+        "tp": candidate.tp,
+        "tps": candidate.tps,
+        "timeframe": candidate.timeframe,
+        "entry_mode": candidate.entry_mode,
+    }
 
 
 def _onchain_annotations(context, direction: str) -> dict:
@@ -288,8 +319,13 @@ class Screener:
             )
             return None
 
-        # Select best by score.
+        # Select best by score. The scores being compared are not on a common
+        # scale — each detector's own gates guarantee a different floor — so
+        # the losers are recorded on the winner and written out once it becomes
+        # a signal, turning "is MOMENTUM worse" into a paired question asked of
+        # the same symbol and bar.
         best = max(all_candidates, key=lambda c: c.score)
+        best.losers = [_loser_spec(c) for c in all_candidates if c is not best]
 
         # Multi-detector confluence: when ≥2 detectors agree on direction, the
         # setup is stronger than any single indicator suggests.  Add a flat
@@ -825,6 +861,36 @@ class Screener:
         except Exception:  # never let bookkeeping break a scan cycle
             log.debug("Could not record chase drop", exc_info=True)
 
+    def _record_contest(self, candidate: SignalCandidate, signal) -> None:
+        """Persist the candidates this signal displaced, paired to its outcome.
+
+        Nothing here changes what the bot trades. The losers were already
+        discarded by ``_best_candidate``; this only stops them being discarded
+        *invisibly*, so the winner's result can later be set against what the
+        alternative would have returned on the same symbol and bar.
+        """
+        if not candidate.losers:
+            return
+        try:
+            row = {
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "symbol": candidate.symbol,
+                "signal_id": getattr(signal, "id", "") or "",
+                "winner": {
+                    "strategy": candidate.strategy,
+                    "score": candidate.score,
+                    "direction": candidate.direction,
+                },
+                "losers": candidate.losers,
+            }
+            self._tracker._store.update(
+                CONTESTS_KEY,
+                lambda cur: ((cur or []) + [row])[-CONTESTS_MAX:],
+                default=[],
+            )
+        except Exception:  # never let bookkeeping break a scan cycle
+            log.debug("Could not record score contest for %s", candidate.symbol, exc_info=True)
+
     def run_cycle(self) -> list:
         """Scan the whole universe; record + announce any new signals."""
         recorded = []
@@ -918,6 +984,7 @@ class Screener:
             )
             if signal is None:
                 continue
+            self._record_contest(candidate, signal)
             # Count this fresh position toward the cap for later symbols this cycle.
             active_by_strategy[candidate.strategy] = active_by_strategy.get(candidate.strategy, 0) + 1
             active_by_direction[candidate.direction] = active_by_direction.get(candidate.direction, 0) + 1

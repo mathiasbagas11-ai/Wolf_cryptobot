@@ -47,15 +47,17 @@ class LiquidityTrapDetector(Detector):
     timeframe = "15m"
     min_candles = 60
 
-    #: The trap is the sweep being reclaimed and the crowd that got caught in
-    #: it. Everything else scored here is context that fails to contradict it.
+    #: What the crowd caught in the trap left behind. Everything else scored
+    #: here is context that fails to contradict the read.
     #:
-    #: ``rejection_wick`` is deliberately not primary despite reading like
-    #: evidence: the hard gate already demands ``min_recovery`` of the candle
-    #: be reclaimed by its close, which mechanically means the wick dominates.
-    #: Measured over 5200 bars it lands on 86.4% of the ones that pass the
-    #: gate, so it mostly restates the gate rather than adding to it.
-    primary_components = ("sweep_reclaim", "volume_climax", "divergence")
+    #: ``sweep_reclaim`` was listed here and should not have been: the hard gate
+    #: already requires a swept, strongly-reclaimed extreme, so it is paid on
+    #: **100%** of the bars that reach the scoring — a constant, which made
+    #: every TRAP signal PRIMARY by construction and left the evidence bucket
+    #: with nothing to contrast. ``rejection_wick`` is out for the same reason
+    #: at 86.4%: the gate's own reclaim requirement is what makes the wick
+    #: dominant. A primary has to be something a signal can lack.
+    primary_components = ("volume_climax", "divergence")
 
     def __init__(
         self,

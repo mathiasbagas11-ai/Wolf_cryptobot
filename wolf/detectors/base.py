@@ -73,6 +73,18 @@ class SignalCandidate:
     # mode the flag is set but risk_scale stays 1.0 (observation only).
     bounce_flagged: bool = False
     risk_scale: float = 1.0
+    #: The candidates this one beat on the same symbol and bar, as the specs
+    #: needed to grade them later. Set by the screener, never by a detector.
+    #:
+    #: ``_best_candidate`` keeps one candidate per symbol by ``max(score)`` and
+    #: discards the rest without a record — the same self-blinding shape as the
+    #: chase gate, and a costlier one, because the scores it compares are not on
+    #: a common scale. Each detector's gates guarantee a different floor (0 for
+    #: PREPUMP and PREDUMP, 85 for MOMENTUM), so the contest is decided partly
+    #: by how much each detector pays itself for conditions it has already
+    #: required. Recording the losers makes the question paired: on this symbol
+    #: and this bar, did the winner do better than the one it displaced?
+    losers: list[dict] = field(default_factory=list)
     #: Which scored components actually fired, as ``{name: points}``.
     #:
     #: The ``reasons`` list is prose and is truncated to three entries on the

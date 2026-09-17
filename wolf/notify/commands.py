@@ -39,6 +39,7 @@ _HELP = (
     "<code>/whatif ladder</code> — re-cut the TP ladder on the same trades\n"
     "<code>/whatif whale</code> — what each whale-veto policy would have kept\n"
     "<code>/whatif chase</code> — what the chase gate threw away, replayed\n"
+    "<code>/whatif contest</code> — did the winner beat the candidate it displaced\n"
     "<code>/ai</code> — is the debate layer actually answering?\n"
     "<code>/tested</code> — what has already been tried, and what settled it\n"
     "<code>/help</code> — this message"
@@ -152,6 +153,15 @@ class CommandRouter:
         )
 
         try:
+            if arg.lower().startswith("contest"):
+                # The one comparison in the pipeline that is genuinely paired:
+                # winner and loser are the same symbol on the same bar, so the
+                # market move cancels and it can resolve on a fraction of the
+                # sample a level question needs.
+                from wolf.contest_audit import audit_contests, render as render_contest
+
+                report = audit_contests(self._app.tracker, overlap=self._mean_open())
+                return "<pre>" + esc(render_contest(report)) + "</pre>"
             if arg.lower().startswith("chase"):
                 # The one gate whose output was invisible until its drops were
                 # recorded: they never reach record_signal, so nothing on the

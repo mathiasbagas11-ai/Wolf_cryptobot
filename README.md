@@ -263,6 +263,14 @@ replay the entry was priced at the drop instant rather than at an earlier bar
 close, so the gap between them is neither credited to the entry nor hidden from
 the stop — on exactly the fast moves the gate fires on.
 
+**Settled 2026-09-17: the limit is not a lever.** On a near-complete sample (72
+drops, 46 graded, 42 of them near the event) the drops returned +0.070 against
++0.055 for the trades actually taken — a gap of +0.015R at p=0.976 — and the
+distance split inverted between readings across a range reaching 1.66R. An
+earlier reading of +0.350R came off a 56% sample biased by age and did not
+survive the fix. The gate neither protects nor costs; widening it would add
+trades at the same expectancy while stretching the risk unit.
+
 Read the **distance split** first. It compares drops that ran far past the
 quote against drops that ran less far, within one population, and can argue the
 limit without a second sample. The **`vs taken`** line compares drops against
@@ -303,6 +311,41 @@ let the original loss read as incidental:
 GET /whatif/chase      # reads stored verdicts; replays only what is ungraded
 CHASE_GRADE_MAX_AGE_H=60      CHASE_GRADE_INTERVAL_MIN=60
 ```
+
+### The contest nobody could see
+
+`Screener._best_candidate` keeps one candidate per symbol by `max(score)` and
+discards the rest. The scores it compares are **not on a common scale**: each
+detector's hard gates guarantee a different floor before any confluence is read.
+
+| Detector | Threshold | Guaranteed floor |
+|---|---|---|
+| `MOMENTUM` | 80 | **85** |
+| `SWING` | 80 | 55 |
+| `TRAP` | 80 | 22 |
+| `SCALP` | 65 | 20 |
+| `PREPUMP` / `PREDUMP` | 65 | 0 |
+
+So a contested symbol goes to whichever detector pays itself most for
+conditions it has already required, not to whichever read the market supports.
+This is why `PREPUMP` reported `n=0` on every card after being made
+satisfiable: it fires, loses the contest, and survives only as a
+`Confluence [MOMENTUM+PREPUMP]` line on a MOMENTUM row.
+
+`wolf/contest_audit.py` records the losers — on the winning candidate, written
+out only once that winner actually becomes a signal, so every stored row is a
+matched pair — and grades them hourly on the chase audit's discipline. Then:
+
+```
+/whatif contest          # Telegram
+GET /whatif/contest      # verdicts are stored; nothing is refetched
+```
+
+**This is the one genuinely paired comparison in the pipeline.** Winner and
+loser are the same symbol on the same bar, so the market move cancels, and the
+standing lesson is that paired questions resolve on a fraction of the sample a
+level question needs — the chase audit had just spent weeks to report +0.015R
+at p=0.976. Nothing about what the bot trades has changed.
 
 ### The evidence bucket — what a score was made of
 

@@ -46,11 +46,20 @@ confidence.
 ## Lessons that cost real time
 
 **Self-blinding.** A live veto cannot be judged: what it drops never becomes an
-outcome, so the veto's own correctness is unmeasurable. Found four times — the
+outcome, so the veto's own correctness is unmeasurable. Found five times — the
 AI veto (rejected), the whale veto (identified, still hard-blocking), the
 learning blacklist (fixed 2026-09-07, and the worst of them because a bench is
-an absorbing state), and the chase gate (made visible 2026-09-08). **Whenever a
-component decides what does not happen, ask what it makes unmeasurable.**
+an absorbing state), the chase gate (made visible 2026-09-08, settled
+2026-09-17), and `_best_candidate`'s `max(score)` contest (made visible
+2026-09-17). **Whenever a component decides what does not happen, ask what it
+makes unmeasurable.**
+
+The fifth is the one worth copying, because recording it made an *unaffordable*
+question affordable. The chase audit compares drops against different setups, so
+it is a level question and duly said nothing (+0.015R, p=0.976). The contest is
+the same symbol on the same bar, so the market move cancels and it is paired.
+**When a gate discards an alternative, check whether what it discarded is a
+matched pair — those are the cheap ones.**
 
 The chase gate also shows the wrong remedy. The first fix widened the limit,
 which does not cure self-blinding — it relocates the blind spot, and pays for
@@ -83,6 +92,14 @@ zero hits over 3738 breakout bars. It read as confluence on the card and as a
 `primary_component` in the evidence bucket. **Before trusting an award, ask
 which window each side of its comparison comes from; if the gate already fixed
 one of them, the test is vacuous.**
+
+**A test that waives the case it exists to catch is worse than no test.** The
+guard written to stop a gated constant being listed as a `primary_component`
+skipped any detector producing under twenty signals — which was four of six,
+including TRAP, the detector it was written for. It passed with the bug
+restored. The minimum is now asserted rather than waived, and the one detector
+random series genuinely cannot drive is named with its reason. **A skip
+condition in a test is a silent exemption; make it fail instead.**
 
 **A score hides its own composition, and a constant among the awards hides
 twice.** PREDUMP's `atr/price < 0.1` paid 5 points on 100% of 1320 bars
@@ -157,16 +174,18 @@ Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
 `universe-volume-ranking-is-lagging`, `chase-gate-self-blinding`,
 `predump-thin-evidence`, `trap-detector-dead-19-days` and
 `gated-awards-are-constants`. One added 2026-09-09:
-`momentum-score-cannot-reject`.
+`momentum-score-cannot-reject`. One added 2026-09-17:
+`contest-max-score-self-blinding`. **`chase-gate-self-blinding` moved OPEN →
+INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-14, HEAD `chase-graded-on-schedule`
+## Status — 2026-09-17, HEAD `contest-recorded`
 
-1003 tests green. Working tree clean.
+1015 tests green. Working tree clean.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -278,26 +297,26 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
 3. **Windowing uses resolution time** where era hygiene wants creation time.
 4. `wolf/reports/conviction.py` (AI conviction ranking) arrived via PR #32 from
    another session and has never been measured.
-5. **The chase limit is still unargued, but it is now answerable.** 0.5R was
-   never derived from a trade and neither was the 1.5R that briefly replaced
-   it. The first live reading (2026-09-09) says the gate is not a marginal
-   filter: 13 drops in 24h, SCALP=9 TRAP=4, and SCALP had 10 signals in the
-   ledger against 9 drops — **47% of its candidates rejected**. Every drop sat
-   below 1.5R, so the limit withdrawn on 09-08 would have admitted all
-   thirteen. `wolf/chase_audit.py` now grades them (`/whatif chase`, or
-   `GET /whatif/chase`): each is rebuilt as the signal the re-quote would have
-   written and replayed through the tracker's own evaluator. Read the
-   **distance split** first — it is within-population and can argue the limit
-   on its own. The `vs taken` line is unpaired, priced as a level question, and
-   will say nothing for a long time; that is correct, not a defect.
+5. **`_best_candidate` discards the alternative with no record — now being
+   measured.** One candidate per symbol survives `max(score)`, and the scores
+   compared are not on a common scale: gates guarantee floors of 0 (PREPUMP,
+   PREDUMP), 20 (SCALP), 22 (TRAP), 55 (SWING) and 85 (MOMENTUM). So MOMENTUM
+   takes a contested symbol partly on how much it pays itself for conditions it
+   already required — and it has been negative on four consecutive cards while
+   its own chase drops are negative too, so it is not a selection artifact.
+   This also explains PREPUMP's n=0 since being fixed: it fires and is then
+   relabelled as a `Confluence [MOMENTUM+PREPUMP]` tag on a MOMENTUM row.
+   `wolf/contest_audit.py` records the losers and grades them hourly;
+   `/whatif contest` pairs each against what the winner actually returned.
+   **This is the paired question — read it before any level one.**
 
-   First run (2026-09-13, 48 drops) said: near `<=0.83R` +0.427 (n=14) vs far
-   `>0.83R` +0.306 (n=13) — **no decay across the observed 0.5–1.2R**, though
-   the far cell leans on 4 marks-to-close. It also exposed the instrument's own
-   fault, so **none of it was acted on**: 21 of 48 were unreplayable on a
-   criterion correlated with age. Grading is now hourly and stored (see
-   Lessons); from ~2026-09-16 the sample should be near-complete rather than
-   56%, and only then is the limit worth re-arguing.
+   *Settled and closed:* the chase limit. On a near-complete sample
+   (2026-09-17) drops returned +0.070 against taken +0.055 — gap +0.015R at
+   p=0.976 — and the distance split inverted between readings across a range
+   now reaching 1.66R. The gate neither protects nor costs; **do not widen it,
+   do not tighten it, do not re-argue it**. The 09-13 reading of +0.350R was
+   the age-bias artifact it was flagged as.
+
 6. **How much of each score is decided before any confluence is read.**
    Counting only bars past each detector's own gate: SCALP's `sweep` 100% and
    `vwap` 95.0% against `order_block` 0.3%; TRAP's `sweep` 100% and
@@ -339,7 +358,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1003 tests, ~5s
+python -m pytest            # 1015 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -350,7 +369,8 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/diagnose.py` | the diagnostic card — the project's centre of gravity |
 | `wolf/stats.py` | BH-FDR, Student-t, Welch gap with the overlap discount |
 | `wolf/whatif.py` | paired re-scoring: stop rules, ladder geometry, whale policies |
-| `wolf/chase_audit.py` | grades what the chase gate dropped — the one filter with no outcomes |
+| `wolf/chase_audit.py` | grades what the chase gate dropped (settled: not a lever) |
+| `wolf/contest_audit.py` | pairs each displaced candidate against the winner that beat it |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |
 

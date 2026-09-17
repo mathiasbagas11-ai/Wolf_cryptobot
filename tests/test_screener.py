@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import time
 
 from wolf.config import RiskSettings
@@ -888,6 +890,63 @@ def test_market_entry_is_requoted_and_the_ladder_follows(fake_client):
     assert cand.tp == 119.0
     rr = (cand.tp - cand.entry_price) / (cand.entry_price - cand.sl)
     assert round(rr, 6) == 3.0
+
+
+def test_the_losers_of_a_score_contest_are_recorded(fake_client, store):
+    """`_best_candidate` keeps one candidate per symbol by max(score) and drops
+    the rest with no record — and the scores it compares are not on a common
+    scale, since each detector's gates guarantee a different floor. Recording
+    the losers alongside the winner's signal id makes the comparison paired."""
+    from wolf.screener import CONTESTS_KEY
+
+    tracker = _FakeTracker({}, store)
+    screener = Screener(fake_client, tracker, [], universe=[])
+    cand = _cand(strategy="MOMENTUM")
+    cand.losers = [{"strategy": "PREPUMP", "score": 88, "direction": "LONG",
+                    "entry_price": 100.0, "sl": 97.0, "tp": 109.0, "tps": [],
+                    "timeframe": "1h", "entry_mode": "MOMENTUM_NOW",
+                    "signal_type": "PREPUMP"}]
+    screener._record_contest(cand, SimpleNamespace(id="sig-42"))
+
+    rows = store.read(CONTESTS_KEY, default=[])
+    assert len(rows) == 1
+    assert rows[0]["signal_id"] == "sig-42"
+    assert rows[0]["winner"]["strategy"] == "MOMENTUM"
+    assert rows[0]["losers"][0]["strategy"] == "PREPUMP"
+
+
+def test_an_uncontested_signal_records_nothing(fake_client, store):
+    """One candidate is not a contest, and a row with no alternative in it
+    would pad the sample with pairs that can never be formed."""
+    from wolf.screener import CONTESTS_KEY
+
+    screener = Screener(fake_client, _FakeTracker({}, store), [], universe=[])
+    screener._record_contest(_cand(), SimpleNamespace(id="sig-1"))
+    assert store.read(CONTESTS_KEY, default=[]) == []
+
+
+def test_best_candidate_keeps_the_losers_it_discarded(fake_client):
+    """The record has to be taken where the information is — after this point
+    the displaced candidates are gone."""
+    class _D:
+        def __init__(self, name, score):
+            self.name, self._score, self.timeframe = name, score, "1h"
+
+        def evaluate(self, symbol, candles, context=None, features=None):
+            return _cand(strategy=self.name) if self._score is None else _scored(
+                self.name, self._score)
+
+    def _scored(strategy, score):
+        c = _cand(strategy=strategy)
+        c.score = score
+        return c
+
+    screener = Screener(fake_client, _FakeTracker({}), 
+                        [_D("MOMENTUM", 100), _D("PREPUMP", 88)],
+                        universe=[], interval="1h")
+    best = screener._best_candidate("BTCUSDT", {"1h": [object()] * 80}, None)
+    assert best is not None and best.strategy == "MOMENTUM"
+    assert [l["strategy"] for l in best.losers] == ["PREPUMP"]
 
 
 def test_a_chase_drop_is_recorded_so_the_gate_can_be_judged(fake_client, store):

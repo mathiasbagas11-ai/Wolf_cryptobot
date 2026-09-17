@@ -274,6 +274,92 @@ def test_score_parts_account_for_the_whole_score():
         assert sum(cand.score_parts.values()) == cand.score
 
 
+def test_no_primary_component_is_a_constant_after_the_gate():
+    """A primary has to be something a signal can lack.
+
+    TRAP listed `sweep_reclaim`, which its own hard gate already requires, so
+    it was paid on 100% of the bars that reached scoring — every TRAP signal
+    was PRIMARY by construction and the evidence bucket had nothing to
+    contrast. SCALP's three primaries together covered 100% for the same
+    practical reason. This catches the shape rather than those two instances:
+    a component that fires on every signal a detector emits restates its gate
+    and can separate nothing.
+
+    The first version of this test skipped any detector that produced under 20
+    signals — which was four of six, including TRAP, the one it existed to
+    catch. It passed with the bug restored. So the minimum is now asserted
+    rather than silently waived, and the one detector that genuinely cannot be
+    driven by random series is named here with its reason.
+    """
+    import random
+
+    from wolf.detectors import default_detectors
+    from wolf.indicator_cache import CandleFeatures
+
+    # PREPUMP needs a long quiet coil followed by a range expansion, a shape
+    # random walks essentially never produce: one signal in 600 seeds. Its
+    # primaries are covered by the constructed fixtures above instead. Nothing
+    # else may join this list without the same kind of evidence.
+    UNREACHABLE_BY_RANDOM_SERIES = {"PREPUMP"}
+    MIN_SIGNALS = 25
+
+    def series(seed, n, step):
+        r = random.Random(seed)
+        cs, t, px, k = [], 1_700_000_000_000, 100.0, 0
+        while k < n:
+            seg = r.randint(10, 40)
+            drift, vol = r.uniform(-0.014, 0.014), r.uniform(0.004, 0.026)
+            volume, tb = r.uniform(3e5, 1.6e6), r.uniform(0.30, 0.70)
+            for _ in range(seg):
+                if k >= n:
+                    break
+                rng = px * r.uniform(vol * 0.4, vol)
+                o = px
+                c = px * (1 + drift) + r.uniform(-rng, rng) * 0.5
+                # Stop-hunt wicks, so the sweep detectors actually trigger.
+                spike = r.random() < 0.22
+                wick = (lambda: r.uniform(1.5, 3.0)) if spike else (lambda: r.uniform(0.1, 1.2))
+                cs.append(Candle(
+                    time=t, open=o,
+                    high=max(o, c) + rng * (wick() if r.random() < 0.5 else r.uniform(0.1, 1.2)),
+                    low=min(o, c) - rng * wick(),
+                    close=c,
+                    volume=volume * (r.uniform(2.5, 4.5) if spike else r.uniform(0.4, 1.6)),
+                    trades=800, taker_buy_volume=volume * tb,
+                ))
+                px, t, k = c, t + step, k + 1
+        return cs
+
+    for det in default_detectors():
+        if det.name in UNREACHABLE_BY_RANDOM_SERIES:
+            continue
+        step = 900_000 if det.timeframe == "15m" else 3_600_000
+        fired, hits = 0, {name: 0 for name in det.primary_components}
+        for seed in range(250):
+            cs = series(seed, 200, step)
+            for i in range(150, len(cs) + 1, 3):
+                sub = cs[:i]
+                cand = det.evaluate("X", sub, None, CandleFeatures.build(sub))
+                if not cand:
+                    continue
+                fired += 1
+                for name in det.primary_components:
+                    if cand.score_parts.get(name):
+                        hits[name] += 1
+            if fired >= MIN_SIGNALS:
+                break
+
+        assert fired >= MIN_SIGNALS, (
+            f"{det.name} produced only {fired} signals, so this guard would have "
+            f"waived it — the check that matters most is the one that quietly stops running"
+        )
+        for name, count in hits.items():
+            assert count < fired, (
+                f"{det.name}.{name} fired on all {fired} signals — it restates a "
+                f"hard gate, so every signal is PRIMARY and the bucket separates nothing"
+            )
+
+
 def test_every_detector_declares_primary_components():
     """The `evidence` bucket labels a strategy UNRECORDED when it declares
     none, which quietly exempts it from the one question the bucket exists to

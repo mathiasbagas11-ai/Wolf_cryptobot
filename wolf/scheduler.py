@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from wolf.chase_audit import grade_pending_drops
+from wolf.contest_audit import grade_pending_contests
 
 from wolf.app import Application, ai_status
 from wolf.diagnose import diagnose, render_digest
@@ -115,6 +116,21 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
             "interval",
             minutes=app.settings.tracker.chase_grade_interval_min,
             id="chase_grade",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=_soon(),
+        )
+
+    # Grade the candidates that lost the per-symbol max(score) contest, on the
+    # same schedule and for the same reason as the chase drops: the replay's
+    # reach shrinks with time, so a loser left ungraded becomes ungradeable.
+    if app.settings.tracker.chase_grade_interval_min > 0:
+        scheduler.add_job(
+            _guarded(lambda: grade_pending_contests(app.tracker, app.settings.ladder),
+                     "contest_grade"),
+            "interval",
+            minutes=app.settings.tracker.chase_grade_interval_min,
+            id="contest_grade",
             max_instances=1,
             coalesce=True,
             next_run_time=_soon(),

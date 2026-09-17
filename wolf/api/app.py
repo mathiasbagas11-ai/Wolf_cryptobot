@@ -28,6 +28,7 @@ from wolf.config import Settings
 from wolf.diagnose import diagnose, render_digest
 from wolf.logging_setup import setup_logging
 from wolf.chase_audit import grade_chase_drops, render as render_chase
+from wolf.contest_audit import audit_contests, render as render_contest
 from wolf.whatif import compare_stop_rules, render as render_whatif
 
 
@@ -222,6 +223,25 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         )
         if format == "text":
             return PlainTextResponse(render_chase(report))
+        return report
+
+    @api.get("/whatif/contest")
+    def whatif_contest(limit: int = 300, overlap: float = 0.0, format: str = "text"):
+        """Pair each displaced candidate against the winner that beat it.
+
+        ``_best_candidate`` keeps one candidate per symbol by ``max(score)``,
+        and the scores it compares are not on a common scale — each detector's
+        gates guarantee a different floor. This reads the losers back against
+        what the winner actually returned, on the same symbol and bar, so the
+        market move cancels. Unlike the chase audit this needs no refetching:
+        the losers are graded on a schedule and their verdicts are stored.
+        """
+        if overlap <= 0:
+            diag = diagnose(app_obj.tracker, window_hours=168)
+            overlap = float(diag.get("concurrency", {}).get("mean_open") or 1.0) or 1.0
+        report = audit_contests(app_obj.tracker, limit=limit, overlap=overlap)
+        if format == "text":
+            return PlainTextResponse(render_contest(report))
         return report
 
     @api.post("/signals/outcomes/import", dependencies=[Depends(require_api_key)])
