@@ -162,6 +162,30 @@ test called `evaluate` with two arguments, and every fake detector in the
 screener tests carried the correct four-argument one. **Test the pairing, not
 the halves — invoke the real collaborators the way production invokes them.**
 
+**An error that runs in both directions is invisible on every card.** Three
+exit paths close a scaled position and until 2026-09-18 only two priced it as
+scaled: the timeout path booked the whole position at the price on the clock,
+as though the slice sold at TP1 were still open. The size of the mistake is
+exactly `a * (x - R1)` — the first rung's allocation times how far the timeout
+price sits from it — so it is *symmetric* about the rung: it under-books a
+trade that drifted back and over-books one parked above. Nothing in meanR
+leaned, so no diagnostic could point at it; it only added noise, and moved
+trades across the dead band where `EXPIRED_FLAT` drops them out of the win
+rate and out of the paper account entirely. It was found by the owner asking
+why the balance did not move when TP1 hit, not by any card in six months.
+**Ask which quantity is computed in more than one place; the copy added last
+is the one that forgot.**
+
+The repair carried its own version of the same shape, and the idempotence test
+is the only thing that caught it: the backfill overwrote `exit_price` with a
+synthetic figure derived from the blended PnL — which is the convention the
+other two paths use, and which destroys the one input the blend reads. Run
+twice, it re-blended its own output and booked the rung a second time. There
+is no arithmetic that can tell a corrected row from an uncorrected one, because
+both satisfy `pnl = (exit/entry - 1)`. **A correction that overwrites its own
+input can only be run once; either keep the input or the correction is not a
+correction.**
+
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
 unrelated remedies. The provider almost always already said which; the bug was
@@ -188,7 +212,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Fifteen entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-four entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -198,7 +222,8 @@ Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
 `predump-thin-evidence`, `trap-detector-dead-19-days` and
 `gated-awards-are-constants`. One added 2026-09-09:
 `momentum-score-cannot-reject`. One added 2026-09-17:
-`contest-max-score-self-blinding`. **`chase-gate-self-blinding` moved OPEN →
+`contest-max-score-self-blinding`. One added 2026-09-18:
+`timeout-forgot-the-banked-rung`. **`chase-gate-self-blinding` moved OPEN →
 INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
@@ -206,9 +231,27 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-18, HEAD `contest-recorded`
+## Status — 2026-09-18, HEAD `timeout-banks-the-rung`
 
-1015 tests green. Working tree clean. No code changed since `e818d30`.
+1028 tests green. Working tree clean.
+
+**The ledger was wrong, and every card built on it inherited that.** A position
+that banked TP1 and then timed out was booked as though nothing had been sold —
+see the lesson above for why no card could show it. Fixed forward in
+`wolf/tracker.py`; the historical rows are re-booked by `wolf/rebank.py`.
+
+**The backfill has not been run yet — it is an operational step, not a
+deploy.** `POST /signals/outcomes/rebank` is a dry run by default and reports
+exactly what would move; pass `dry_run=false` to write. It rewrites only rows
+with a timeout status *and* a banked rung, and replays the paper balance from
+`PAPER_START_BALANCE` over the corrected log, because the balance compounds and
+cannot be patched with a delta. **The displayed balance will jump when it
+runs**, and that is the correction, not a loss. `learning_memory` is untouched
+by design — it holds backtest-seeded trades that never appear in the outcome
+log, so rebuilding it from that log would discard them; the price is that its
+`pnl_sum`/`r_sum` keep the old figures for the affected trades. Run it once,
+read the dry run first, and re-read `/diag` afterwards: cards written before
+this reported a PnL for a position size those trades did not have.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -394,7 +437,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1015 tests, ~12s
+python -m pytest            # 1028 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -407,6 +450,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/whatif.py` | paired re-scoring: stop rules, ladder geometry, whale policies |
 | `wolf/chase_audit.py` | grades what the chase gate dropped (settled: not a lever) |
 | `wolf/contest_audit.py` | pairs each displaced candidate against the winner that beat it |
+| `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |
 

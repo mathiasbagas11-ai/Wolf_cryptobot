@@ -797,3 +797,54 @@ def test_a_live_quoted_entry_is_graded_from_when_it_was_quoted(store, fake_clien
     live = tracker.active_signals()[0]
     assert live.status == Status.ACTIVE.value
     assert live.tps_hit == [1]               # only the 10:15 bar counted
+
+
+def test_a_timeout_that_banked_tp1_books_the_banked_slice(store, fake_client, tracker_settings):
+    """The rung was sold; the timeout price only closes what is left.
+
+    Pricing the whole position at the clock price is the same error the two
+    blended exit paths already avoid — it forgets the slice sold at TP1 when
+    price drifts back, and credits nothing as sold when it parks above the
+    rung. Here 50% came off at +5% and the remaining 50% at +1%.
+    """
+    tracker = Tracker(store, fake_client, tracker_settings)
+    tracker.record_signal("ADAUSDT", "SCREENER", "LONG", 100, tp=115, sl=95,
+                          entry_mode="MOMENTUM_NOW", tps=LADDER_1_3)
+    _age_pending(store, 60)
+    now_ms = int(time.time() * 1000)
+    fake_client.klines["ADAUSDT"] = _candles_after(now_ms - 31 * 3600_000,
+                                                   [(100, 106, 101, 104)])
+    fake_client.prices["ADAUSDT"] = 101.0
+
+    r = tracker.check_pending()[0]
+    assert r.tps_hit == [1]
+    assert r.status == Status.EXPIRED_WIN.value
+    assert r.pnl_pct == 3.0                 # not +1.0, which is what the clock said
+    assert r.r_multiple == 0.6
+    # exit_price is the effective single exit consistent with that PnL, so the
+    # market price it was blended from is kept beside it rather than lost.
+    assert r.exit_price == 103.0
+    assert r.timeout_price == 101.0
+
+
+def test_a_blended_timeout_is_not_re_booked_by_the_backfill(store, fake_client, tracker_settings):
+    """The backfill and the live path have to agree, or one undoes the other.
+
+    A row the fixed tracker writes carries a synthetic exit_price and a banked
+    rung — indistinguishable by arithmetic from a row the old path wrote. The
+    preserved market price is what tells them apart, so re-running the backfill
+    over live rows books nothing twice.
+    """
+    from wolf.rebank import rebank_outcomes
+
+    tracker = Tracker(store, fake_client, tracker_settings)
+    tracker.record_signal("ADAUSDT", "SCREENER", "LONG", 100, tp=115, sl=95,
+                          entry_mode="MOMENTUM_NOW", tps=LADDER_1_3)
+    _age_pending(store, 60)
+    now_ms = int(time.time() * 1000)
+    fake_client.klines["ADAUSDT"] = _candles_after(now_ms - 31 * 3600_000,
+                                                   [(100, 106, 101, 104)])
+    fake_client.prices["ADAUSDT"] = 101.0
+    tracker.check_pending()
+
+    assert rebank_outcomes(store, tracker_settings, dry_run=False)["rebooked"] == 0

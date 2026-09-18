@@ -220,6 +220,12 @@ class Signal:
 
     # Terminal-only fields
     exit_price: Optional[float] = None
+    # The real market price a blended timeout was priced from. ``exit_price``
+    # on such a row is synthetic — derived from the blended PnL so the card's
+    # Entry->Exit cannot contradict the PnL% beside it — which destroys the one
+    # input the blend reads. Keeping the market price makes the booking
+    # auditable and makes re-booking a no-op rather than a second helping.
+    timeout_price: Optional[float] = None
     exit_time: Optional[str] = None
     pnl_pct: Optional[float] = None
     # PnL in units of the trade's own risk (R = pnl_pct / distance to SL).

@@ -244,6 +244,29 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             return PlainTextResponse(render_contest(report))
         return report
 
+    @api.post("/signals/outcomes/rebank", dependencies=[Depends(require_api_key)])
+    def rebank(dry_run: bool = True):
+        """Re-book timeout outcomes whose banked rungs were never counted.
+
+        Until 2026-09-18 a position that timed out was priced entirely at the
+        price on the clock, as though the slice already sold at TP1 were still
+        open — the two other exit paths blended, this one did not. Defaults to
+        a dry run: a ledger is not something to rewrite before looking at what
+        would move. Idempotent, so a second run finds nothing.
+
+        The paper balance is replayed from the corrected log rather than
+        patched, because it compounds. ``learning_memory`` is left alone; see
+        the module docstring for what that costs.
+        """
+        from wolf.rebank import rebank_outcomes
+
+        return rebank_outcomes(
+            app_obj.store, app_obj.settings.tracker,
+            start_balance=app_obj.settings.paper_start_balance,
+            risk_pct=app_obj.settings.paper_risk_pct,
+            dry_run=dry_run,
+        )
+
     @api.post("/signals/outcomes/import", dependencies=[Depends(require_api_key)])
     def import_outcomes(payload: Any = Body(...)) -> dict:
         """Merge a previously exported outcome log back into state.

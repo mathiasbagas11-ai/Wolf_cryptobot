@@ -237,6 +237,7 @@ class EvalResult:
         "exit_price",
         "exit_time",
         "realized_pnl_pct",
+        "timeout_price",
     )
 
     def __init__(self) -> None:
@@ -250,6 +251,11 @@ class EvalResult:
         # Blended PnL% of a scaled exit; set only for a partial (TP1-banked) win
         # so _resolve books the realized number instead of the single-exit geom.
         self.realized_pnl_pct: Optional[float] = None
+        # The real market price at a blended timeout, kept because exit_price is
+        # then overwritten with a synthetic figure derived from the PnL. It is
+        # the only input the blend reads, so a row that has lost it cannot be
+        # re-derived or audited — and cannot be told apart from a single exit.
+        self.timeout_price: Optional[float] = None
 
 
 class Tracker:
@@ -578,17 +584,48 @@ class Tracker:
                 else:
                     curr = self._client.get_price(sig.symbol)
                     if curr:
-                        pnl_pct = ((curr - entry) if is_long else (entry - curr)) / entry * 100
+                        # A position that banked a rung on the way is no longer
+                        # whole, so pricing all of it at the timeout price is
+                        # wrong in both directions: it under-books a trade that
+                        # drifted back toward entry (the slice sold at the rung
+                        # is forgotten) and over-books one parked above the rung
+                        # (it pretends nothing was sold there). The two blended
+                        # exits below already knew this — "pricing the whole
+                        # position at the final rung pretends nothing was sold
+                        # on the way up" — and this path simply never got the
+                        # same treatment. Booking the whole position at x when
+                        # a of it left at R1 is off by a * (x - R1): on the
+                        # standard 50/30/20 ladder with TP1 at 1R that is a
+                        # full 1R of spread, from -0.5R at the breakeven stop
+                        # to nearly +0.5R just under TP2.
+                        if ladder and res.tps_hit:
+                            pnl_pct = round(
+                                _partial_pnl(entry, is_long, ladder, res.tps_hit, curr), 3
+                            )
+                            res.realized_pnl_pct = pnl_pct
+                            res.timeout_price = curr
+                        else:
+                            pnl_pct = ((curr - entry) if is_long else (entry - curr)) / entry * 100
                         risk = _risk_pct(sig)
                         r = (pnl_pct / risk) if risk else 0.0
                         # Without a dead-band, timing out at +0.01% scored a win
                         # worth as much as a TP hit — which is how a short
                         # timeout manufactures a ~50% win rate out of noise.
+                        # The band is judged on the blended figure above, so a
+                        # trade whose banked rung carries it clear of the noise
+                        # is no longer filed as having said nothing.
                         if abs(r) < self._settings.expiry_flat_r:
                             res.terminal = Status.EXPIRED_FLAT
                         else:
                             res.terminal = Status.EXPIRED_WIN if r > 0 else Status.EXPIRED_LOSS
-                        res.exit_price = curr
+                        # Same convention the blended exits above use: report an
+                        # effective single exit consistent with the PnL, so the
+                        # card's Entry->Exit cannot contradict the PnL% beside it.
+                        res.exit_price = (
+                            (entry * (1 + pnl_pct / 100) if is_long
+                             else entry * (1 - pnl_pct / 100))
+                            if res.realized_pnl_pct is not None else curr
+                        )
                     else:
                         res.terminal = Status.EXPIRED
                         res.exit_price = entry
@@ -728,6 +765,7 @@ class Tracker:
             pnl = 0.0
         sig.status = res.terminal.value
         sig.exit_price = exit_price
+        sig.timeout_price = res.timeout_price
         sig.exit_time = exit_time.isoformat()
         sig.pnl_pct = round(pnl, 3)
         risk_pct = _risk_pct(sig)
