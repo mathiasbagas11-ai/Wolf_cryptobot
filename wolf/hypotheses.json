@@ -1,0 +1,196 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "drop-breakeven-stop",
+      "question": "Does removing the breakeven stop pay for itself?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "/whatif over n=66: 26 trades worse, 4 better, t=-2.85",
+      "note": "The stop is not cutting runners short. It is banking trades that would otherwise have round-tripped, which is most of them."
+    },
+    {
+      "id": "stop-advance-ladder",
+      "question": "Should STOP_ADVANCE trail up the ladder instead of halting at breakeven?",
+      "status": "INCONCLUSIVE",
+      "settled_on": "2026-09-02",
+      "evidence": "/whatif: +0.015R, and only 8 of 66 trades were touched at all",
+      "note": "Not adopted. Too few trades reach a second rung for the rule to have anything to act on. Worth re-running only if an exit-geometry re-cut raises rung fill."
+    },
+    {
+      "id": "entry-selectivity-for-win-rate",
+      "question": "Can a tighter entry filter raise the win rate to what the ladder needs?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "Breakeven WR 56.3% vs 52.8% actual; resolving a 4.5pp move needs n_eff>=493 against n_eff~44",
+      "note": "Not a lever twice over: unmeasurable at this sample, and a tighter entry usually cuts avgWin, which raises the very bar it was meant to clear."
+    },
+    {
+      "id": "cost-model-refinement",
+      "question": "Is the net-negative verdict an artefact of the 20bps cost assumption?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "netR turns positive only below a 7.3bps round trip, which is under Binance's published taker fee on its own",
+      "note": "The verdict does not depend on the assumption. Halving the modelled cost moves netR from -0.100 to -0.021 and it stays negative. Better cost measurement is still worth having, but it will not rescue anything."
+    },
+    {
+      "id": "vibe-trading-import",
+      "question": "Is there anything in HKUDS/Vibe-Trading worth importing?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "Reviewed: the factor zoo is cross-sectional daily equity, the crypto engine is leverage and liquidation, trailing_stop is an eToro API passthrough",
+      "note": "One thing was worth taking and has been taken: the BH-FDR procedure, reimplemented without numpy in wolf/stats.py. Nothing else touches exit geometry or cost."
+    },
+    {
+      "id": "quantmind-import",
+      "question": "Is there anything in LLMQuant/QuantMind worth importing?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "grep for backtest, sharpe, slippage and stop_loss returns nothing; the dependency footprint is large",
+      "note": "One idea worth stealing without the import: separate sentiment from materiality in wolf/news/signal.py. Six lines of schema, no dependency."
+    },
+    {
+      "id": "llm-in-signal-path",
+      "question": "Should the AI layer veto signals rather than only annotate them?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-02",
+      "evidence": "Design, not measurement: a live veto has no counterfactual, because a dropped signal never becomes an outcome",
+      "note": "Monitor mode is the only arrangement in which the layer's verdict can be scored at all. The by_ai_verdict bucket and the CONFIRM-REJECT gap on the digest are what that arrangement buys; spending it on a veto would blind the measurement permanently."
+    },
+    {
+      "id": "news-sentiment-vs-materiality",
+      "question": "Should the news signal carry materiality separately from sentiment?",
+      "status": "OPEN",
+      "evidence": "Untested. Taken from a QuantMind review as the one idea there worth keeping",
+      "note": "A six-line schema change in wolf/news/signal.py, no new dependency. Cheap, but it is a strategy input, so it waits for the ~350-trade nominal sample like every other strategy change."
+    },
+    {
+      "id": "arbiter-model-swap",
+      "question": "Can a different arbiter model stop the debate layer abstaining?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-04",
+      "evidence": "DeepSeek V4 has no non-thinking model name: deepseek-v4-flash reasons by default at high effort, and deepseek-v4-pro more so",
+      "note": "The fault was never the model choice. Thinking is a request parameter, and turning it off is what fixes it. Raising DEBATE_ARBITER_MAX_TOKENS is only a bridge, and a narrow one — the hardcoded 30s HTTP timeout is the other wall."
+    },
+    {
+      "id": "post-cost-gate-era",
+      "question": "Did MAX_COST_R=0.15 change what gets traded, not just what it costs?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-04",
+      "evidence": "First post-gate day: median 1R 1.14%->2.13%, cost/trade 0.175R->0.094R, ladder bar 55.6%->45.2%, rung fill tp3 5%->21%",
+      "note": "ERA BOUNDARY — count to 350 restarts here, segmented by signal creation date rather than resolution date. The gate appears to have delivered the cost lever and part of the exit-geometry lever at once, which would reorder the lever ranking if it holds. It is one day at n=24 with se 0.243; the cost figures are arithmetic and trustworthy, the ladder figures are observations worth watching, and meanR/netR are noise."
+    },
+    {
+      "id": "exit-geometry-recut",
+      "question": "Does re-cutting the TP ladder lower the required win rate enough to matter?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-04",
+      "evidence": "/whatif ladder over 74 signals, all open=0: no variant beat live (best diff -0.048R, t=-1.55, padj=0.627). Tightening is strictly worse — need rises 50.8 -> 54.8 -> 60.6 as the ratio tightens. Widening is flat: 2rung/backload/even all within 0.005R of live",
+      "note": "This was ranked the largest lever at 9.4pp. Measured, it does not move. The curve says live sits at a local optimum with a flat gradient on the wide side and a steep penalty on the tight side. The sign test is far stronger than the mean test — rr2.5 changed 38 trades, 33 of them for the worse, which is p~1e-5 as a direction even though the magnitude is not resolvable. Direction certain, magnitude negligible."
+    },
+    {
+      "id": "backtest-without-the-cost-gate",
+      "question": "Can a deeper backtest accelerate the geometry questions?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-04",
+      "evidence": "Depth raised (lookback 50->300, candle_limit 250->1000) AND the live MAX_COST_R gate applied inside the engine, which previously applied no gates at all",
+      "note": "Depth alone would have made things worse: an ungated backtest accumulates the tiny-1R population the gate now rejects, so the deeper the history the more of a dead strategy it describes. /whatif history is deliberately NOT deepened — its 1000x15m reach is ~10.4 days, which rolls the pre-gate era out of the sample on its own."
+    },
+    {
+      "id": "whale-veto-direction",
+      "question": "Is the whale veto filtering the wrong side?",
+      "status": "INCONCLUSIVE",
+      "evidence": "/whatif whale 168 (one era, overlap-discounted): drop WITH gap +0.349R, t=+0.89, padj=0.528 at eff_n=28 from n=165 with mean_open=5.83. The all-era undiscounted version read padj=0.002 and was an artefact of both. Direction survives the strategy confound — the gap reappears in 3 of 3 comparable strategies (SCALP +0.251 n=59v40, MOMENTUM +0.209 n=17v7, PREDUMP +0.906 but only n=2 on one side) — so it is not a strategy mix relabelled",
+      "note": "Direction consistent, magnitude unresolvable. Worth noting what it would buy even taken at face value: netR -0.116 to -0.003, i.e. breakeven, not profit — and dropping WITH RAISES cost per trade from 0.14R to 0.18R because those trades carry wider stops, eating 26% of the gross gain. Still UNANSWERABLE as posed: the veto drops candidates before record_signal, so the strongly-opposed setups it refuses have no outcomes. Settling it needs the veto in monitor mode, which is a strategy change. This remains the one queued item whose cost grows while it waits.",
+      "settled_on": "2026-09-04"
+    },
+    {
+      "id": "sample-target-350",
+      "question": "Is 350 nominal trades enough to settle whether the bot has an edge?",
+      "status": "REJECTED",
+      "settled_on": "2026-09-06",
+      "evidence": "At mean_open 5.34, 350 nominal is 66 independent observations: se 0.145, so it can only resolve an edge of +0.29R or larger. The observed netR is +0.233 — below its own bar",
+      "note": "The target was set as a count, and what a count buys depends on overlap. Even if today's netR is real and holds, 350 trades still return INCONCLUSIVE. Revised target: ~540 nominal (~100 effective, ~38 days at 14/day) to resolve +0.233R at t=2. If the true edge is half that, ~2,100 trades and five months; at +0.05R it is over two years. Adding symbols does not help — more signals in the same window raise mean_open proportionally and leave the effective count where it was."
+    },
+    {
+      "id": "learning-engine-monitor-mode",
+      "question": "Should the learning engine act on 5-8 trades while the diagnostic says 28 cannot separate anything?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-07",
+      "evidence": "A coin-flip symbol returns <=2 wins from 8 trades 14.5% of the time, so ~1 symbol per 30 is benched per rotation on luck alone. Blacklist thresholds: 8 trades. Score adjustment: 5 trades. Sample needed to resolve the observed edge: ~540",
+      "note": "ERA BOUNDARY — the third deliberate one, and the reason the others were leaking. Every score delta and every bench was a silent strategy change, so the count toward a stable-strategy sample was counting something that never stopped moving. Now monitor-only: flags recorded to by_learning_action, nothing applied, LEARNING_HARD_BLOCK=1 to restore. The score delta is withheld as well as the bench, because score decides which detector wins a symbol and gates bounce-risk shorts. Third instance of the same self-blinding shape after the AI veto (rejected) and the whale veto (identified) — this one was an absorbing state, which made it the worst of the three."
+    },
+    {
+      "id": "prepump-unsatisfiable-threshold",
+      "question": "Was PREPUMP's silence a market condition, a mistuning, or an unreachable threshold?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-08",
+      "evidence": "Replaying a base-then-breakout series bar by bar: the mandatory breakout gate (close above the prior 10-bar high, bullish bar, price above EMA50) forbids the VWAP-discount award (15, needs price <= VWAP), the quiet-accumulation award (12, needs volume not expanding while the volume-coil award on the same bar needs it to), and makes RSI 50-68 (20) a band a breakout bar does not sit in. Ceiling on a real breakout bar 73, threshold 78. Zero signals over a synthetic +140% pump; MOMENTUM scored 100 on the same bars.",
+      "note": "ERA BOUNDARY. Not a mistuning — unsatisfiable, so no market condition would have produced a signal and the zero count carried no information about the strategy. The unit test passed throughout on an 18-bar base, short enough that Bollinger width was still falling monotonically into the breakout and an FvG from the preceding ramp was still inside the 50-bar lookback; the same fixture at 60 bars scores 73 and goes silent. Generalises: a scored component that contradicts a hard gate is invisible in every test that does not assert the achieved score against the threshold. Compression moved from gate to score (inside a base occupying most of 150 candles there is no history left to call it compressed against, so any percentile cut passes that fraction by construction); the gate is now the breakout bar's range against the range of the bars it broke out of."
+    },
+    {
+      "id": "universe-volume-ranking-is-lagging",
+      "question": "Can a volume-ranked universe ever show the bot a pre-pump?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-08",
+      "evidence": "A coin enters the top-N by 24h quote volume because it already pumped. PREPUMP looks for quiet accumulation — low volume by definition — so the selector and the detector are each other's negation. Observed: a token running +127% in a day whose candles the bot had never evaluated, and a second at $4.4M turnover below the $10M floor outright.",
+      "note": "ERA BOUNDARY. Mover lane added: lower floor ($3M), ranked by |24h change| >= 8%, capped at 15 symbols, both directions. Does NOT buy a shorter sample — eff_n = n / mean_open and more symbols raises both, per the standing lesson. What it buys is reachability: symbols that could not produce a signal at all now can. Still reactive: the market overview carries no volume baseline, so genuine pre-move accumulation is not detectable from that call and catching the base itself needs per-symbol volume history. Scan load 105 -> max 150 klines per 10-minute cycle."
+    },
+    {
+      "id": "chase-gate-self-blinding",
+      "question": "Is the 0.5R chase gate right, and can widening it be judged from anything the bot has recorded?",
+      "status": "INCONCLUSIVE",
+      "settled_on": "2026-09-17",
+      "evidence": "Not measured, and until 2026-09-08 not measurable: the gate drops candidates before record_signal, so what it rejects appears in no count, bucket or strategy row. A gate rejecting most of a strategy's setups and one that never fires produced an identical card. Drops now persist to `chase_drops` (symbol, time, quoted, live, sl, chase_r, limit) and the diag card reports count, split by strategy, and median/max chase. First live reading 2026-09-09: 13 drops in 24h, SCALP=9 TRAP=4, median 0.68R max 0.83R. SCALP had 10 signals in the ledger against 9 drops, so the gate rejected 47% of its candidates — not a marginal filter. Every drop sat below 1.5R, so the limit briefly set and withdrawn on 2026-09-08 would have admitted all thirteen. First audit run 2026-09-13 over 48 drops: 27 replayed, meanR +0.369, wr 66.7%, against taken +0.019 over n=97 (gap +0.350R, t +0.66, p 0.528 — nothing). Distance split near +0.427 (n=14) vs far +0.306 (n=13), the far cell carrying the higher win rate and 4 of 13 still open: no decay visible across 0.5-1.2R, but the reading leans on four marks-to-close. SETTLED 2026-09-17 on a near-complete sample (72 drops, 46 graded, 42 of them near the event, 0 no_data, 0 unbuildable — the 26 skipped are the pre-grader backlog and are permanent). Drops meanR +0.070 against taken +0.055 over n=108: gap +0.015R, t +0.03, p 0.976. The 09-13 reading of +0.350R was the age-bias artifact it was flagged as; correcting the sampling collapsed the gap 23x. The distance split also inverted between readings — near better on 09-13 (+0.427 vs +0.306), far better on 09-17 (-0.027 vs +0.167) — across a range now reaching 1.66R, so chase distance predicts nothing in 0.5-1.7R.",
+      "note": "Fourth instance of the self-blinding shape after the AI veto (rejected), the whale veto (identified) and the learning blacklist (fixed). A first attempt widened the limit to 1.5R on both breakout detectors and was withdrawn the same day: widening does not cure self-blinding, it relocates the blind spot, and it re-prices every trade admitted past the old line rather than merely adding some. The stop does not move with the re-quote, so the risk unit stretches and the ladder — rebuilt at the same R multiples — demands a far larger absolute move for the same nominal 3R: at 1.5R of chase, 1R goes 5.0% to 11.6% of entry and the last rung from +15% to +35%. Both ratio gates weaken exactly there, since nominal R:R is unchanged and a bigger 1R passes the cost gate more easily, so neither would have flagged it. PREPUMP keeps 1.5R because it has never emitted a signal and has nothing to contaminate. Grading the record needs a re-pricing job that does not exist yet — until then the drops accumulate and settle nothing. 2026-09-10: the grading job now exists (wolf/chase_audit.py, /whatif chase, GET /whatif/chase). Each drop is rebuilt as the signal the re-quote would have written — entry at the live price, stop unmoved, ladder rebuilt on the stretched risk unit — and replayed through the tracker's own evaluator over the candles that followed. The comparison against taken trades is unpaired and priced as one: Welch, charged the live book's mean_open. The cheaper half is the within-population split on chase distance, which can argue the limit without a second sample. Status stays OPEN until it reports. That run also exposed a fault in the instrument, which is why nothing was acted on: 21 of 48 drops came back unreplayable, all 'no history reaching back'. Structural, not incidental — the replay asks for 15m candles from now back to the drop, so bars required grow every hour and a venue serving fewer returns a window opening after it. Skips therefore correlate with age and with which venue serves the symbol, biasing the survivors toward recent drops on liquid pairs. Fixed 2026-09-14 by grading on a schedule instead: an hourly job grades each drop once, between its strategy's timeout and a 60h ceiling, and writes the verdict onto the record. The audit reads stored verdicts and replays only what is still ungraded; skips now name their own fault (too_old / no_data / unbuildable) rather than sharing one number. Conclusion: the gate neither protects nor costs. Do not widen it — admitting the drops would add trades at the same expectancy while stretching the risk unit, and more overlapping trades barely move eff_n. Do not tighten it either. The limit is not a lever; stop spending time on it. What the exercise did settle is method: a measurement whose reach shrinks with time must be taken on a schedule, and the first reading off a biased sample said the opposite of the corrected one."
+    },
+    {
+      "id": "predump-thin-evidence",
+      "question": "Does PREDUMP underperform because it shorts strength, and is a score of 65 the same thing regardless of what produced it?",
+      "status": "OPEN",
+      "settled_on": "",
+      "evidence": "Not measured — at eff=3 nothing on the card has separated, and the claim that PREDUMP performs badly is itself unverified. What IS measured is composition, over 1320 bars of randomly-shaped markets: `atr/price < 0.1` fired on 100% of bars (a constant, now a gate), `vwap_premium` on 50.3%, `bear_fvg_above` on 49.5%, `overbought_at_high` on 35.6% — against 2.5% for `bear_divergence`, the tell the docstring calls the strongest, and 7.3% for `bearish_rejection`. Of the 22 signals the sweep produced, 6 (27%) carried neither. Their modal composition reads as a healthy uptrend: RSI high near a high, price above VWAP, supply overhead, volume a little light. Roughly 23 of the 65 points needed arrive from two near-coin-flips unrelated to distribution. First meaningful sample 2026-09-18: n=9, all -1.000, sd=0.00 — nine clean stops with no rung filled, the largest single-strategy block any card has shown. It is not nine observations of a losing strategy: the card had 12 SL_HIT total, so inclusion-exclusion puts at least 5 of learn:PENALTY's 8 and at least 1 of ai:REJECT's 4 inside it — one cluster seen through three labels. PREDUMP printed +1.700 (n=3) the day before, and padj stayed 1.000. Still OPEN.",
+      "note": "PREDUMP is also the only directional detector with no market-context gating in effect: it is in screener.COUNTER_TREND_TYPES so _fights_regime exempts it, the bounce guard that does cover it is bounce_guard_mode=monitor, and the only live veto is score_flow(fast=4, baseline=16) — four hours of tape, not a trend. That veto fires on 43% of the bars where overbought_at_high is true, so it catches some of this and lets 57% through. Deliberately NOT acted on: reweighting vwap_premium/bear_fvg_above or removing the regime exemption are strategy changes with no trade behind them, which is the chase-gate mistake. Instead score_parts is now persisted per signal and the diag carries an `evidence` bucket splitting each strategy into PRIMARY (carried its own primary_components) vs THIN (cleared the threshold on context alone). Paired inside a strategy, so the market move largely cancels. Kept to two labels because every bucket enters the same BH-FDR family and cardinality is paid for by every other dimension on the card."
+    },
+    {
+      "id": "trap-detector-dead-19-days",
+      "question": "Was TRAP's silence strictness, as its docstring says, or a fault?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-08",
+      "evidence": "A fault. TRAP.evaluate took (symbol, candles, context); the screener has passed (symbol, candles, context, features) since df5bbbe on 2026-08-20. Every invocation raised TypeError, which screener._best_candidate catches alongside genuine detector faults and continues past. TRAP was callable for four days from its creation (1fcdbe2, 2026-08-16) and dead for the nineteen since — through every era boundary the project has recorded, so it contributed zero signals to every measured era. Verified end to end: _best_candidate returned None for a fixture that scores 100 once the signature is fixed.",
+      "note": "ERA BOUNDARY — TRAP starts emitting again. A sweep audit over 5200 bars puts it at 3.5% of bars through its hard gate and 6.5% of those past threshold 80, so roughly 0.23% of bars, or a small handful of signals a day across the universe. Two things hid this. Its docstring pre-explains its own silence ('deliberately strict, threshold 80, HIGH conviction only'), so zero signals read as working as designed — the same shape as the PREPUMP unsatisfiable threshold but worse, because the detector never ran at all. And every TRAP test called evaluate with two arguments while every fake detector in the screener tests carried the correct four-argument signature: both halves green, the real pairing broken. Fixed by matching the signature and consuming the shared feature cache like every other detector; guarded by two tests that invoke each real detector exactly as the screener does, and again through the screener itself so a drift cannot hide behind its exception handler."
+    },
+    {
+      "id": "gated-awards-are-constants",
+      "question": "How much of each detector's score is decided before any confluence is read?",
+      "status": "OPEN",
+      "settled_on": "",
+      "evidence": "Measured over 5200 bars of randomly-shaped markets, counting only bars that pass each detector's own hard gate. SCALP: `sweep` 100% (a floor of 20 of the 65 needed), `vwap` 95.0% — a bullish sweep wicks below recent lows, which is below fair value almost by construction — `rsi` 88.3%, against `fvg` 4.2% and `order_block` 0.3%. TRAP: `sweep` 100%, `rsi` 91.8%, `rejection_wick` 86.4% — the gate already demands the candle be 60% reclaimed by its close, which mechanically means the wick dominates — against `divergence` 3.8%. SWING and MOMENTUM are structural: SWING gates trend, pullback and a rejection candle then awards 30 + 20 + at least 5 for them, 55 of its threshold of 80; MOMENTUM gates the breakout and MACD then awards 35 + 20, 55 of 65.",
+      "note": "Not acted on. Unlike PREDUMP's atr/price award, which was a true constant and could be converted to a gate with provably identical decisions, these are either partial floors or genuinely rare components, so removing or reweighting any of them changes behaviour with no trade behind the change — the chase-gate mistake. Two free corrections were made: TRAP's +7 RSI tier and MOMENTUM's +5 not-over-extended tier both scored silently with no entry in `reasons`, so a card could not be reconciled with the score printed beside it; both now name themselves and neither total moved. All six detectors now record `score_parts` and declare `primary_components`, so the diagnostic's `evidence` bucket covers every strategy rather than reading UNRECORDED for four of them."
+    },
+    {
+      "id": "momentum-score-cannot-reject",
+      "question": "Does MOMENTUM's score threshold decide anything, and is every award it advertises payable?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-09",
+      "evidence": "No, and no. Its gates guarantee breakout (35), macd_confirms (20) and the lower volume tier (10); vwap_aligned (20) landed on 100% of 7020 bars swept, because a close beyond a 50-candle extreme is above the 40-candle VWAP in all but contrived cases. Floor 85 against threshold 80: the lowest score observed was exactly 85, median 100, so every bar clearing the gates becomes a signal and confluence_level is always HIGH. The fvg_launch award (15) could never be paid at all — it probed whether the 50-candle extreme just cleared sat inside an FvG drawn from the last 40 candles, and the windows overlap, so a bull gap's lower edge is c1.high for a candle inside the breakout window and that window's minimum low is at or below it by construction. Zero hits over 3738 breakout bars, never within 0.43 of an edge. not_overextended (5) asks for RSI < 75 on a long; the sweep's calmest breakout printed 77, median 98, 0/53 paid.",
+      "note": "fvg_launch removed — 15 points that never arrived, so removal changes no decision, and it was also claimed as a primary_component, which made the evidence bucket's PRIMARY label rest on a test that could not fire. Guarded by a test asserting both the award and the primary are gone. not_overextended and vwap_aligned are left alone: unlike PREDUMP's atr/price, neither is provable — VWAP(40) includes the breakout candle, whose typical price can exceed its close on a long upper wick with dominant volume — so neither can be converted to a gate with provably identical decisions. Two things NOT acted on, both strategy changes with no trade behind them: raising the threshold above the floor so the score means something again, and the cross-detector comparison in screener._best_candidate, where max(score) pits floors of 0 (PREPUMP, PREDUMP), 20 (SCALP), 22 (TRAP), 55 (SWING) and 85 (MOMENTUM) against each other — MOMENTUM wins a contested symbol on its floor, not on the strength of the read. The second is the larger of the two and belongs after the sample lands. Follow-up 2026-09-18: MOMENTUM's four-card negative run (-0.433, -1.000, -0.786, -0.625) ended at +0.900 on n=3. The streak was described at the time as the strongest shape in the project and it was over-weighted — 24h cards against 48h timeouts share trades, so four consecutive windows are not four observations. The structural findings here (floor 85 against threshold 80, contested symbols decided on the floor) are unaffected: they were derived from the code and a sweep, not from the streak. The contest audit remains the right instrument regardless of which way MOMENTUM's sign is pointing."
+    },
+    {
+      "id": "contest-max-score-self-blinding",
+      "question": "When two detectors fire on the same symbol, does the one that wins max(score) actually do better?",
+      "status": "OPEN",
+      "settled_on": "",
+      "evidence": "Not measured, and until 2026-09-17 not measurable: screener._best_candidate keeps one candidate per symbol and discards the rest before record_signal, so the displaced candidate leaves no trace. The scores being compared are not on a common scale — each detector's hard gates guarantee a different floor before any confluence is read: 0 for PREPUMP and PREDUMP, 20 for SCALP, 22 for TRAP, 55 for SWING, 85 for MOMENTUM. Replay confirms the overlap is real: on a coil-then-breakout bar both PREPUMP and MOMENTUM fire, and MOMENTUM takes the symbol on score in 2 of 4 shapes tried, with PREPUMP surviving only as a 'Confluence [MOMENTUM+PREPUMP]' tag on a MOMENTUM row. That is why PREPUMP has shown n=0 on every card since being fixed. Meanwhile MOMENTUM has been negative on four consecutive cards (-0.433, -1.000, -0.786, -0.625) and its own chase drops are negative too (n=20, -0.130), so it is not a selection artifact.",
+      "note": "Fifth instance of the self-blinding shape, after the AI veto, the whale veto, the learning blacklist and the chase gate. Unlike those it is a PAIRED question once recorded: winner and loser are the same symbol on the same bar, so the market move cancels — the standing lesson says paired questions resolve at a fraction of the sample a level one needs, and the chase audit had just demonstrated the level version saying nothing at p=0.976. wolf/contest_audit.py records the losers on the winning candidate and writes them out only once the winner becomes a signal, so every stored row is a matched pair; grading follows the chase discipline exactly (hourly, once per loser, verdict stored, because the replay's reach shrinks with time). Read via /whatif contest or GET /whatif/contest. Nothing about what the bot trades has changed."
+    },
+    {
+      "id": "timeout-forgot-the-banked-rung",
+      "question": "Does a position that banked TP1 and then timed out get credited with the slice it sold?",
+      "status": "ADOPTED",
+      "settled_on": "2026-09-18",
+      "evidence": "It did not. Three exit paths close a scaled position and only two priced it as scaled: a stop taken after TP1 blended each filled rung at its own price, a full run through the ladder did the same, and the timeout path valued the entire position at the price on the clock as though the slice sold at TP1 were still open. The error is exact rather than approximate — booking the whole position at x when allocation a left at R1 is off by a * (x - R1) — so on the standard 50/30/20 ladder with TP1 at 1R it spans a full 1R: -0.5R for a trade that drifted back to the breakeven stop, approaching +0.5R for one parked just under TP2. It also decided status: a trade whose blended result cleared the dead band was filed EXPIRED_FLAT, which is ungraded, invisible to the win rate and never applied to the paper account at all.",
+      "note": "A measurement fault, so fixable under rule 1 at any time, and it corrupts in both directions rather than biasing one way — which is why no card ever looked wrong. The forward fix blends in wolf/tracker.py; wolf/rebank.py re-books the historical rows (POST /signals/outcomes/rebank, dry run by default) and replays the paper balance from a clean slate, because it compounds and cannot be patched by adding a delta. Only rows with a timeout status AND a banked rung are touched: the two blended paths overwrite exit_price with a synthetic figure derived from the PnL, so their price and PnL are consistent by construction and cannot be told apart from a single exit by arithmetic — re-blending one would book the rung twice. The fix therefore had to preserve the real market price (Signal.timeout_price) on both the live and the backfilled path; without it the backfill's own output was indistinguishable from its input and a second run double-booked, which the idempotence test caught. learning_memory is deliberately NOT rebuilt: it lives under its own key and holds trades seeded from backtests that never appear in the outcome log, so rebuilding from that log would discard them. The cost is stated rather than hidden — its pnl_sum and r_sum keep the old figures for the affected trades, and where a status crossed the dead band its win count is off by that trade. Its rankings are win rates over many trades, so a handful of re-booked rows moves them very little. What this does NOT change: no strategy, no gate, no threshold. It changes what the ledger says already happened, which means any card read before it was reading a PnL for a position size the trade did not have."
+    }
+  ]
+}

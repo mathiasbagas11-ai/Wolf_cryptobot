@@ -1,3 +1,6 @@
+# Claude Code session data
+.claude/
+
 # Byte-compiled / optimized
 __pycache__/
 *.py[cod]
@@ -14,6 +17,9 @@ venv/
 # Runtime state (atomic JSON store) — never commit live state
 state_data/
 *.tmp
+
+# Anomaly scanner caches (universe snapshot + per-coin OHLC) — regenerated at runtime
+data/
 
 # Test / coverage artifacts
 .pytest_cache/
