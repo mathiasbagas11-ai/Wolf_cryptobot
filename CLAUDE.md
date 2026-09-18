@@ -78,6 +78,29 @@ criterion can manufacture the whole effect it was built to detect. Grading now
 runs hourly, once per drop, close to the event, and the verdict is stored.
 **Ask when a measurement stops being possible, not only whether it is correct.**
 
+**A sign that holds for four windows is still close to one observation when
+the windows overlap.** Three patterns carried on the watch list for weeks all
+reversed on the same card (2026-09-18). MOMENTUM had been negative on four
+consecutive cards (-0.433, -1.000, -0.786, -0.625) and printed +0.900.
+`ai:CONFIRM` had sat at or near the bottom for eight cards and became the best
+bucket on it. `learn:BOOST` had been the worst of the learning labels and
+became the best, with `PENALTY` taking its place at the bottom. Every one was
+`padj = 1.000` every time, and every one was written down as "pattern, not
+finding, do not act" — acting on any of them would have been wrong in three
+places at once. The windows are 24h while the timeouts run to 48h and beyond,
+so consecutive cards share trades: a streak of four is not four observations.
+**Count how much of a streak is the same trades before treating its length as
+evidence.**
+
+**Buckets on one card are not independent of each other.** The 09-18 card
+showed `PREDUMP` n=9, `learn:PENALTY` n=8 and `ai:REJECT` n=4 all at exactly
+-1.000 with `sd=0.00`, which reads as three separate confirmations of a loss.
+The card had 12 `SL_HIT` in total, so inclusion-exclusion puts at least 5 of
+PENALTY's 8 and at least 1 of REJECT's 4 inside PREDUMP's 9: one cluster of
+losses in one strategy, seen through every label that correlates with it.
+**Before reading several red rows as several findings, bound their overlap
+against the card's own status counts.**
+
 **Level questions are unaffordable; paired questions are not.** "Does the bot
 make money" needs thousands of trades. "Is rule A better than B on these same
 trades" got a decisive answer at n=66, because the market move cancels. Reach
@@ -183,9 +206,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-17, HEAD `contest-recorded`
+## Status — 2026-09-18, HEAD `contest-recorded`
 
-1015 tests green. Working tree clean.
+1015 tests green. Working tree clean. No code changed since `e818d30`.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -212,60 +235,73 @@ limit from replayed candle shapes — argue it from those drops.** PREPUMP keeps
 contaminate.
 
 ```
-/diag 24h 2026-09-09: n=40 eff=9 mean_open=4.04
-meanR -0.335  se 0.299  t -1.12 (nom -2.26)  netR -0.403  => INCONCLUSIVE
-cost 0.068R assumed / 0.061R measured, spread 40/40 (first full coverage)
-by strategy: TRAP +0.051 (n=12) | PREDUMP -0.161 | SWING -0.250 | MOMENTUM -0.433 | SCALP -0.850 (n=10, wr=10)
-ladder avgWin +0.83R avgLoss -0.96R => needs WR>53.7%, fill 30/12/0
-chase 13 dropped (SCALP=9 TRAP=4) median 0.68R max 0.83R
-all 18 buckets padj = 1.000
+/diag 24h 2026-09-18: n=22 eff=4 mean_open=4.44
+meanR -0.202  se 0.420  t -0.48 (nom -1.01)  netR -0.281  => INCONCLUSIVE
+cost 0.079R assumed / 0.060R measured, spread 22/22
+ladder avgWin +0.76R avgLoss -1.00R => needs WR>57.0%, fill 41/4/4
+chase 5 dropped (TRAP=2 SCALP=2 PREDUMP=1) median 0.76R max 1.11R
+all 20 buckets padj = 1.000
 ```
 
-Volume 9 → 40 per day. **`n` rose 4.4x and `eff` only 3x** — the mover lane and
-TRAP's revival bought less than the count suggests, exactly as the standing
-lesson says. The `t -1.12` against `nom -2.26` is the clearest illustration the
-card has produced of why rule 3 exists: read nominally it looks like evidence
-of losing, discounted it is nothing.
+Five cards of one era, which is the only thing here worth reading. Every
+strategy has changed sign at least once:
 
-**Sample target moved with the effect.** At `meanR -0.335` and `sd 0.94`,
-resolving at `|t|=2` needs `eff ≈ 31`; at ~9/day that is roughly 2–3 days, not
-weeks. The earlier 3–6 week figure was computed against a smaller effect.
+| | 09-09 | 09-13 | 09-15 | 09-17 | 09-18 |
+|---|---|---|---|---|---|
+| MOMENTUM | -0.433 | -1.000 | -0.786 | -0.625 | **+0.900** |
+| SCALP | -0.850 | +0.723 | +0.424 | +0.700 | +0.171 |
+| PREDUMP | -0.161 | -0.240 | -0.099 | +1.700 | **-1.000** (n=9) |
+| TRAP | +0.051 | -1.000 | +0.241 | -0.250 | +0.825 |
+| SWING | -0.250 | -1.000 | +0.800 | +0.125 | -1.000 |
 
-**Era hygiene on that card is only partial, and this matters.** Windowing is on
-resolution time (Broken #3), so with a 24h window: TRAP (4h timeout) and SCALP
-(10h) are provably one era — 22 of the 40 — while MOMENTUM and PREDUMP (48h)
-reach back to 09-07 and SWING (168h) to 09-02. Do not compare the last three
-against earlier cards.
+**Nothing has separated, and three long-running patterns collapsed at once on
+09-18** — see the lesson above. Treat the watch list as vindicated rather than
+as a queue of near-findings.
 
-Read `/diag 72` for now. From ~2026-09-14 a `/diag 168` window is one clean era.
+`eff` has been 3-9 throughout while `n` ran 12-40: `mean_open` between 1.9 and
+4.9 is doing most of the work, and it is why no single card has ever been able
+to speak. Reading any one row of one card alone has been wrong every time it
+has been tried.
 
-**Watch, do not act.** `learn:BOOST` (n=24, -0.607) below `learn:PENALTY`
-(-0.208) below `learn:NONE` (+0.431) — monotonically inverted, and clean
-because learning is monitor-only. `ai:CONFIRM` (n=32, -0.410) below
-`ai:NEUTRAL` (+0.078), sixth card running. `padj = 1.000` on both.
+**Sample target: stop computing one from a single card's effect.** It has been
+re-derived three times off successive point estimates (-0.335, -0.092, -0.202)
+and each figure was obsolete within days. The effect has no stable estimate to
+size against yet.
 
-**Two things the 09-09 card said about instruments rather than markets.**
-PREPUMP still emitted **nothing** in 24h despite being fixed — 24h is short for
-a 1h detector needing a coil and a release, but if 72h is still zero there is
-another gate nobody has found. And the `evidence` bucket split 33 PRIMARY / 7
-UNRECORDED / **0 THIN**: with the primaries as chosen, everything qualifies, so
-the instrument cannot yet answer the PREDUMP question it was built for. If THIN
-is still empty after a few days the primary sets are too permissive and need
-tightening.
+**PREDUMP's first real sample, and its caveat.** n=9, all `-1.000`, `sd=0.00` —
+nine clean stops, no rung filled. It is the largest single-strategy block any
+card has shown, and it lands on the strategy Broken #7 flags as the only
+directional detector with no market-context gating. But it printed +1.700 the
+day before, and at least five of those nine are the same trades as
+`learn:PENALTY`. One window, `padj = 1.000`. Do not act; watch whether it
+repeats.
 
-TRAP's frequency was also badly mis-estimated here: the synthetic sweep said
-~0.23% of bars, about 1–3 signals a day. It produced 12 traded plus 4 chase
-drops in 24h — 5–16x the estimate, making it the second most productive
-detector rather than the rarest.
+**SCALP is approaching its own cost gate.** `1R = 1.48%` gives `cost = 0.14R`
+against `max_cost_r = 0.15`. If its stops keep tightening it will start being
+rejected by the cost gate rather than by anything about the setup.
 
-**Watch list — patterns, not findings, do not act:** `ai:CONFIRM` at or near
-the bottom five cards running (windows overlap heavily, so not five
-observations); `whale:WITH` has flipped sign four times; `learn:BENCH` won and
-`learn:BOOST` lost on n=1 and n=4.
+**AI recovered on its own.** The DeepSeek read timeouts that reached 21% on
+09-17 were gone by 09-18 — no `ABSTAIN`, no `AI_DEGRADED` flag. Nothing was
+done to it, which is worth remembering before treating the next spike as a
+defect needing a fix.
 
-**TRAP is emitting again**, for the first time since 2026-08-20. Expect a small
-handful of signals a day — the sweep audit puts it at ~0.23% of bars. Its
-absence was a crashed signature, not strictness; see Lessons.
+**The `evidence` bucket is working now.** `THIN` was 0 for three cards, 1, then
+3 on 09-18, after `sweep_reclaim` (a gated constant) and `rsi_extreme` came out
+of the primary sets on 09-17. Still far too small to report anything, but the
+instrument can finally produce a contrast.
+
+**PREPUMP still shows n=0 on every card**, and Broken #5 now explains why: it
+fires and loses the `max(score)` contest, surviving only as a
+`Confluence [MOMENTUM+PREPUMP]` tag on a MOMENTUM row. The contest audit is the
+instrument for that; it is not evidence of a detector fault.
+
+**TRAP is emitting again**, for the first time since 2026-08-20; its absence
+was a crashed signature, not strictness (see Lessons). Its frequency was badly
+mis-estimated when it came back: a synthetic sweep said ~0.23% of bars, about
+1-3 signals a day, and it produced 12 traded plus 4 chase drops in the first
+24h. It has since run 2-3 a day. **A sweep over random series is a poor
+estimator of how often a gate opens in a real market** — it was out by 5-16x
+here, in the direction of understating.
 
 **MOMENTUM's threshold decides nothing, and this is not fixed.** Its gates
 guarantee 65 and `vwap_aligned` fires on 100% of bars, so the floor is 85
