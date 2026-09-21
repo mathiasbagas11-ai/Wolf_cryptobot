@@ -32,9 +32,16 @@ needs — so re-booking preserves it under ``timeout_price`` before overwriting
 ``exit_price`` with the synthetic one. That is what keeps a second run from
 re-blending its own output and booking the rung twice.
 
-The paper balance is then replayed from a clean slate over the corrected log,
-because it is a running compound of ``balance * risk_pct`` and cannot be
-patched in place.
+The paper balance is then patched by a *ratio*, not replayed. ``apply`` moves
+it by ``balance * risk_pct/100 * scale * R``, so the balance is a product —
+``start * prod(1 + k_i * R_i)`` — and changing one row multiplies the final
+figure by ``(1 + k*R_new) / (1 + k*R_old)``, exactly and independently of
+where that row sat in the sequence. Replaying from a clean slate looks like
+the safer choice and is not: it silently assumes the outcome log holds every
+trade ever settled, and the log is capped (``MAX_OUTCOMES``). Replayed over a
+truncated log it does not correct the balance, it re-anchors it to whenever
+the surviving rows begin — a 36-row, -2.3R correction came back as -55%. The
+ratio needs no history beyond the rows that actually changed.
 
 ``learning_memory`` is deliberately **not** touched. It lives under its own
 key, so nothing here can reach it, and rebuilding it from the outcome log
@@ -138,6 +145,9 @@ def rebank_outcomes(
 
     changed: list[dict] = []
     updated: list[dict] = []
+    k = risk_pct / 100
+    factor = 1.0          # what the corrections multiply the balance by
+    settled_delta = 0     # rows that crossed into or out of being graded
     for d in rows:
         try:
             sig = Signal.from_dict(d)
@@ -148,6 +158,11 @@ def rebank_outcomes(
         if fix is None:
             updated.append(d)
             continue
+        was, now = _equity_factor(sig, sig.status, sig.pnl_pct, k), \
+            _equity_factor(sig, fix["status"], fix["pnl_pct"], k)
+        if was and now:
+            factor *= now / was
+        settled_delta += (1 if now else 0) - (1 if was else 0)
         changed.append({
             "symbol": sig.symbol, "strategy": sig.strategy,
             "tps_hit": list(sig.tps_hit),
@@ -169,15 +184,16 @@ def rebank_outcomes(
         "dry_run": dry_run,
         "learning_untouched": True,
     }
+    before = PaperAccount(store, start_balance, risk_pct).balance
+    report["balance_before"] = before
+    report["balance_after"] = round(before * factor, 2) if changed else None
     if dry_run or not changed:
-        report["balance_before"] = PaperAccount(store, start_balance, risk_pct).balance
-        report["balance_after"] = None
+        if dry_run:
+            report["balance_after"] = None
         return report
 
-    before = PaperAccount(store, start_balance, risk_pct).balance
     store.write(OUTCOMES_KEY, updated)
-    report["balance_after"] = replay_balance(store, start_balance, risk_pct)
-    report["balance_before"] = before
+    _write_balance(store, report["balance_after"], start_balance, settled_delta)
     log.info(
         "Rebank: %d of %d outcomes re-booked (%d changed status), balance %.2f -> %.2f",
         len(changed), len(rows), report["status_changed"], before, report["balance_after"],
@@ -185,14 +201,80 @@ def rebank_outcomes(
     return report
 
 
+def _equity_factor(sig: Signal, status: str, pnl_pct: Optional[float],
+                   k: float) -> Optional[float]:
+    """What one row multiplies the balance by, or ``None`` if it never did.
+
+    Mirrors ``PaperAccount.apply`` exactly — the same risk leg, the same
+    ``risk_scale``, the same "only graded outcomes move equity" rule. If the
+    two ever drift apart the correction stops being a correction, so this is
+    asserted against the account itself in the tests rather than trusted.
+    """
+    try:
+        st = Status(status)
+    except ValueError:
+        return None
+    if not (st.is_win or st.is_loss):
+        return None
+    risk = _risk_pct(sig)
+    r = ((pnl_pct or 0.0) / risk) if risk else 0.0
+    return 1 + k * (getattr(sig, "risk_scale", 1.0) or 1.0) * r
+
+
+def _write_balance(store: StateStore, balance: float, start_balance: float,
+                   settled_delta: int) -> None:
+    """Move the account to the corrected balance without rebuilding it.
+
+    ``realized`` follows exactly (the balance is the start plus every realised
+    move) and ``trades`` by however many rows crossed the graded boundary. The
+    equity ``peak`` is a running maximum over states that were never stored, so
+    it cannot be recomputed — it is only ever raised here, which keeps drawdown
+    honest rather than flattering it with a peak that quietly dropped.
+    """
+    def _mutator(st):
+        st = dict(st or {})
+        st["balance"] = round(balance, 2)
+        st["realized"] = round(balance - start_balance, 2)
+        st["peak"] = round(max(float(st.get("peak") or start_balance), balance), 2)
+        st["trades"] = max(0, int(st.get("trades", 0)) + settled_delta)
+        return st
+
+    store.update(ACCOUNT_KEY, _mutator, default={
+        "balance": start_balance, "trades": 0, "realized": 0.0, "peak": start_balance})
+
+
+class TruncatedLog(Exception):
+    """The outcome log holds fewer settled trades than the account counted."""
+
+
 def replay_balance(store: StateStore, start_balance: float = 1000.0,
                    risk_pct: float = 1.0) -> float:
     """Rebuild the paper balance from the outcome log, in resolution order.
 
-    The balance compounds — each trade risks a share of the balance *at that
-    time* — so it cannot be corrected in place by adding a delta. It has to be
-    replayed, and in the order the trades actually resolved.
+    **Only valid on a complete log, and the log is capped** — ``MAX_OUTCOMES``
+    discards the oldest rows, so on a truncated one this does not correct the
+    balance, it re-anchors it to whenever the surviving rows happen to begin.
+    That is not a smaller version of the right answer, it is a different
+    quantity wearing the same name, and it reads as a catastrophic loss: a
+    36-row, -2.3R correction came back as -55% because the log held the last
+    500 trades of a much longer history.
+
+    So the completeness is checked rather than assumed, against the one number
+    that knows: the account's own settled-trade counter. ``rebank_outcomes``
+    no longer calls this at all — it patches the balance by a ratio, which
+    needs no history beyond the rows that changed.
     """
+    account = PaperAccount(store, start_balance, risk_pct)
+    counted = int(store.read(ACCOUNT_KEY, default={}).get("trades", 0) or 0)
+    settled = sum(
+        1 for d in (store.read(OUTCOMES_KEY, default=[]) or [])
+        if isinstance(d, dict) and _is_settled(d.get("status"))
+    )
+    if counted > settled:
+        raise TruncatedLog(
+            f"the account settled {counted} trades but the log holds {settled} "
+            f"— replaying it would re-anchor the balance, not correct it"
+        )
     store.write(ACCOUNT_KEY, {"balance": start_balance, "trades": 0,
                               "realized": 0.0, "peak": start_balance})
     account = PaperAccount(store, start_balance, risk_pct)
@@ -209,6 +291,80 @@ def replay_balance(store: StateStore, start_balance: float = 1000.0,
     for sig in signals:
         account.apply(sig)
     return account.balance
+
+
+def _is_settled(status: Optional[str]) -> bool:
+    try:
+        st = Status(status)
+    except ValueError:
+        return False
+    return st.is_win or st.is_loss
+
+
+def repair_balance(store: StateStore, observed_before: float, booked_before: str,
+                   expect: int, settings: Optional[TrackerSettings] = None,
+                   start_balance: float = 1000.0, risk_pct: float = 1.0,
+                   dry_run: bool = True) -> dict:
+    """Undo a balance that was replayed over a truncated log.
+
+    A one-off. The rows the backfill corrected are exactly those carrying a
+    ``timeout_price`` that resolved before the forward fix went live: the
+    tracker writes that field too, so the cutoff is what separates the rows
+    the account booked wrongly from the ones it booked right. Nothing else
+    distinguishes them — both satisfy ``pnl = (exit/entry - 1)`` by
+    construction, which is the same indistinguishability that made the
+    backfill need ``timeout_price`` in the first place.
+
+    ``expect`` is the count the backfill reported and is *asserted*, not
+    advisory. A cutoff an hour out silently selects a different set of rows
+    and produces a plausible wrong number, which is precisely the failure this
+    function exists to undo.
+    """
+    settings = settings or TrackerSettings()
+    k = risk_pct / 100
+    factor, matched = 1.0, 0
+    for d in (store.read(OUTCOMES_KEY, default=[]) or []):
+        if not isinstance(d, dict) or not d.get(_TIMEOUT_PRICE_KEY):
+            continue
+        if (d.get("resolved_at") or d.get("exit_time") or "") >= booked_before:
+            continue
+        try:
+            sig = Signal.from_dict(d)
+        except (TypeError, ValueError):
+            continue
+        risk_leg = _risk_pct(sig)
+        if not risk_leg:
+            continue
+        # What the account booked: the whole position at the timeout price.
+        old_pnl = ((sig.timeout_price - sig.entry_price) if sig.is_long
+                   else (sig.entry_price - sig.timeout_price)) / sig.entry_price * 100
+        old_status = Status.EXPIRED_FLAT.value
+        if abs(old_pnl / risk_leg) >= settings.expiry_flat_r:
+            old_status = (Status.EXPIRED_WIN.value if old_pnl > 0
+                          else Status.EXPIRED_LOSS.value)
+        was = _equity_factor(sig, old_status, round(old_pnl, 3), k)
+        now = _equity_factor(sig, sig.status, sig.pnl_pct, k)
+        if was and now:
+            factor *= now / was
+        matched += 1
+
+    report = {
+        "state_dir": getattr(store, "base_dir", ""),
+        "matched": matched, "expected": expect,
+        "observed_before": round(observed_before, 2),
+        "factor": round(factor, 6),
+        "balance_after": round(observed_before * factor, 2),
+        "dry_run": dry_run,
+    }
+    if matched != expect:
+        report["error"] = (
+            f"found {matched} corrected rows before {booked_before}, expected "
+            f"{expect} — check the cutoff against when the forward fix deployed"
+        )
+        return report
+    if not dry_run:
+        _write_balance(store, report["balance_after"], start_balance, settled_delta=0)
+    return report
 
 
 def render(report: dict) -> str:
@@ -255,6 +411,22 @@ def render(report: dict) -> str:
     return "\n".join(lines)
 
 
+def render_repair(report: dict) -> str:
+    head = ("REBANK-REPAIR (dry run — nothing written)" if report.get("dry_run")
+            else "REBANK-REPAIR (written)")
+    lines = [
+        f"{head} | {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+        f"state      {report.get('state_dir') or '?'}",
+        f"rows       {report['matched']} corrected rows found | {report['expected']} expected",
+    ]
+    if report.get("error"):
+        lines.append(f"refused    {report['error']}")
+        return "\n".join(lines)
+    lines.append(f"factor     x{report['factor']:.6f}")
+    lines.append(f"balance    {report['observed_before']:,.2f} -> {report['balance_after']:,.2f}")
+    return "\n".join(lines)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """``python -m wolf.rebank`` — run the backfill where the state lives.
 
@@ -273,6 +445,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--confirm", action="store_true",
         help="actually write; without it the run is a dry run and reports only",
     )
+    repair = parser.add_argument_group(
+        "repair",
+        "undo a balance replayed over a truncated log (one-off, see repair_balance)",
+    )
+    repair.add_argument("--repair-balance", type=float, metavar="BEFORE",
+                        help="the balance the backfill reported before it wrote")
+    repair.add_argument("--booked-before", metavar="ISO",
+                        help="when the forward fix went live; rows corrected by "
+                             "the backfill are the ones that resolved before it")
+    repair.add_argument("--expect", type=int, metavar="N",
+                        help="the row count the backfill reported; asserted, not advisory")
     args = parser.parse_args(argv)
 
     from wolf.config import Settings
@@ -280,6 +463,19 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     settings = Settings.from_env()
     store = StateStore(settings.state_dir)
+
+    if args.repair_balance is not None:
+        if not args.booked_before or args.expect is None:
+            parser.error("--repair-balance needs --booked-before and --expect")
+        rep = repair_balance(
+            store, args.repair_balance, booked_before=args.booked_before,
+            expect=args.expect, settings=settings.tracker,
+            start_balance=settings.paper_start_balance,
+            risk_pct=settings.paper_risk_pct, dry_run=not args.confirm,
+        )
+        print(render_repair(rep))
+        return 1 if rep.get("error") else 0
+
     report = rebank_outcomes(
         store, settings.tracker,
         start_balance=settings.paper_start_balance,

@@ -186,6 +186,23 @@ both satisfy `pnl = (exit/entry - 1)`. **A correction that overwrites its own
 input can only be run once; either keep the input or the correction is not a
 correction.**
 
+**Predict the number before you write it, or the report will talk you into
+its own mistake.** The backfill's report was right on every line but one:
+all 36 corrections matched the blend formula exactly when checked from
+outside, and the balance line — 2,562.58 → 1,162.36 — read as their plausible
+consequence. It was not. The outcome log is capped (`MAX_OUTCOMES`), so
+replaying it from the starting balance does not correct the balance, it
+**re-anchors it to whenever the surviving rows begin**; a −2.303R correction
+over 36 of 500 rows came back as −55%. The only reason it was caught is that
+the expected figure had been written down before the write — "−2.3R at 1%
+risk is about −2.3%, and if it lands far from that it is not the rebank". The
+reasoning that caused it is worth naming too: *the balance compounds, so it
+cannot be patched by a delta, so it must be replayed* — true, then a
+non-sequitur. `apply` is multiplicative, so the balance is a product and one
+changed row patches it by a **ratio**, exactly and order-independently, with
+no history at all. **Before a destructive write, state what the number should
+be; a report cannot audit its own blind spot.**
+
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
 unrelated remedies. The provider almost always already said which; the bug was
@@ -212,7 +229,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-four entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-five entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -223,7 +240,8 @@ Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
 `gated-awards-are-constants`. One added 2026-09-09:
 `momentum-score-cannot-reject`. One added 2026-09-17:
 `contest-max-score-self-blinding`. One added 2026-09-18:
-`timeout-forgot-the-banked-rung`. **`chase-gate-self-blinding` moved OPEN →
+`timeout-forgot-the-banked-rung`. One added 2026-09-21:
+`replay-over-a-truncated-log`. **`chase-gate-self-blinding` moved OPEN →
 INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
@@ -231,37 +249,41 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-21, HEAD `rebank-reachable`
+## Status — 2026-09-21, HEAD `ratio-not-replay`
 
-1033 tests green. Working tree clean.
+1036 tests green. Working tree clean.
 
 **The ledger was wrong, and every card built on it inherited that.** A position
 that banked TP1 and then timed out was booked as though nothing had been sold —
 see the lesson above for why no card could show it. Fixed forward in
 `wolf/tracker.py`; the historical rows are re-booked by `wolf/rebank.py`.
 
-**The backfill has not been run yet — it is an operational step, not a
-deploy.** Three ways in, and the REST one is the trap: the API binds
-`API_PORT` (8000), not Railway's `$PORT`, so on this deployment it has no
-public domain and `POST /signals/outcomes/rebank` cannot be reached from
-outside at all. Use `/rebank` in Telegram (dry run; `/rebank confirm` writes)
-or `python -m wolf.rebank [--confirm]` from a shell inside the container.
-**Not `railway run`** — that executes locally with the deployment's
-environment, so `STATE_DIR=/data` points at a directory that does not exist on
-the machine running it and the rebank reports a clean ledger it never read.
-Both entry points print the resolved state directory first for exactly that
-reason.
+**The backfill has been run** (2026-09-21 11:48 UTC, against
+`/data/state_data`). 500 outcomes scanned, **36 re-booked, 1 changed status,
+`r_delta` −2.303R**. The ledger had been *over*-booking, not under-booking:
+the correction is zero at 1.000R for a row that banked TP1 and at 1.375R for
+one that banked TP1+TP2, and above those points it marks the row down. So the
+rows hit hardest were the runners that went furthest and then timed out —
+`HYPEUSDT` was booked +2.387R and is now +1.577R. All 36 were verified against
+`Σ(alloc·R) + (1−Σalloc)·x` from outside the tool before the write.
 
-It rewrites only rows with a timeout status *and* a banked rung, and replays
-the paper balance from `PAPER_START_BALANCE` over the corrected log, because
-the balance compounds and cannot be patched with a delta. **The displayed
-balance will jump when it runs**, and that is the correction, not a loss.
-`learning_memory` is untouched by design — it holds backtest-seeded trades that
-never appear in the outcome log, so rebuilding it from that log would discard
-them; the price is that its `pnl_sum`/`r_sum` keep the old figures for the
-affected trades. Run it once, read the dry run first, and re-read `/diag`
-afterwards: cards written before this reported a PnL for a position size those
-trades did not have.
+Aggregate impact is small: −0.064R per re-booked row, −0.0046R on an overall
+`meanR` across 500. **This corrects an earlier reading in the other
+direction** — the 09-18 → 09-21 jump in `avgWin` (+0.76R → +1.04R) was
+guessed to be partly a booking artifact; the fix pushes `avgWin` *down*, so
+that jump was real and if anything understated. Historical cards had inflated
+`avgWin` and therefore a `needs WR` bar that was too low.
+
+**The balance step of that run was wrong, and is fixed** — see the lesson
+above. It replayed the outcome log from `PAPER_START_BALANCE` and reported
+2,562.58 → 1,162.36, which is not a −55% correction but a re-anchor: the log
+is capped at `MAX_OUTCOMES` (the live one held exactly 500 rows of a longer
+history). `rebank_outcomes` now patches the balance by a ratio instead, which
+needs no history, and `replay_balance` refuses a truncated log by name.
+**The live balance is still the re-anchored 1,162.36 until
+`python -m wolf.rebank --repair-balance 2562.58 --booked-before <fix deploy>
+--expect 36 --confirm` is run** (it refuses unless it finds exactly 36 rows,
+so the cutoff is self-checking).
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -447,7 +469,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1033 tests, ~12s
+python -m pytest            # 1036 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

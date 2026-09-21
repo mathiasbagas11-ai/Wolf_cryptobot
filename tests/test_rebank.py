@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from wolf.account import ACCOUNT_KEY, PaperAccount
 from wolf.config import TrackerSettings
 from wolf.learning.engine import MEMORY_KEY
+import pytest
+
 from wolf.models import Signal, Status
 from wolf.rebank import rebank_outcomes, replay_balance
 from wolf.tracker import OUTCOMES_KEY
@@ -136,9 +138,14 @@ def test_learning_memory_is_never_touched(store):
     assert store.read(MEMORY_KEY) == memory
 
 
-def test_the_balance_is_replayed_rather_than_patched(store):
-    """It compounds — each trade risks a share of the balance at that time — so
-    a delta cannot be added to it after the fact."""
+def test_the_balance_is_patched_by_a_ratio_not_rebuilt(store):
+    """The log is capped, so a rebuild is not a smaller version of the answer.
+
+    An account that settled 99 trades against a log holding 4 of them is the
+    live shape: MAX_OUTCOMES discards the oldest rows. Replaying that log
+    re-anchors the balance to whenever the survivors begin — which is how a
+    -2.3R correction came back as -55%.
+    """
     rows = [_outcome(status=Status.EXPIRED_WIN, exit_price=100.5, tps_hit=[1], n=i)
             for i in range(4)]
     store.write(OUTCOMES_KEY, rows)
@@ -148,13 +155,74 @@ def test_the_balance_is_replayed_rather_than_patched(store):
     report = rebank_outcomes(store, TrackerSettings(), start_balance=1000.0,
                              risk_pct=1.0, dry_run=False)
     assert report["balance_before"] == 9999.0
-    # Four re-booked trades at +0.625R, 1% of a compounding balance each.
-    assert 1000.0 < report["balance_after"] < 1030.0
+    # Four rows moved +0.375R each at 1% risk: about +1.5%, not -90%.
+    assert 10140.0 < report["balance_after"] < 10160.0
     assert PaperAccount(store, 1000.0, 1.0).balance == report["balance_after"]
+    assert PaperAccount(store, 1000.0, 1.0).summary()["trades"] == 99
+
+
+def test_the_ratio_agrees_with_a_full_replay_when_the_log_is_complete(store):
+    """The claim the ratio rests on, checked against the thing it replaces.
+
+    ``apply`` moves the balance multiplicatively, so the final figure is a
+    product and one changed row patches it by a ratio — exactly, and wherever
+    that row sat in the sequence. If that were only approximately true the
+    correction would drift, so it is asserted against the replay rather than
+    argued for in a comment.
+    """
+    rows = [_outcome(status=Status.EXPIRED_WIN, exit_price=p, tps_hit=t, n=i)
+            for i, (p, t) in enumerate([(100.5, [1]), (103.0, [1]), (104.5, [1, 2]),
+                                        (100.2, [1]), (99.5, [1])])]
+    store.write(OUTCOMES_KEY, rows)
+    # A complete log: the account settled exactly the rows it still holds.
+    account = PaperAccount(store, 1000.0, 1.0)
+    for d in rows:
+        account.apply(Signal.from_dict(d))
+
+    report = rebank_outcomes(store, TrackerSettings(), start_balance=1000.0,
+                             risk_pct=1.0, dry_run=False)
+    assert report["rebooked"] == 5
+    assert abs(report["balance_after"] - replay_balance(store, 1000.0, 1.0)) < 0.02
+
+
+def test_a_replay_over_a_truncated_log_is_refused(store):
+    """Named, not swallowed: the numbers it returns look entirely plausible."""
+    from wolf.rebank import TruncatedLog
+
+    store.write(OUTCOMES_KEY, [_outcome(status=Status.SL_HIT, exit_price=98.0,
+                                        tps_hit=[], n=i) for i in range(3)])
+    store.write(ACCOUNT_KEY, {"balance": 2562.58, "trades": 500,
+                              "realized": 0.0, "peak": 2562.58})
+    with pytest.raises(TruncatedLog):
+        replay_balance(store, 1000.0, 1.0)
+    assert PaperAccount(store, 1000.0, 1.0).balance == 2562.58   # left alone
 
 
 def test_replaying_an_empty_log_returns_the_starting_balance(store):
     assert replay_balance(store, start_balance=1000.0) == 1000.0
+
+
+def test_the_repair_refuses_a_cutoff_that_selects_the_wrong_rows(store):
+    """A cutoff an hour out picks a different set and returns a plausible
+    number, which is the failure the repair exists to undo. So the count the
+    backfill reported is asserted rather than trusted."""
+    from wolf.rebank import repair_balance
+
+    rows = [_outcome(status=Status.EXPIRED_WIN, exit_price=100.5, tps_hit=[1], n=i)
+            for i in range(3)]
+    store.write(OUTCOMES_KEY, rows)
+    rebank_outcomes(store, TrackerSettings(), dry_run=False)
+
+    bad = repair_balance(store, 2562.58, booked_before="2000-01-01T00:00:00+00:00",
+                         expect=3, dry_run=True)
+    assert "error" in bad and bad["matched"] == 0
+
+    good = repair_balance(store, 2562.58, booked_before="2099-01-01T00:00:00+00:00",
+                          expect=3, dry_run=False)
+    assert "error" not in good and good["matched"] == 3
+    # Each row was booked 0.375R too low, so the repair lifts the balance.
+    assert 2585.0 < good["balance_after"] < 2600.0
+    assert PaperAccount(store, 1000.0, 1.0).balance == good["balance_after"]
 
 
 def test_the_real_timeout_price_survives_the_rewrite(store):
