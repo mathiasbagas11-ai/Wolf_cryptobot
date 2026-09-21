@@ -249,9 +249,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-21, HEAD `ratio-not-replay`
+## Status — 2026-09-21, HEAD `repair-from-the-chat`
 
-1036 tests green. Working tree clean.
+1038 tests green. Working tree clean.
 
 **The ledger was wrong, and every card built on it inherited that.** A position
 that banked TP1 and then timed out was booked as though nothing had been sold —
@@ -281,9 +281,15 @@ is capped at `MAX_OUTCOMES` (the live one held exactly 500 rows of a longer
 history). `rebank_outcomes` now patches the balance by a ratio instead, which
 needs no history, and `replay_balance` refuses a truncated log by name.
 **The live balance is still the re-anchored 1,162.36 until
-`python -m wolf.rebank --repair-balance 2562.58 --booked-before <fix deploy>
---expect 36 --confirm` is run** (it refuses unless it finds exactly 36 rows,
-so the cutoff is self-checking).
+`/rebank repair 2562.58 36 confirm` is run** (or the same via
+`python -m wolf.rebank --repair-balance 2562.58 --expect 36 --confirm`).
+Both figures come from the backfill's own report. The repair takes the
+*oldest* 36 rows carrying a `timeout_price` — the tracker writes that field
+too, but only from the moment the forward fix deployed, so every row the
+backfill touched predates every row the tracker wrote. An earlier version
+took a cutoff timestamp instead and was withdrawn: a timestamp an hour out
+selects a different set and returns a plausible wrong number, which is the
+failure being undone.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -469,7 +475,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1036 tests, ~12s
+python -m pytest            # 1038 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

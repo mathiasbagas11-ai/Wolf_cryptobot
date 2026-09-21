@@ -202,10 +202,10 @@ def test_replaying_an_empty_log_returns_the_starting_balance(store):
     assert replay_balance(store, start_balance=1000.0) == 1000.0
 
 
-def test_the_repair_refuses_a_cutoff_that_selects_the_wrong_rows(store):
-    """A cutoff an hour out picks a different set and returns a plausible
-    number, which is the failure the repair exists to undo. So the count the
-    backfill reported is asserted rather than trusted."""
+def test_the_repair_refuses_when_the_rows_it_needs_are_gone(store):
+    """Asked for more corrected rows than survive, it refuses rather than
+    correcting by whatever is left — which would be a plausible wrong number,
+    the exact failure it exists to undo."""
     from wolf.rebank import repair_balance
 
     rows = [_outcome(status=Status.EXPIRED_WIN, exit_price=100.5, tps_hit=[1], n=i)
@@ -213,12 +213,10 @@ def test_the_repair_refuses_a_cutoff_that_selects_the_wrong_rows(store):
     store.write(OUTCOMES_KEY, rows)
     rebank_outcomes(store, TrackerSettings(), dry_run=False)
 
-    bad = repair_balance(store, 2562.58, booked_before="2000-01-01T00:00:00+00:00",
-                         expect=3, dry_run=True)
-    assert "error" in bad and bad["matched"] == 0
+    bad = repair_balance(store, 2562.58, count=5, dry_run=True)
+    assert "error" in bad and bad["matched"] == 3
 
-    good = repair_balance(store, 2562.58, booked_before="2099-01-01T00:00:00+00:00",
-                          expect=3, dry_run=False)
+    good = repair_balance(store, 2562.58, count=3, dry_run=False)
     assert "error" not in good and good["matched"] == 3
     # Each row was booked 0.375R too low, so the repair lifts the balance.
     assert 2585.0 < good["balance_after"] < 2600.0
@@ -323,3 +321,40 @@ def test_a_run_with_nothing_to_do_says_so_rather_than_printing_a_delta(store):
     out = render(rebank_outcomes(store, TrackerSettings(), dry_run=True))
     assert "already agrees with the blend" in out
     assert "r_delta" not in out
+
+
+def test_the_repair_is_reachable_from_the_chat(store):
+    """The CLI needs a machine the owner may not be near, and the figures the
+    repair takes are already in the chat — they come from the backfill's own
+    report, which is where it was read."""
+    from wolf.notify.commands import CommandRouter
+
+    store.write(OUTCOMES_KEY, [_outcome(status=Status.EXPIRED_WIN, exit_price=100.5,
+                                        tps_hit=[1], n=i) for i in range(3)])
+    rebank_outcomes(store, TrackerSettings(), dry_run=False)
+    router = CommandRouter(_router_app(store))
+
+    assert "Usage" in router.handle("/rebank repair")
+    assert "Usage" in router.handle("/rebank repair 2562.58")
+    assert "Usage" in router.handle("/rebank repair banyak 36")
+
+    dry = router.handle("/rebank repair 2562.58 3")
+    assert "dry run" in dry and "2,591" in dry
+    assert PaperAccount(store, 1000.0, 1.0).balance != 2591.44
+
+    assert "written" in router.handle("/rebank repair 2562.58 3 confirm")
+    assert PaperAccount(store, 1000.0, 1.0).balance == 2591.44
+
+
+def test_the_repair_from_the_chat_refuses_rather_than_guessing(store):
+    """Asked for rows that are no longer there, it says so instead of
+    correcting by whatever survived."""
+    from wolf.notify.commands import CommandRouter
+
+    store.write(OUTCOMES_KEY, [_outcome(status=Status.EXPIRED_WIN, exit_price=100.5,
+                                        tps_hit=[1], n=i) for i in range(2)])
+    rebank_outcomes(store, TrackerSettings(), dry_run=False)
+
+    reply = CommandRouter(_router_app(store)).handle("/rebank repair 2562.58 36 confirm")
+    assert "refused" in reply
+    assert PaperAccount(store, 1000.0, 1.0).balance != 2562.58

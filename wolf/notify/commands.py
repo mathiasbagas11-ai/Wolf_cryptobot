@@ -44,6 +44,8 @@ _HELP = (
     "<code>/tested</code> — what has already been tried, and what settled it\n"
     "<code>/rebank</code> — re-book timeouts that forgot a banked rung "
     "(dry run; <code>/rebank confirm</code> writes)\n"
+    "<code>/rebank repair &lt;balance&gt; &lt;rows&gt;</code> — undo a balance "
+    "replayed over a truncated log\n"
     "<code>/help</code> — this message"
 )
 
@@ -255,6 +257,8 @@ class CommandRouter:
         from wolf.rebank import rebank_outcomes, render
 
         arg = (arg or "").strip().lower()
+        if arg.startswith("repair"):
+            return self._rebank_repair(arg[len("repair"):].split())
         if arg and arg != "confirm":
             return (
                 "⚠️ Usage: <code>/rebank</code> (dry run) or "
@@ -279,6 +283,57 @@ class CommandRouter:
             # The balance moved, so the two commands that quote it are now
             # showing a figure from before the correction.
             out += "\nRe-read <code>/paper</code> and <code>/diag</code> — both quoted a PnL for a position size those trades did not have."
+        return out
+
+    def _rebank_repair(self, parts: list[str]) -> str:
+        """Undo a balance the backfill replayed over a truncated outcome log.
+
+        Reached from a chat because the alternative is a CLI on a machine the
+        owner may not be near, and the figures it needs are in the backfill's
+        own report, which is in the chat already. Both are required rather
+        than defaulted: the balance to correct from is only knowable from that
+        report, and the row count is the assertion that the rows are still on
+        disk.
+        """
+        from wolf.rebank import render_repair, repair_balance
+
+        usage = (
+            "⚠️ Usage: <code>/rebank repair &lt;balance-before&gt; &lt;rows&gt;</code>\n"
+            "Both figures come from the backfill's own report, e.g.\n"
+            "<code>/rebank repair 2562.58 36</code> — then add "
+            "<code>confirm</code> to write."
+        )
+        confirm = bool(parts) and parts[-1].lower() == "confirm"
+        if confirm:
+            parts = parts[:-1]
+        if len(parts) != 2:
+            return usage
+        try:
+            before, count = float(parts[0].replace(",", "")), int(parts[1])
+        except ValueError:
+            return usage
+        if before <= 0 or count <= 0:
+            return usage
+        try:
+            report = repair_balance(
+                self._app.store, before, count=count,
+                settings=self._app.settings.tracker,
+                start_balance=self._app.settings.paper_start_balance,
+                risk_pct=self._app.settings.paper_risk_pct,
+                dry_run=not confirm,
+            )
+        except Exception:
+            log.exception("Rebank repair failed")
+            return "⚠️ Repair failed — see logs."
+
+        out = f"<pre>{esc(render_repair(report))}</pre>"
+        if report.get("error"):
+            return out
+        if report["dry_run"]:
+            out += (f"\n<code>/rebank repair {parts[0]} {parts[1]} confirm</code> "
+                    f"to write.")
+        else:
+            out += "\nRe-read <code>/paper</code>."
         return out
 
     def _tested(self) -> str:

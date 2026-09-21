@@ -301,33 +301,33 @@ def _is_settled(status: Optional[str]) -> bool:
     return st.is_win or st.is_loss
 
 
-def repair_balance(store: StateStore, observed_before: float, booked_before: str,
-                   expect: int, settings: Optional[TrackerSettings] = None,
+def repair_balance(store: StateStore, observed_before: float, count: int,
+                   settings: Optional[TrackerSettings] = None,
                    start_balance: float = 1000.0, risk_pct: float = 1.0,
                    dry_run: bool = True) -> dict:
     """Undo a balance that was replayed over a truncated log.
 
-    A one-off. The rows the backfill corrected are exactly those carrying a
-    ``timeout_price`` that resolved before the forward fix went live: the
-    tracker writes that field too, so the cutoff is what separates the rows
-    the account booked wrongly from the ones it booked right. Nothing else
-    distinguishes them — both satisfy ``pnl = (exit/entry - 1)`` by
-    construction, which is the same indistinguishability that made the
-    backfill need ``timeout_price`` in the first place.
+    A one-off. The rows the backfill corrected are the *oldest* ones carrying
+    a ``timeout_price``: the live tracker writes that field too, but only from
+    the moment the forward fix deployed, so every row the backfill touched
+    predates every row the tracker wrote. Taking the oldest ``count`` of them
+    therefore selects exactly the set the account booked wrongly, with no
+    cutoff to get wrong — an earlier version of this took a timestamp, and a
+    timestamp an hour out silently selects a different set and returns a
+    plausible wrong number, which is the failure being undone here.
 
-    ``expect`` is the count the backfill reported and is *asserted*, not
-    advisory. A cutoff an hour out silently selects a different set of rows
-    and produces a plausible wrong number, which is precisely the failure this
-    function exists to undo.
+    ``count`` is the figure the backfill reported and is *asserted*: fewer
+    rows than that on disk means the log has rotated since, and the repair is
+    no longer computable from what survives.
     """
     settings = settings or TrackerSettings()
     k = risk_pct / 100
+    rows = [d for d in (store.read(OUTCOMES_KEY, default=[]) or [])
+            if isinstance(d, dict) and d.get(_TIMEOUT_PRICE_KEY)]
+    rows.sort(key=lambda d: d.get("resolved_at") or d.get("exit_time") or "")
+
     factor, matched = 1.0, 0
-    for d in (store.read(OUTCOMES_KEY, default=[]) or []):
-        if not isinstance(d, dict) or not d.get(_TIMEOUT_PRICE_KEY):
-            continue
-        if (d.get("resolved_at") or d.get("exit_time") or "") >= booked_before:
-            continue
+    for d in rows[:count]:
         try:
             sig = Signal.from_dict(d)
         except (TypeError, ValueError):
@@ -335,7 +335,8 @@ def repair_balance(store: StateStore, observed_before: float, booked_before: str
         risk_leg = _risk_pct(sig)
         if not risk_leg:
             continue
-        # What the account booked: the whole position at the timeout price.
+        # What the account actually booked: the whole position at the timeout
+        # price, which is the mistake being reversed.
         old_pnl = ((sig.timeout_price - sig.entry_price) if sig.is_long
                    else (sig.entry_price - sig.timeout_price)) / sig.entry_price * 100
         old_status = Status.EXPIRED_FLAT.value
@@ -350,16 +351,17 @@ def repair_balance(store: StateStore, observed_before: float, booked_before: str
 
     report = {
         "state_dir": getattr(store, "base_dir", ""),
-        "matched": matched, "expected": expect,
+        "matched": matched, "expected": count, "candidates": len(rows),
         "observed_before": round(observed_before, 2),
         "factor": round(factor, 6),
         "balance_after": round(observed_before * factor, 2),
         "dry_run": dry_run,
     }
-    if matched != expect:
+    if matched != count:
         report["error"] = (
-            f"found {matched} corrected rows before {booked_before}, expected "
-            f"{expect} — check the cutoff against when the forward fix deployed"
+            f"only {matched} of the {count} corrected rows are still on disk "
+            f"({len(rows)} carry a timeout price) — the log has rotated and the "
+            f"repair can no longer be computed from what survives"
         )
         return report
     if not dry_run:
@@ -417,7 +419,8 @@ def render_repair(report: dict) -> str:
     lines = [
         f"{head} | {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
         f"state      {report.get('state_dir') or '?'}",
-        f"rows       {report['matched']} corrected rows found | {report['expected']} expected",
+        f"rows       {report['matched']} of {report['expected']} corrected rows "
+        f"found ({report.get('candidates', 0)} carry a timeout price)",
     ]
     if report.get("error"):
         lines.append(f"refused    {report['error']}")
@@ -451,9 +454,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     repair.add_argument("--repair-balance", type=float, metavar="BEFORE",
                         help="the balance the backfill reported before it wrote")
-    repair.add_argument("--booked-before", metavar="ISO",
-                        help="when the forward fix went live; rows corrected by "
-                             "the backfill are the ones that resolved before it")
     repair.add_argument("--expect", type=int, metavar="N",
                         help="the row count the backfill reported; asserted, not advisory")
     args = parser.parse_args(argv)
@@ -465,11 +465,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     store = StateStore(settings.state_dir)
 
     if args.repair_balance is not None:
-        if not args.booked_before or args.expect is None:
-            parser.error("--repair-balance needs --booked-before and --expect")
+        if args.expect is None:
+            parser.error("--repair-balance needs --expect")
         rep = repair_balance(
-            store, args.repair_balance, booked_before=args.booked_before,
-            expect=args.expect, settings=settings.tracker,
+            store, args.repair_balance, count=args.expect, settings=settings.tracker,
             start_balance=settings.paper_start_balance,
             risk_pct=settings.paper_risk_pct, dry_run=not args.confirm,
         )
