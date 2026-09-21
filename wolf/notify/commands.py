@@ -42,6 +42,8 @@ _HELP = (
     "<code>/whatif contest</code> — did the winner beat the candidate it displaced\n"
     "<code>/ai</code> — is the debate layer actually answering?\n"
     "<code>/tested</code> — what has already been tried, and what settled it\n"
+    "<code>/rebank</code> — re-book timeouts that forgot a banked rung "
+    "(dry run; <code>/rebank confirm</code> writes)\n"
     "<code>/help</code> — this message"
 )
 
@@ -84,6 +86,8 @@ class CommandRouter:
             return self._diag(arg)
         if cmd in ("tested", "hypotheses"):
             return self._tested()
+        if cmd == "rebank":
+            return self._rebank(arg)
         if getattr(self._app, "analyze", None) is not None and not arg and cmd.isalnum():
             return self._app.analyze.analyze(cmd)  # bare ticker shortcut
         return "❓ Unknown command. Try <code>/help</code>."
@@ -232,6 +236,50 @@ class CommandRouter:
             log.exception("Diagnostics digest failed")
             return "⚠️ Diagnostics failed — see logs."
         return f"<pre>{esc(digest)}</pre>"
+
+    def _rebank(self, arg: str) -> str:
+        """Re-book timeout outcomes that banked a rung, from the chat.
+
+        The only command here that writes. Every other one reads, so the
+        router has never had to care about a typo; this one does, and the
+        guard is the shape of the argument rather than a flag: a bare
+        ``/rebank`` reports what would move and ``confirm`` is the one word
+        that writes. A short flag would be a keystroke away from a rewritten
+        ledger on a phone keyboard.
+
+        It runs against the live state directory, which is the reason it
+        exists as a command at all: the same job started from a laptop reads
+        whatever ``STATE_DIR`` resolves to there, finds nothing, and reports a
+        clean ledger. The path is printed so that cannot pass unnoticed.
+        """
+        from wolf.rebank import rebank_outcomes, render
+
+        arg = (arg or "").strip().lower()
+        if arg and arg != "confirm":
+            return (
+                "⚠️ Usage: <code>/rebank</code> (dry run) or "
+                "<code>/rebank confirm</code> (writes)"
+            )
+        try:
+            report = rebank_outcomes(
+                self._app.store,
+                self._app.settings.tracker,
+                start_balance=self._app.settings.paper_start_balance,
+                risk_pct=self._app.settings.paper_risk_pct,
+                dry_run=arg != "confirm",
+            )
+        except Exception:
+            log.exception("Rebank failed")
+            return "⚠️ Rebank failed — see logs."
+
+        out = f"<pre>{esc(render(report))}</pre>"
+        if report["dry_run"] and report["rebooked"]:
+            out += "\n<code>/rebank confirm</code> to write."
+        elif not report["dry_run"] and report["rebooked"]:
+            # The balance moved, so the two commands that quote it are now
+            # showing a figure from before the correction.
+            out += "\nRe-read <code>/paper</code> and <code>/diag</code> — both quoted a PnL for a position size those trades did not have."
+        return out
 
     def _tested(self) -> str:
         """The register of questions already settled.

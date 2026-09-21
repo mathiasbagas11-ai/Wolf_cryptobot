@@ -231,9 +231,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-18, HEAD `timeout-banks-the-rung`
+## Status — 2026-09-21, HEAD `rebank-reachable`
 
-1028 tests green. Working tree clean.
+1033 tests green. Working tree clean.
 
 **The ledger was wrong, and every card built on it inherited that.** A position
 that banked TP1 and then timed out was booked as though nothing had been sold —
@@ -241,17 +241,27 @@ see the lesson above for why no card could show it. Fixed forward in
 `wolf/tracker.py`; the historical rows are re-booked by `wolf/rebank.py`.
 
 **The backfill has not been run yet — it is an operational step, not a
-deploy.** `POST /signals/outcomes/rebank` is a dry run by default and reports
-exactly what would move; pass `dry_run=false` to write. It rewrites only rows
-with a timeout status *and* a banked rung, and replays the paper balance from
-`PAPER_START_BALANCE` over the corrected log, because the balance compounds and
-cannot be patched with a delta. **The displayed balance will jump when it
-runs**, and that is the correction, not a loss. `learning_memory` is untouched
-by design — it holds backtest-seeded trades that never appear in the outcome
-log, so rebuilding it from that log would discard them; the price is that its
-`pnl_sum`/`r_sum` keep the old figures for the affected trades. Run it once,
-read the dry run first, and re-read `/diag` afterwards: cards written before
-this reported a PnL for a position size those trades did not have.
+deploy.** Three ways in, and the REST one is the trap: the API binds
+`API_PORT` (8000), not Railway's `$PORT`, so on this deployment it has no
+public domain and `POST /signals/outcomes/rebank` cannot be reached from
+outside at all. Use `/rebank` in Telegram (dry run; `/rebank confirm` writes)
+or `python -m wolf.rebank [--confirm]` from a shell inside the container.
+**Not `railway run`** — that executes locally with the deployment's
+environment, so `STATE_DIR=/data` points at a directory that does not exist on
+the machine running it and the rebank reports a clean ledger it never read.
+Both entry points print the resolved state directory first for exactly that
+reason.
+
+It rewrites only rows with a timeout status *and* a banked rung, and replays
+the paper balance from `PAPER_START_BALANCE` over the corrected log, because
+the balance compounds and cannot be patched with a delta. **The displayed
+balance will jump when it runs**, and that is the correction, not a loss.
+`learning_memory` is untouched by design — it holds backtest-seeded trades that
+never appear in the outcome log, so rebuilding it from that log would discard
+them; the price is that its `pnl_sum`/`r_sum` keep the old figures for the
+affected trades. Run it once, read the dry run first, and re-read `/diag`
+afterwards: cards written before this reported a PnL for a position size those
+trades did not have.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -437,7 +447,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1028 tests, ~12s
+python -m pytest            # 1033 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -450,7 +460,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/whatif.py` | paired re-scoring: stop rules, ladder geometry, whale policies |
 | `wolf/chase_audit.py` | grades what the chase gate dropped (settled: not a lever) |
 | `wolf/contest_audit.py` | pairs each displaced candidate against the winner that beat it |
-| `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung |
+| `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |
 

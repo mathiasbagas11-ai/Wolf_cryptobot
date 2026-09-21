@@ -49,6 +49,7 @@ them very little — but it is a real, known staleness, not a clean slate.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from wolf.account import ACCOUNT_KEY, PaperAccount
@@ -158,6 +159,7 @@ def rebank_outcomes(
         updated.append({**d, **fix})
 
     report = {
+        "state_dir": getattr(store, "base_dir", ""),
         "scanned": len(rows),
         "rebooked": len(changed),
         "status_changed": sum(1 for c in changed if c["was"]["status"] != c["now"]["status"]),
@@ -207,3 +209,88 @@ def replay_balance(store: StateStore, start_balance: float = 1000.0,
     for sig in signals:
         account.apply(sig)
     return account.balance
+
+
+def render(report: dict) -> str:
+    """The report as an operator reads it, for the CLI and for Telegram.
+
+    The path the state came from is printed first. Running this in the wrong
+    place is the failure mode that matters: ``STATE_DIR`` defaults to a
+    relative path, so a rebank started outside the container rewrites an empty
+    ledger, reports "0 scanned" and looks like a clean bill of health.
+    """
+    head = "REBANK (dry run — nothing written)" if report.get("dry_run") else "REBANK (written)"
+    lines = [
+        f"{head} | {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+        f"state      {report.get('state_dir') or '?'}",
+        f"scanned    {report['scanned']} outcomes | {report['rebooked']} re-booked "
+        f"| {report['status_changed']} changed status",
+    ]
+    if not report["rebooked"]:
+        lines.append(
+            "nothing     every timeout row that banked a rung already agrees "
+            "with the blend"
+        )
+        return "\n".join(lines)
+
+    lines.append(f"r_delta    {report['r_delta']:+.3f}R across the re-booked rows")
+    before, after = report.get("balance_before"), report.get("balance_after")
+    if after is None:
+        lines.append(f"balance    {before:,.2f} -> unchanged (dry run)")
+    else:
+        lines.append(f"balance    {before:,.2f} -> {after:,.2f} (replayed, not patched)")
+    lines.append(
+        "learning   learning_memory untouched by design — its pnl_sum/r_sum keep "
+        "the old figures for these rows"
+    )
+    for c in report["changes"][:15]:
+        w, n = c["was"], c["now"]
+        lines.append(
+            f"  {c['symbol']:<12} {c['strategy']:<9} tps={c['tps_hit']} "
+            f"{w['status']} {(w['r_multiple'] or 0):+.3f}R -> "
+            f"{n['status']} {n['r_multiple']:+.3f}R"
+        )
+    if len(report["changes"]) > 15:
+        lines.append(f"  ... and {len(report['changes']) - 15} more")
+    return "\n".join(lines)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """``python -m wolf.rebank`` — run the backfill where the state lives.
+
+    Meant for a shell inside the running container (``railway ssh``). Do not
+    reach for ``railway run``: that executes locally with the deployment's
+    environment, so ``STATE_DIR=/data`` points at a directory that does not
+    exist on the machine running it and the rebank operates on nothing.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m wolf.rebank",
+        description="Re-book timeout outcomes whose banked rungs were never counted.",
+    )
+    parser.add_argument(
+        "--confirm", action="store_true",
+        help="actually write; without it the run is a dry run and reports only",
+    )
+    args = parser.parse_args(argv)
+
+    from wolf.config import Settings
+    from wolf.state import StateStore
+
+    settings = Settings.from_env()
+    store = StateStore(settings.state_dir)
+    report = rebank_outcomes(
+        store, settings.tracker,
+        start_balance=settings.paper_start_balance,
+        risk_pct=settings.paper_risk_pct,
+        dry_run=not args.confirm,
+    )
+    print(render(report))
+    if report["dry_run"] and report["rebooked"]:
+        print("\nRe-run with --confirm to write.")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised as a CLI
+    raise SystemExit(main())

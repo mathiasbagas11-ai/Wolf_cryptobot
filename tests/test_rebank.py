@@ -169,3 +169,89 @@ def test_the_real_timeout_price_survives_the_rewrite(store):
     assert row["timeout_price"] == 100.5
     assert row["exit_price"] != 100.5   # synthetic, consistent with +1.25%
     assert round(row["exit_price"], 6) == 101.25
+
+
+# ── the two ways an operator actually reaches it ──────────────────────────
+def _router_app(store):
+    from types import SimpleNamespace
+
+    from wolf.config import Settings
+
+    return SimpleNamespace(analyze=None, store=store, settings=Settings())
+
+
+def test_the_command_reports_without_writing_until_told_to(store):
+    """The API is not exposed on this deployment; Telegram is the way in."""
+    from wolf.notify.commands import CommandRouter
+
+    before = [_outcome(status=Status.EXPIRED_WIN, exit_price=100.5, tps_hit=[1])]
+    store.write(OUTCOMES_KEY, list(before))
+    router = CommandRouter(_router_app(store))
+
+    reply = router.handle("/rebank")
+    assert "dry run" in reply and "1 re-booked" in reply
+    assert store.read(OUTCOMES_KEY) == before
+    assert "confirm" in reply
+
+    assert "written" in router.handle("/rebank confirm")
+    assert store.read(OUTCOMES_KEY)[0]["pnl_pct"] == 1.25
+
+
+def test_a_mistyped_argument_does_not_write(store):
+    """The only command here that writes, reached from a phone keyboard.
+
+    Anything that is not the word ``confirm`` has to be a usage error rather
+    than a silent dry run, or a fat-fingered ``/rebank confrim`` would read as
+    having done the job it did not do.
+    """
+    from wolf.notify.commands import CommandRouter
+
+    before = [_outcome(status=Status.EXPIRED_WIN, exit_price=100.5, tps_hit=[1])]
+    store.write(OUTCOMES_KEY, list(before))
+
+    reply = CommandRouter(_router_app(store)).handle("/rebank confrim")
+    assert "Usage" in reply
+    assert store.read(OUTCOMES_KEY) == before
+
+
+def test_the_command_is_listed_in_help(store):
+    from wolf.notify.commands import CommandRouter
+
+    assert "/rebank" in CommandRouter(_router_app(store)).handle("/help")
+
+
+def test_the_cli_runs_against_the_state_dir_it_prints(tmp_path, monkeypatch, capsys):
+    """Running this in the wrong place is the failure mode that matters.
+
+    STATE_DIR defaults to a relative path, so the same command started outside
+    the container rewrites an empty ledger, reports "0 scanned" and reads as a
+    clean bill of health. Printing the resolved path is what makes that
+    visible, so it is asserted rather than assumed.
+    """
+    from wolf.rebank import main
+    from wolf.state import StateStore
+
+    state_dir = tmp_path / "live"
+    StateStore(str(state_dir)).write(
+        OUTCOMES_KEY, [_outcome(status=Status.EXPIRED_WIN, exit_price=100.5, tps_hit=[1])]
+    )
+    monkeypatch.setenv("STATE_DIR", str(state_dir))
+
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert str(state_dir) in out
+    assert "dry run" in out and "--confirm" in out
+    assert StateStore(str(state_dir)).read(OUTCOMES_KEY)[0]["pnl_pct"] != 1.25
+
+    assert main(["--confirm"]) == 0
+    assert "written" in capsys.readouterr().out
+    assert StateStore(str(state_dir)).read(OUTCOMES_KEY)[0]["pnl_pct"] == 1.25
+
+
+def test_a_run_with_nothing_to_do_says_so_rather_than_printing_a_delta(store):
+    from wolf.rebank import rebank_outcomes, render
+
+    store.write(OUTCOMES_KEY, [_outcome(status=Status.SL_HIT, exit_price=98.0, tps_hit=[])])
+    out = render(rebank_outcomes(store, TrackerSettings(), dry_run=True))
+    assert "already agrees with the blend" in out
+    assert "r_delta" not in out
