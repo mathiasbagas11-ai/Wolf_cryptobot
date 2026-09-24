@@ -150,6 +150,14 @@ def concurrency(outcomes: Iterable[Signal]) -> dict:
     }
 
 
+def _conviction_label(o) -> str:
+    if getattr(o, "conviction_rank", 0):
+        return "AI_PICK" if getattr(o, "conviction_source", "") == "ai" else "SCORE_PICK"
+    if getattr(o, "conviction_considered", False):
+        return "PASSED"
+    return "UNRANKED"
+
+
 def _ladder_economics(traded: list) -> dict:
     """How far the ladder actually runs, and what that demands of the win rate.
 
@@ -406,7 +414,7 @@ _COLLECTOR_KEYS = {
 #: — an all-NONE column means the engine simply had nothing to say, which is a
 #: finding rather than an outage, and quoting a collector status for it would
 #: name a fault that does not exist.
-_NO_COLLECTOR = ("learn",)
+_NO_COLLECTOR = ("learn", "conv")
 
 
 def _collector_status(tracker, key: str) -> str:
@@ -715,6 +723,18 @@ def diagnose(
         lambda o: getattr(o, "learning_action", "") or "NONE"
     )
 
+    # What the High-Conviction room recommended, scored against what the
+    # trades then did. The room only ever ranks signals that are already live,
+    # so every pick was always in this ledger — but the pick itself was held in
+    # one overwritten key, and nothing downstream could ask whether a 🥇 did
+    # better than the rest. PASSED is the contrast that means something: those
+    # were in the same book at the same moment and the room chose against
+    # them. UNRANKED mixes "never considered" with everything written before
+    # this was recorded, so it is an absence, not a verdict. Picks carry one
+    # bias worth holding: a signal that stays live longer sits through more
+    # rankings and has more chances to be picked at all.
+    by_conviction = _buckets_by(_conviction_label)
+
     # Did the signal carry its detector's own primary evidence, or did it clear
     # the threshold on context alone?
     #
@@ -814,7 +834,7 @@ def diagnose(
     # point: the reader who scans the strategy rows is now scanning the AI rows
     # too, and the correction has to know that.
     families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict,
-                by_learning_action, by_evidence]
+                by_learning_action, by_evidence, by_conviction]
     if ai_edge is not None:
         families.append({"ai_edge": ai_edge})
     _apply_fdr(tuple(families))
@@ -907,6 +927,7 @@ def diagnose(
         "by_ai_verdict": by_ai_verdict,
         "by_learning_action": by_learning_action,
         "by_evidence": by_evidence,
+        "by_conviction": by_conviction,
         "ai_edge": ai_edge,
         "collector_status": {
             label: _collector_status(tracker, key)
@@ -1086,6 +1107,7 @@ def render_digest(diag: dict) -> str:
         ("ai", "NO_AI", diag.get("by_ai_verdict") or {}),
         ("learn", "NONE", diag.get("by_learning_action") or {}),
         ("evidence", "UNRECORDED", diag.get("by_evidence") or {}),
+        ("conv", "UNRANKED", diag.get("by_conviction") or {}),
     ):
         real = {k: v for k, v in buckets.items() if k != sentinel}
         if not real:
@@ -1175,7 +1197,8 @@ def render_digest(diag: dict) -> str:
     n_family = sum(
         len(diag.get(k) or {})
         for k in ("by_strategy", "by_whale_stance", "by_onchain_bias",
-                  "by_ai_verdict", "by_learning_action", "by_evidence")
+                  "by_ai_verdict", "by_learning_action", "by_evidence",
+                  "by_conviction")
     ) + (1 if diag.get("ai_edge") else 0)
     if n_family:
         lines.append(

@@ -263,6 +263,24 @@ class Signal:
     # created_at, rather than from the last closed bar of the timeframe.
     entry_quoted_live: bool = False
 
+    # High-Conviction room. The room ranks signals that are already live, so a
+    # pick was always an ordinary signal in this ledger — but the pick itself
+    # was only ever held in a single overwritten "last posted" key, and the
+    # Trade Report that closed the trade had no way to know it had been
+    # recommended. That made the room's claim ("take this one") ungradeable.
+    # Recorded here, it travels with the signal into the outcome log.
+    #
+    # conviction_rank: best rank reached in a posted ranking (1 = top; 0 = never
+    #   picked). conviction_score: the model's 0-100 at that rank, 0 for a
+    #   score-ordered fallback. conviction_source: "ai" | "heuristic" | "".
+    # conviction_considered: it was in the book a posted ranking chose from —
+    #   which is what makes "picked" comparable with "passed over", since both
+    #   were judged from the same book at the same moment.
+    conviction_rank: int = 0
+    conviction_score: int = 0
+    conviction_source: str = ""
+    conviction_considered: bool = False
+
     # Top-of-book spread at signal time, in basis points of the mid.
     #
     # The cost of a round trip is two fees plus one full spread — a taker buys

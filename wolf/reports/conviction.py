@@ -407,7 +407,27 @@ class ConvictionRanker:
             return None
         if remember:
             self._remember(picks)
+            self._record_picks(picks, candidates)
         return self._card(picks, candidates)
+
+    def _record_picks(self, picks: Sequence[RankedPick], candidates: Sequence[Signal]) -> None:
+        """Write the ranking onto the signals it ranked.
+
+        Only a posted ranking stamps — the same rule as ``_remember`` — so a
+        ``/rank`` answered in another chat is not recorded as something the
+        room recommended. A failure here is logged and swallowed: the card is
+        the product the room exists for, and losing a label must not cost it.
+        """
+        mark = getattr(self._tracker, "mark_conviction", None)
+        if mark is None:
+            return
+        try:
+            mark(
+                [sig.id for sig in candidates],
+                [(p.signal.id, p.rank, p.conviction, p.source) for p in picks],
+            )
+        except Exception:
+            log.exception("Could not record the conviction ranking on its signals")
 
     def _card(self, picks: Sequence[RankedPick], candidates: Sequence[Signal]) -> str:
         heuristic = picks[0].source == "heuristic"

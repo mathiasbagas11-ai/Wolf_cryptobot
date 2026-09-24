@@ -782,6 +782,41 @@ class Tracker:
             log.exception("Notification callback failed for %s/%s", sig.symbol, event)
 
     # ── queries ─────────────────────────────────────────────────────────
+    def mark_conviction(self, considered_ids, picks) -> int:
+        """Stamp a posted High-Conviction ranking onto the live signals.
+
+        ``picks`` is ``(id, rank, score, source)`` per pick. The best rank a
+        signal ever reaches is kept, so a setup that was once the top pick
+        stays one after the room reshuffles. Runs under the same lock as
+        ``record_signal`` and ``check_pending``, which both rewrite the pending
+        list: without it a resolution landing mid-stamp would be lost or would
+        resurrect a closed trade. Returns how many signals were stamped.
+        """
+        considered = set(considered_ids)
+        by_id = {pid: (rank, score, source) for pid, rank, score, source in picks}
+        if not considered and not by_id:
+            return 0
+        touched = 0
+        with self._lock:
+            pending = self._load_pending()
+            for sig in pending:
+                hit = False
+                if sig.id in considered and not sig.conviction_considered:
+                    sig.conviction_considered = True
+                    hit = True
+                if sig.id in by_id:
+                    rank, score, source = by_id[sig.id]
+                    sig.conviction_considered = True
+                    if not sig.conviction_rank or rank < sig.conviction_rank:
+                        sig.conviction_rank = rank
+                        sig.conviction_score = score
+                        sig.conviction_source = source
+                        hit = True
+                touched += hit
+            if touched:
+                self._save_pending(pending)
+        return touched
+
     def active_signals(self) -> list[Signal]:
         return [
             s for s in self._load_pending()

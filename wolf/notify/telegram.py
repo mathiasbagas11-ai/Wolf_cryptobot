@@ -500,6 +500,11 @@ class TelegramNotifier:
         lines.append(pnl_line)
         if "balance" in info:
             lines.append(f"🏦 Paper balance <b>{info['balance']:.2f} USD</b>")
+        if getattr(s, "conviction_rank", 0):
+            badge = ("🥇", "🥈", "🥉")[s.conviction_rank - 1] if s.conviction_rank <= 3 else "🏆"
+            how = (f"AI {s.conviction_score}%" if s.conviction_source == "ai"
+                   else "by score — AI was unavailable")
+            lines.append(f"{badge} <b>High Conviction #{s.conviction_rank}</b> · {how}")
         if info.get("lesson"):
             lines.append(f"🧠 <i>{esc(info['lesson'])}</i>")
         lines.append(self._stamp())

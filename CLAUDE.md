@@ -229,7 +229,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-five entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-six entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -241,7 +241,8 @@ Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
 `momentum-score-cannot-reject`. One added 2026-09-17:
 `contest-max-score-self-blinding`. One added 2026-09-18:
 `timeout-forgot-the-banked-rung`. One added 2026-09-21:
-`replay-over-a-truncated-log`. **`chase-gate-self-blinding` moved OPEN →
+`replay-over-a-truncated-log`. One added 2026-09-24:
+`conviction-room-picks-unrecorded`. **`chase-gate-self-blinding` moved OPEN →
 INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
@@ -249,9 +250,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-24, HEAD `balance-repaired`
+## Status — 2026-09-24, HEAD `conviction-recorded`
 
-1042 tests green. Working tree clean.
+1050 tests green. Working tree clean.
 
 **The ledger was wrong, and every card built on it inherited that.** A position
 that banked TP1 and then timed out was booked as though nothing had been sold —
@@ -430,8 +431,15 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    `record_signal`. Every day it runs, the evidence needed to judge it is
    discarded. The only queued item whose cost grows while it waits.
 3. **Windowing uses resolution time** where era hygiene wants creation time.
-4. `wolf/reports/conviction.py` (AI conviction ranking) arrived via PR #32 from
-   another session and has never been measured.
+4. **High-Conviction room — now recorded, not yet measured.**
+   `wolf/reports/conviction.py` arrived via PR #32 and could not be measured:
+   it ranks signals already in the ledger, but the pick lived only in one
+   overwritten key, so no outcome knew it had been recommended. Since
+   2026-09-24 a posted ranking stamps `conviction_rank`/`_score`/`_source` on
+   its picks and `conviction_considered` on everything it chose from; the
+   Trade Report prints the badge; the diag carries `conv:` (AI_PICK,
+   SCORE_PICK, PASSED, UNRANKED). **Read AI_PICK against PASSED** — same book,
+   same moment. Registry: `conviction-room-picks-unrecorded`.
 5. **`_best_candidate` discards the alternative with no record — now being
    measured.** One candidate per symbol survives `max(score)`, and the scores
    compared are not on a common scale: gates guarantee floors of 0 (PREPUMP,
@@ -493,7 +501,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1042 tests, ~12s
+python -m pytest            # 1050 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
