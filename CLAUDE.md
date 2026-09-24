@@ -249,7 +249,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-24, HEAD `repair-by-estimate`
+## Status — 2026-09-24, HEAD `balance-repaired`
 
 1042 tests green. Working tree clean.
 
@@ -280,24 +280,22 @@ above. It replayed the outcome log from `PAPER_START_BALANCE` and reported
 is capped at `MAX_OUTCOMES` (the live one held exactly 500 rows of a longer
 history). `rebank_outcomes` now patches the balance by a ratio instead, which
 needs no history, and `replay_balance` refuses a truncated log by name.
-**The live balance is still the re-anchored 1,162.36 until
-`/rebank repair 2562.58 -2.303 confirm` is run** — the estimate path, target
-**≈2,504** (±0.3%). The exact path (`/rebank repair 2562.58 36`) was tried on
-2026-09-24 and produced no figure: three days at ~25 outcomes/day had pushed
-the oldest rows out of the capped log, and the rows it needs were among them.
-That was always going to happen and the window was about a day — the same
-shrinking-reach shape as the chase audit. The estimate takes the report's
-`r_delta` instead and needs nothing from the log: `exp(k·r_delta)` matches the
-exact product to 0.0258% on the 15 rows the report printed. An earlier figure
-of ~2,540 quoted to the owner extrapolated the 15-row ratio to all 36 and was
-wrong; 2,504 uses the report's own total.
-Both figures come from the backfill's own report. The repair takes the
-*oldest* 36 rows carrying a `timeout_price` — the tracker writes that field
-too, but only from the moment the forward fix deployed, so every row the
-backfill touched predates every row the tracker wrote. An earlier version
-took a cutoff timestamp instead and was withdrawn: a timestamp an hour out
-selects a different set and returns a plausible wrong number, which is the
-failure being undone.
+**The balance is repaired** (2026-09-24): `/rebank repair 2562.58 -2.303
+confirm` wrote **2,504.24**, which is the figure predicted before the write to
+the cent. The exact path (`/rebank repair 2562.58 36`) had produced nothing:
+three days at ~25 outcomes/day pushed the oldest rows out of the capped log,
+and the rows it needs were among them — the same shrinking-reach shape as the
+chase audit, and its window was about a day. The estimate path takes the
+report's `r_delta` and needs nothing from the log; `exp(k·r_delta)` matches
+the exact product to 0.0258% on the 15 rows the report printed.
+
+**Two account fields were destroyed by the replay and cannot be recovered.**
+`peak` was reset to the replayed curve and now reads 2,504.24, so `/paper`
+shows **Max DD 0.00%** — flattering: the balance stood at 2,562.58 before the
+correction, so the true drawdown is at least 2.3% and the true peak is higher
+still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
+any card or decision. `peak` corrects itself once the balance clears 2,562.58;
+`trades` does not. Read both as starting 2026-09-21.
 
 **09-24 card (24h):** n=25 `eff=7`, meanR +0.389, netR +0.299, ci95
 [−0.408, +1.185], all 16 buckets `padj = 1.000`. Nothing separated. Two lines
