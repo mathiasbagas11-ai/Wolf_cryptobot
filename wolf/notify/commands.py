@@ -295,40 +295,61 @@ class CommandRouter:
         report, and the row count is the assertion that the rows are still on
         disk.
         """
-        from wolf.rebank import render_repair, repair_balance
+        from wolf.rebank import render_repair, repair_balance, repair_balance_from_delta
 
         usage = (
-            "⚠️ Usage: <code>/rebank repair &lt;balance-before&gt; &lt;rows&gt;</code>\n"
-            "Both figures come from the backfill's own report, e.g.\n"
-            "<code>/rebank repair 2562.58 36</code> — then add "
-            "<code>confirm</code> to write."
+            "⚠️ Usage: <code>/rebank repair &lt;balance-before&gt; &lt;rows or r_delta&gt;</code>\n"
+            "Both figures come from the backfill's own report:\n"
+            "<code>/rebank repair 2562.58 36</code> — exact, while the rows survive\n"
+            "<code>/rebank repair 2562.58 -2.303</code> — estimate, once they have rotated out\n"
+            "Add <code>confirm</code> to write."
         )
         confirm = bool(parts) and parts[-1].lower() == "confirm"
         if confirm:
             parts = parts[:-1]
         if len(parts) != 2:
             return usage
+        # A whole number is the row count the report printed; anything else is
+        # its r_delta. The two cannot be confused: a count is a positive
+        # integer and an r_delta is a signed decimal — "36" versus "-2.303".
         try:
-            before, count = float(parts[0].replace(",", "")), int(parts[1])
+            before = float(parts[0].replace(",", ""))
+            second = parts[1]
+            count = int(second) if second.isdigit() else None
+            r_delta = None if count is not None else float(second.rstrip("r"))
         except ValueError:
             return usage
-        if before <= 0 or count <= 0:
+        if before <= 0 or (count is not None and count <= 0):
             return usage
         try:
-            report = repair_balance(
-                self._app.store, before, count=count,
-                settings=self._app.settings.tracker,
-                start_balance=self._app.settings.paper_start_balance,
-                risk_pct=self._app.settings.paper_risk_pct,
-                dry_run=not confirm,
-            )
+            if count is not None:
+                report = repair_balance(
+                    self._app.store, before, count=count,
+                    settings=self._app.settings.tracker,
+                    start_balance=self._app.settings.paper_start_balance,
+                    risk_pct=self._app.settings.paper_risk_pct,
+                    dry_run=not confirm,
+                )
+            else:
+                report = repair_balance_from_delta(
+                    self._app.store, before, r_delta,
+                    start_balance=self._app.settings.paper_start_balance,
+                    risk_pct=self._app.settings.paper_risk_pct,
+                    dry_run=not confirm,
+                )
         except Exception:
             log.exception("Rebank repair failed")
             return "⚠️ Repair failed — see logs."
 
         out = f"<pre>{esc(render_repair(report))}</pre>"
         if report.get("error"):
-            return out
+            # The exact path has nothing left to read. Say what to do instead
+            # rather than leaving a refusal with no way forward.
+            return out + (
+                "\nThe corrected rows have rotated out. Use the r_delta from the "
+                "backfill's report instead, e.g. "
+                f"<code>/rebank repair {parts[0]} -2.303</code>"
+            )
         if report["dry_run"]:
             out += (f"\n<code>/rebank repair {parts[0]} {parts[1]} confirm</code> "
                     f"to write.")

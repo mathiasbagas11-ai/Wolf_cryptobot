@@ -413,15 +413,66 @@ def render(report: dict) -> str:
     return "\n".join(lines)
 
 
+def repair_balance_from_delta(store: StateStore, observed_before: float, r_delta: float,
+                              start_balance: float = 1000.0, risk_pct: float = 1.0,
+                              dry_run: bool = True) -> dict:
+    """Undo a truncated-log replay once the rows it needs have rotated out.
+
+    The exact repair reads the corrected rows back off disk, and the log is
+    capped: every day ~25 new outcomes push the oldest out, and the rows the
+    backfill corrected were among the oldest. After a few days they are gone
+    and the exact repair refuses — correctly — but the balance is still the
+    re-anchored figure, which is wrong by half.
+
+    Both inputs here come from the backfill's own report, and neither needs
+    the log. Because ``apply`` is multiplicative, the correction is
+    ``prod((1 + k R_new) / (1 + k R_old))``, and for ``k R`` of a percent or
+    two that is ``exp(k * sum(R_new - R_old))`` = ``exp(k * r_delta)`` to
+    within a few hundredths of a percent — checked against the exact product
+    on the rows the report printed (0.0258%). The one row that crossed the
+    dead band adds at most ``k * 0.25`` on top, so the stated bound is 0.3%.
+
+    It is an estimate and says so on every line it prints. The alternative is
+    a balance known to be wrong by 55%, which is not a more honest number,
+    only a more precise-looking one.
+    """
+    import math
+
+    factor = math.exp(risk_pct / 100 * r_delta)
+    report = {
+        "state_dir": getattr(store, "base_dir", ""),
+        "mode": "estimate",
+        "r_delta": r_delta,
+        "observed_before": round(observed_before, 2),
+        "factor": round(factor, 6),
+        "balance_after": round(observed_before * factor, 2),
+        "tolerance_pct": 0.3,
+        "dry_run": dry_run,
+    }
+    if not dry_run:
+        _write_balance(store, report["balance_after"], start_balance, settled_delta=0)
+    return report
+
+
 def render_repair(report: dict) -> str:
     head = ("REBANK-REPAIR (dry run — nothing written)" if report.get("dry_run")
             else "REBANK-REPAIR (written)")
     lines = [
         f"{head} | {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
         f"state      {report.get('state_dir') or '?'}",
-        f"rows       {report['matched']} of {report['expected']} corrected rows "
-        f"found ({report.get('candidates', 0)} carry a timeout price)",
     ]
+    if report.get("mode") == "estimate":
+        lines.append(f"mode       estimate from r_delta {report['r_delta']:+.3f}R "
+                     f"(within ±{report['tolerance_pct']}%) — the corrected rows "
+                     f"have rotated out of the log")
+        lines.append(f"factor     x{report['factor']:.6f}")
+        lines.append(f"balance    {report['observed_before']:,.2f} -> "
+                     f"{report['balance_after']:,.2f}")
+        return "\n".join(lines)
+    lines.append(
+        f"rows       {report['matched']} of {report['expected']} corrected rows "
+        f"found ({report.get('candidates', 0)} carry a timeout price)"
+    )
     if report.get("error"):
         lines.append(f"refused    {report['error']}")
         return "\n".join(lines)

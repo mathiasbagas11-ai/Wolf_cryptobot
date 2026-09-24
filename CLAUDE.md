@@ -249,9 +249,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-21, HEAD `repair-from-the-chat`
+## Status — 2026-09-24, HEAD `repair-by-estimate`
 
-1038 tests green. Working tree clean.
+1042 tests green. Working tree clean.
 
 **The ledger was wrong, and every card built on it inherited that.** A position
 that banked TP1 and then timed out was booked as though nothing had been sold —
@@ -281,8 +281,16 @@ is capped at `MAX_OUTCOMES` (the live one held exactly 500 rows of a longer
 history). `rebank_outcomes` now patches the balance by a ratio instead, which
 needs no history, and `replay_balance` refuses a truncated log by name.
 **The live balance is still the re-anchored 1,162.36 until
-`/rebank repair 2562.58 36 confirm` is run** (or the same via
-`python -m wolf.rebank --repair-balance 2562.58 --expect 36 --confirm`).
+`/rebank repair 2562.58 -2.303 confirm` is run** — the estimate path, target
+**≈2,504** (±0.3%). The exact path (`/rebank repair 2562.58 36`) was tried on
+2026-09-24 and produced no figure: three days at ~25 outcomes/day had pushed
+the oldest rows out of the capped log, and the rows it needs were among them.
+That was always going to happen and the window was about a day — the same
+shrinking-reach shape as the chase audit. The estimate takes the report's
+`r_delta` instead and needs nothing from the log: `exp(k·r_delta)` matches the
+exact product to 0.0258% on the 15 rows the report printed. An earlier figure
+of ~2,540 quoted to the owner extrapolated the 15-row ratio to all 36 and was
+wrong; 2,504 uses the report's own total.
 Both figures come from the backfill's own report. The repair takes the
 *oldest* 36 rows carrying a `timeout_price` — the tracker writes that field
 too, but only from the moment the forward fix deployed, so every row the
@@ -290,6 +298,18 @@ backfill touched predates every row the tracker wrote. An earlier version
 took a cutoff timestamp instead and was withdrawn: a timestamp an hour out
 selects a different set and returns a plausible wrong number, which is the
 failure being undone.
+
+**09-24 card (24h):** n=25 `eff=7`, meanR +0.389, netR +0.299, ci95
+[−0.408, +1.185], all 16 buckets `padj = 1.000`. Nothing separated. Two lines
+worth tracking because they are counts or mechanics, not means: rung fill has
+risen card over card (09-18 41/4/4 → 09-21 52/29/15 → 09-24 **60/36/28**),
+and `avgLoss` printed **−0.83R**, the first card below −1.00R — timeouts that
+banked a rung and then drifted negative now book the rung (`EXPIRED_LOSS=2`),
+which is the forward fix showing up, not the market. Required WR 40.9% against
+62.5% achieved is the widest margin yet, but it straddles the booking change
+(09-18 and earlier over-stated `avgWin`), so the 57.0 → 40.9 slide is not one
+quantity measured four times. `evidence:THIN` was empty this window and
+PREPUMP did not trade. On-chain named its fault: 5 of 15, rate limited.
 
 **The sample was reset, deliberately.** Two things changed signal composition:
 PREPUMP can now emit at all (it could not — see below), and the universe gained
@@ -475,7 +495,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1038 tests, ~12s
+python -m pytest            # 1042 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

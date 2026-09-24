@@ -358,3 +358,55 @@ def test_the_repair_from_the_chat_refuses_rather_than_guessing(store):
     reply = CommandRouter(_router_app(store)).handle("/rebank repair 2562.58 36 confirm")
     assert "refused" in reply
     assert PaperAccount(store, 1000.0, 1.0).balance != 2562.58
+
+
+def test_the_estimate_needs_no_rows_and_says_it_is_one(store):
+    """Once the corrected rows rotate out, the exact repair can only refuse —
+    while the balance is still wrong by half. Both figures the estimate takes
+    are in the backfill's report, so it needs nothing from the log."""
+    from wolf.rebank import render_repair, repair_balance_from_delta
+
+    store.write(ACCOUNT_KEY, {"balance": 1162.36, "trades": 500,
+                              "realized": 162.36, "peak": 2600.0})
+    rep = repair_balance_from_delta(store, 2562.58, -2.303, dry_run=False)
+
+    assert 2500.0 < rep["balance_after"] < 2508.0
+    assert PaperAccount(store, 1000.0, 1.0).balance == rep["balance_after"]
+    assert "estimate" in render_repair(rep)
+
+
+def test_the_estimate_matches_the_exact_product_on_the_rows_the_report_printed():
+    """The shortcut's accuracy is measured, not asserted in a docstring: on
+    the fifteen rows the live report printed, exp(k * sum(dR)) and the exact
+    product of ratios differ by 0.0258%."""
+    import math
+
+    k = 0.01
+    rows = [(1.043, 1.309), (0.697, 0.848), (0.953, 0.976), (2.387, 1.577),
+            (1.752, 1.451), (1.508, 1.402), (1.738, 1.447), (0.887, 0.943),
+            (0.343, 0.672), (1.672, 1.435), (1.736, 1.368), (0.565, 1.213),
+            (0.641, 1.228), (1.484, 1.397), (1.871, 1.474)]
+    exact = math.prod((1 + k * n) / (1 + k * o) for o, n in rows)
+    shortcut = math.exp(k * sum(n - o for o, n in rows))
+    assert abs(exact - shortcut) / exact < 0.001
+
+
+def test_a_refused_repair_points_at_the_estimate(store):
+    """A refusal with no way forward is a dead end on a phone."""
+    from wolf.notify.commands import CommandRouter
+
+    reply = CommandRouter(_router_app(store)).handle("/rebank repair 2562.58 36")
+    assert "refused" in reply and "-2.303" in reply
+
+
+def test_the_chat_tells_a_count_from_an_r_delta(store):
+    from wolf.notify.commands import CommandRouter
+
+    store.write(ACCOUNT_KEY, {"balance": 1162.36, "trades": 500,
+                              "realized": 162.36, "peak": 2600.0})
+    router = CommandRouter(_router_app(store))
+    assert "estimate" in router.handle("/rebank repair 2562.58 -2.303")
+    assert "estimate" in router.handle("/rebank repair 2562.58 -2.303r")
+    assert "estimate" not in router.handle("/rebank repair 2562.58 36")
+    assert "2,504" in router.handle("/rebank repair 2,562.58 -2.303 confirm")
+    assert 2500.0 < PaperAccount(store, 1000.0, 1.0).balance < 2508.0
