@@ -15,10 +15,19 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "anthropic>=0.40",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "gspread>=6.0",
 ]
 
 [tool.setuptools]
-packages = ["wolf", "wolf.state", "wolf.exchange", "wolf.detectors", "wolf.notify", "wolf.api", "wolf.ai", "wolf.news", "wolf.reports"]
+packages = ["wolf", "wolf.state", "wolf.exchange", "wolf.detectors", "wolf.notify", "wolf.api", "wolf.ai", "wolf.news", "wolf.reports", "anomaly"]
+
+# The hypothesis registry sits beside the module that reads it, so it has to
+# travel with the package rather than being left behind as an unrecognised
+# data file the moment this is installed rather than run from a checkout.
+[tool.setuptools.package-data]
+wolf = ["hypotheses.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
