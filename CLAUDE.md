@@ -203,6 +203,18 @@ changed row patches it by a **ratio**, exactly and order-independently, with
 no history at all. **Before a destructive write, state what the number should
 be; a report cannot audit its own blind spot.**
 
+**Unequal exposure manufactures skill, and a bias you write down is not a
+bias you removed.** The High-Conviction bucket shipped labelling a signal a
+pick if it was *ever* picked. Rankings run hourly; losers stop out within a
+look or two, winners stay live for dozens — so a picker with no skill at all
+has "picked" nearly every winner. Simulated, a random picker prints a +1.15R
+gap that way. The first live reading was +1.22R, with an 86% win rate on
+picks. The bias had been written down the day the bucket shipped and called
+"worth holding", which was wrong: it was the size of the entire effect, and
+the reading would have been taken as proof the room works. **Give every unit
+exactly one chance to be chosen — or measure what the extra chances are worth
+before reading any gap.**
+
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
 unrelated remedies. The provider almost always already said which; the bug was
@@ -250,9 +262,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-24, HEAD `conviction-recorded`
+## Status — 2026-09-27, HEAD `conviction-first-look`
 
-1050 tests green. Working tree clean.
+1055 tests green. Working tree clean.
 
 **The ledger was wrong, and every card built on it inherited that.** A position
 that banked TP1 and then timed out was booked as though nothing had been sold —
@@ -297,6 +309,15 @@ correction, so the true drawdown is at least 2.3% and the true peak is higher
 still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
+
+**09-27 card (24h):** n=18 `eff=5`, meanR −0.023, netR −0.117, all 20
+buckets `padj = 1.000`. **Rung fill reversed**: 60/36/28 on 09-24 → **50/11/6**.
+The three-card rise was described to the owner as the one line improving for
+a reason other than luck; three points is not a trend, and it went back the
+same way it came. Required WR 51.2% against 50.0% achieved. `conv:` printed
+AI_PICK +0.823R vs PASSED −0.398R — discarded, see Broken #4. **TRAP's 1R was
+1.54% → cost 0.13R**, now approaching `max_cost_r` the way SCALP did.
+On-chain 2 of 15.
 
 **09-24 card (24h):** n=25 `eff=7`, meanR +0.389, netR +0.299, ci95
 [−0.408, +1.185], all 16 buckets `padj = 1.000`. Nothing separated. Two lines
@@ -433,13 +454,15 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
 3. **Windowing uses resolution time** where era hygiene wants creation time.
 4. **High-Conviction room — now recorded, not yet measured.**
    `wolf/reports/conviction.py` arrived via PR #32 and could not be measured:
-   it ranks signals already in the ledger, but the pick lived only in one
-   overwritten key, so no outcome knew it had been recommended. Since
-   2026-09-24 a posted ranking stamps `conviction_rank`/`_score`/`_source` on
-   its picks and `conviction_considered` on everything it chose from; the
-   Trade Report prints the badge; the diag carries `conv:` (AI_PICK,
-   SCORE_PICK, PASSED, UNRANKED). **Read AI_PICK against PASSED** — same book,
-   same moment. Registry: `conviction-room-picks-unrecorded`.
+   the pick lived only in one overwritten key. Since 2026-09-24 picks are
+   stamped on the signal and the Trade Report prints the badge (best rank
+   ever reached — what the owner was told). **The diag reads something else:
+   the first look** (`conviction_first_rank`/`_first_source`, since
+   2026-09-27), because "ever picked" credits the room with whatever makes a
+   signal live longer — see the lesson. `conv:` = AI_PICK, PASSED,
+   SCORE_ORDERED, UNRANKED. **Read AI_PICK against PASSED.** The first
+   reading (+1.22R, 09-27) was discarded as the artifact. Registry:
+   `conviction-room-picks-unrecorded`.
 5. **`_best_candidate` discards the alternative with no record — now being
    measured.** One candidate per symbol survives `max(score)`, and the scores
    compared are not on a common scale: gates guarantee floors of 0 (PREPUMP,
@@ -501,7 +524,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1050 tests, ~12s
+python -m pytest            # 1055 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

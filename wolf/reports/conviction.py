@@ -396,6 +396,16 @@ class ConvictionRanker:
             )
             return None
         picks = self.rank(candidates)
+        # Recorded before either early return below, because both are
+        # judgements. "Would take none" passed over every setup in the book;
+        # an unchanged ranking still looked at any setup that joined the book
+        # since the last post, and chose against it. Skipping those would
+        # delay a newcomer's first look until the picks happened to change,
+        # which reintroduces the age bias first-look recording exists to
+        # remove. Gated on ``remember`` so a /rank typed into another chat is
+        # never recorded as the room's judgement.
+        if remember:
+            self._record_picks(picks, candidates)
         if not picks:
             log.info(
                 "Conviction ranking: the AI would take none of the %d live setups",
@@ -407,24 +417,27 @@ class ConvictionRanker:
             return None
         if remember:
             self._remember(picks)
-            self._record_picks(picks, candidates)
         return self._card(picks, candidates)
 
     def _record_picks(self, picks: Sequence[RankedPick], candidates: Sequence[Signal]) -> None:
         """Write the ranking onto the signals it ranked.
 
-        Only a posted ranking stamps — the same rule as ``_remember`` — so a
-        ``/rank`` answered in another chat is not recorded as something the
-        room recommended. A failure here is logged and swallowed: the card is
+        Only a ranking the room computed for itself stamps — the same gate as
+        ``_remember`` — so a ``/rank`` answered in another chat is not recorded
+        as the room's judgement. A failure here is logged and swallowed: the card is
         the product the room exists for, and losing a label must not cost it.
         """
         mark = getattr(self._tracker, "mark_conviction", None)
         if mark is None:
             return
+        # An empty pick list means the model read the book and took nothing —
+        # an AI judgement. Heuristic picks only exist when it was not asked.
+        source = picks[0].source if picks else "ai"
         try:
             mark(
                 [sig.id for sig in candidates],
                 [(p.signal.id, p.rank, p.conviction, p.source) for p in picks],
+                source,
             )
         except Exception:
             log.exception("Could not record the conviction ranking on its signals")

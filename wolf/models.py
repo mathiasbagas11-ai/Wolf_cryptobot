@@ -280,6 +280,17 @@ class Signal:
     conviction_score: int = 0
     conviction_source: str = ""
     conviction_considered: bool = False
+    # The verdict at the FIRST ranking that saw this signal, and only that one.
+    # "Ever picked" cannot measure the room: rankings run hourly, a loser stops
+    # out in an hour or two and is looked at once, a winner lives for many hours
+    # and is looked at dozens of times — so a picker with no skill at all ends
+    # up having "picked" nearly every winner. Simulated, a random picker shows a
+    # +1.15R gap that way and -0.02R at first look. One look per signal is what
+    # makes picks and passes comparable. None = never recorded (everything from
+    # before 2026-09-27, including rows considered under the old rule).
+    # conviction_first_rank: 0 = looked at and passed over.
+    conviction_first_rank: Optional[int] = None
+    conviction_first_source: str = ""
 
     # Top-of-book spread at signal time, in basis points of the mid.
     #

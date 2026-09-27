@@ -151,11 +151,24 @@ def concurrency(outcomes: Iterable[Signal]) -> dict:
 
 
 def _conviction_label(o) -> str:
-    if getattr(o, "conviction_rank", 0):
-        return "AI_PICK" if getattr(o, "conviction_source", "") == "ai" else "SCORE_PICK"
-    if getattr(o, "conviction_considered", False):
-        return "PASSED"
-    return "UNRANKED"
+    """The room's verdict at its first look at this signal — and only that.
+
+    Deliberately not the best rank ever reached. Rankings run hourly, losers
+    stop out within a look or two, winners stay live for dozens: under "ever
+    picked" a picker with no skill has picked nearly every winner and passed
+    nearly every loser, and prints a gap of about +1.15R — the same size as the
+    first reading this bucket produced. One look per signal removes that.
+    SCORE_ORDERED is a first look the model did not make (it was unavailable
+    and the room sorted by score); it is not a verdict and never pools with
+    AI_PICK. UNRANKED is an absence: never looked at, or looked at before
+    first looks were recorded.
+    """
+    first = getattr(o, "conviction_first_rank", None)
+    if first is None:
+        return "UNRANKED"
+    if getattr(o, "conviction_first_source", "") != "ai":
+        return "SCORE_ORDERED"
+    return "AI_PICK" if first else "PASSED"
 
 
 def _ladder_economics(traded: list) -> dict:
@@ -723,16 +736,12 @@ def diagnose(
         lambda o: getattr(o, "learning_action", "") or "NONE"
     )
 
-    # What the High-Conviction room recommended, scored against what the
-    # trades then did. The room only ever ranks signals that are already live,
-    # so every pick was always in this ledger — but the pick itself was held in
-    # one overwritten key, and nothing downstream could ask whether a 🥇 did
-    # better than the rest. PASSED is the contrast that means something: those
-    # were in the same book at the same moment and the room chose against
-    # them. UNRANKED mixes "never considered" with everything written before
-    # this was recorded, so it is an absence, not a verdict. Picks carry one
-    # bias worth holding: a signal that stays live longer sits through more
-    # rankings and has more chances to be picked at all.
+    # What the High-Conviction room thought of each signal the first time it
+    # saw it, scored against what the trade then did. PASSED is the contrast
+    # that means something: same book, same moment, the room chose against
+    # them. See _conviction_label for why this is first look and not "ever
+    # picked" — the first version of this bucket used the latter and could not
+    # tell a skilled room from a coin.
     by_conviction = _buckets_by(_conviction_label)
 
     # Did the signal carry its detector's own primary evidence, or did it clear

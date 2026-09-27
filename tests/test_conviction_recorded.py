@@ -135,17 +135,94 @@ def test_a_score_ordered_pick_says_the_ai_did_not_make_it():
                  conviction_rank=2, conviction_source="heuristic")
     text = TelegramNotifier(TelegramSettings(bot_token="t", chat_id="1"))._resolved_text(sig)
     assert "AI was unavailable" in text and "AI 0%" not in text
-    assert _conviction_label(sig) == "SCORE_PICK"
+    sig.conviction_first_rank, sig.conviction_first_source = 2, "heuristic"
+    assert _conviction_label(sig) == "SCORE_ORDERED"
 
 
-def test_the_diag_separates_picks_from_what_the_room_passed_over():
-    def s(**kw):
-        return Signal(symbol="X", signal_type="S", direction="LONG",
-                      entry_price=100, tp=110, sl=95, **kw)
+def _s(**kw):
+    return Signal(symbol="X", signal_type="S", direction="LONG",
+                  entry_price=100, tp=110, sl=95, **kw)
 
-    assert _conviction_label(s(conviction_rank=1, conviction_source="ai")) == "AI_PICK"
-    assert _conviction_label(s(conviction_considered=True)) == "PASSED"
-    assert _conviction_label(s()) == "UNRANKED"
+
+def test_the_diag_reads_the_first_look_not_the_best_rank():
+    """A signal passed over at first look and picked five hours later is a
+    pass. Counting the later pick is how a winner that simply lived longer
+    gets credited to the room's judgement."""
+    assert _conviction_label(_s(conviction_first_rank=1, conviction_first_source="ai")) == "AI_PICK"
+    assert _conviction_label(_s(conviction_first_rank=0, conviction_first_source="ai",
+                                conviction_rank=1, conviction_source="ai")) == "PASSED"
+    assert _conviction_label(_s()) == "UNRANKED"
+
+
+def test_rows_considered_before_first_looks_were_recorded_stay_unranked():
+    """They were labelled under the biased rule. Folding them into either
+    side would pool two definitions under one name."""
+    assert _conviction_label(_s(conviction_considered=True, conviction_rank=1,
+                                conviction_source="ai")) == "UNRANKED"
+
+
+def test_the_first_look_is_recorded_once_and_never_revised(store, fake_client):
+    tracker = Tracker(store, fake_client, TrackerSettings())
+    a, b, c = _book(tracker, "AAAUSDT", "BBBUSDT", "CCCUSDT")
+
+    _ranker(tracker, store, [(a.id, 80)]).build()             # first look: A picked
+    _ranker(tracker, store, [(b.id, 90), (c.id, 85)]).build()  # B, C picked later
+
+    live = _live(tracker)
+    assert live["AAAUSDT"].conviction_first_rank == 1
+    assert live["BBBUSDT"].conviction_first_rank == 0     # passed first, picked later
+    assert live["CCCUSDT"].conviction_first_rank == 0
+    assert live["BBBUSDT"].conviction_rank == 1            # the badge still knows
+    assert _conviction_label(live["BBBUSDT"]) == "PASSED"
+
+
+def test_a_newcomer_gets_its_first_look_even_when_the_ranking_is_unchanged(store, fake_client):
+    """An unchanged ranking is not posted, but the room still judged the book.
+    Waiting for the picks to change before recording the newcomer's first look
+    would push it later, and later is the bias."""
+    tracker = Tracker(store, fake_client, TrackerSettings())
+    a, b = _book(tracker, "AAAUSDT", "BBBUSDT")
+    _ranker(tracker, store, [(a.id, 80)]).build()
+
+    (c,) = _book(tracker, "CCCUSDT")
+    assert _ranker(tracker, store, [(a.id, 80)]).build() is None   # not re-posted
+    live = _live(tracker)
+    assert live["CCCUSDT"].conviction_first_rank == 0
+    assert live["CCCUSDT"].conviction_first_source == "ai"
+
+
+def test_a_room_that_would_take_nothing_passed_over_everything(store, fake_client):
+    tracker = Tracker(store, fake_client, TrackerSettings())
+    _book(tracker, "AAAUSDT", "BBBUSDT")
+
+    assert _ranker(tracker, store, []).build() is None
+    assert all(s.conviction_first_rank == 0 and s.conviction_first_source == "ai"
+               for s in tracker.active_signals())
+
+
+def test_a_zero_skill_picker_shows_no_gap_at_first_look():
+    """The reason this bucket reads first looks, run as a check rather than
+    asserted in a comment. A picker that ignores the outcome, looking once an
+    hour at signals whose losers die fast and winners live long, manufactures
+    a large gap under "ever picked" and none at first look."""
+    import random
+    import statistics
+
+    rng = random.Random(7)
+    ever, first = {True: [], False: []}, {True: [], False: []}
+    for _ in range(4000):
+        win = rng.random() < 0.5
+        r = rng.choice([0.5, 1.0, 1.7]) if win else -1.0
+        looks = max(1, int(rng.uniform(6, 48) if win else rng.uniform(1, 6)))
+        picks = [rng.random() < 0.4 for _ in range(looks)]
+        ever[any(picks)].append(r)
+        first[picks[0]].append(r)
+
+    def gap(d):
+        return statistics.fmean(d[True]) - statistics.fmean(d[False])
+
+    assert gap(ever) > 0.8          # a coin, reading as a skilled room
+    assert abs(gap(first)) < 0.1    # a coin, reading as a coin
 
 
 def test_a_failure_to_record_never_costs_the_room_its_card(store, fake_client):

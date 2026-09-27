@@ -782,35 +782,50 @@ class Tracker:
             log.exception("Notification callback failed for %s/%s", sig.symbol, event)
 
     # ── queries ─────────────────────────────────────────────────────────
-    def mark_conviction(self, considered_ids, picks) -> int:
-        """Stamp a posted High-Conviction ranking onto the live signals.
+    def mark_conviction(self, considered_ids, picks, source: str = "ai") -> int:
+        """Stamp a High-Conviction ranking onto the live signals.
 
-        ``picks`` is ``(id, rank, score, source)`` per pick. The best rank a
-        signal ever reaches is kept, so a setup that was once the top pick
-        stays one after the room reshuffles. Runs under the same lock as
-        ``record_signal`` and ``check_pending``, which both rewrite the pending
-        list: without it a resolution landing mid-stamp would be lost or would
-        resurrect a closed trade. Returns how many signals were stamped.
+        ``picks`` is ``(id, rank, score, source)`` per pick; ``source`` is the
+        ranking's own ("ai", or "heuristic" when the model was unavailable).
+
+        Two different things are recorded and they must not be confused:
+
+        * **First look** — ``conviction_first_rank`` / ``_first_source`` — set
+          once, at the first ranking that saw the signal, and never again. This
+          is what the diag measures, because it gives every signal exactly one
+          chance. A signal already marked considered before first looks were
+          recorded is left unrecorded rather than given a late look, which
+          would be exactly the bias this field exists to remove.
+        * **Best rank** — ``conviction_rank`` and friends — the best the signal
+          ever reached, kept for the Trade Report badge. It is biased toward
+          long-lived signals by construction and is never read as evidence.
+
+        Runs under the tracker lock, because ``record_signal`` and
+        ``check_pending`` both rewrite the pending list.
         """
         considered = set(considered_ids)
-        by_id = {pid: (rank, score, source) for pid, rank, score, source in picks}
-        if not considered and not by_id:
+        by_id = {pid: (rank, score, src) for pid, rank, score, src in picks}
+        considered |= set(by_id)
+        if not considered:
             return 0
         touched = 0
         with self._lock:
             pending = self._load_pending()
             for sig in pending:
+                if sig.id not in considered:
+                    continue
                 hit = False
-                if sig.id in considered and not sig.conviction_considered:
+                if not sig.conviction_considered:
                     sig.conviction_considered = True
+                    sig.conviction_first_rank = by_id[sig.id][0] if sig.id in by_id else 0
+                    sig.conviction_first_source = source
                     hit = True
                 if sig.id in by_id:
-                    rank, score, source = by_id[sig.id]
-                    sig.conviction_considered = True
+                    rank, score, src = by_id[sig.id]
                     if not sig.conviction_rank or rank < sig.conviction_rank:
                         sig.conviction_rank = rank
                         sig.conviction_score = score
-                        sig.conviction_source = source
+                        sig.conviction_source = src
                         hit = True
                 touched += hit
             if touched:
