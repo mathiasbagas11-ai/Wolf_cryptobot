@@ -262,7 +262,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-27, HEAD `conviction-first-look`
+## Status — 2026-09-28, HEAD `card-0928`
 
 1055 tests green. Working tree clean.
 
@@ -309,6 +309,31 @@ correction, so the true drawdown is at least 2.3% and the true peak is higher
 still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
+
+**09-28 card (24h):** n=39 **`eff=13`** — the largest effective sample a 24h
+card has carried — meanR **−0.437**, netR −0.522, t −1.83, ci95 [−0.904,
++0.030]. 25 of 39 stopped out; wins 10 of 37 against a 53.3% bar; rung fill
+collapsed to 26/8/5. Every strategy but MOMENTUM (+0.304, n=8) was negative,
+and so was every AI, learning and whale label — one bad day seen through
+twenty labels, not twenty findings. Lowest `padj` yet (0.502) and still
+nothing survives. `max_open=12` at 1% each is ~−15.7% on the paper balance
+in one day: correlated positions, not independent bets. MOMENTUM took 13 of
+the 15 chase drops — noted, not re-argued (Broken #5, settled).
+
+**First clean `conv:` reading** (first look, deployed 09-27): AI_PICK n=9
+wr 11% −0.743R against PASSED n=20 wr 47% −0.133R. The +1.22R of the day
+before is gone, as the simulation said it would be; the clean reading does
+not show the room adding anything, and on one card cannot show it
+subtracting anything either. UNRANKED n=10 at 0% is where fast stop-outs
+land — they resolve before any ranking sees them, which is the exposure
+asymmetry the first-look rule was built around.
+
+**Four disjoint 24h cards since the booking fix** (09-21, 09-24, 09-27,
+09-28; resolution windows do not overlap): 105 trades, n-weighted meanR
+**−0.075R**, about **−0.16R** after costs. The owner sends cards on the days
+they choose, so these four are not a random sample of days — but the good
+day (+0.389) and the bad one (−0.437) are both in it, and together they read
+as roughly flat before costs and negative after.
 
 **09-27 card (24h):** n=18 `eff=5`, meanR −0.023, netR −0.117, all 20
 buckets `padj = 1.000`. **Rung fill reversed**: 60/36/28 on 09-24 → **50/11/6**.
