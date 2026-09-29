@@ -262,7 +262,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-28, HEAD `card-0928`
+## Status — 2026-09-29, HEAD `card-0929`
 
 1055 tests green. Working tree clean.
 
@@ -309,6 +309,30 @@ correction, so the true drawdown is at least 2.3% and the true peak is higher
 still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
+
+**09-29 card (24h):** n=38 `eff=7`, meanR −0.036, netR −0.113, all 22
+buckets `padj = 1.000`. Window 09-28 12:33 → 09-29 12:33, disjoint from the
+09-28 card. **Near-total reversal of the day before at strategy level:**
+MOMENTUM, the only winner on 09-28 (+0.304), was the worst multi-trade row
+(−0.500); SCALP and TRAP, near the bottom on 09-28, were the two winners;
+`learn:PENALTY` went from worst to best again. Recorded because the owner
+asked the day before whether the bot should learn from each day's best
+trade — this card is the answer to that question.
+
+**Second clean `conv:` reading — the opposite sign of the first.** AI_PICK
+n=8 wr 87.5% +0.674R against PASSED n=26 −0.107R, the day after AI_PICK
+printed −0.743R. **Pooled over both first-look days: AI_PICK n=17 −0.076R,
+PASSED n=45 −0.118R — a gap of +0.04R.** The room has added nothing
+detectable. UNRANKED is now 14 of 14 losses across the two days: signals
+that resolve before the hourly ranking first sees them are fast stop-outs
+by construction, which is the exposure asymmetry the first-look rule was
+built for, observed directly rather than simulated.
+
+**On-chain went from 2 of 15 to none:** "snapshot 0m old but carries no
+symbols". Broken #1, now empty rather than thin.
+
+**Five disjoint 24h cards since the booking fix:** 143 trades, meanR
+**−0.064R** before costs, **−0.147R** after.
 
 **09-28 card (24h):** n=39 **`eff=13`** — the largest effective sample a 24h
 card has carried — meanR **−0.437**, netR −0.522, t −1.83, ci95 [−0.904,
@@ -470,8 +494,9 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
 
 ## Broken / unfinished
 
-1. **On-chain valuation collector** asks for 15 symbols and returns 2. The card
-   now names the cause (rate limit vs universe drift vs empty) — read it before
+1. **On-chain valuation collector** asks for 15 symbols and returned 2 for
+   weeks; on 2026-09-29 it returned **none** ("carries no symbols"). The card
+   names the cause (rate limit vs universe drift vs empty) — read it before
    guessing.
 2. **Whale veto still hard-blocks**, dropping candidates before
    `record_signal`. Every day it runs, the evidence needed to judge it is
