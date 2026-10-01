@@ -262,7 +262,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-29, HEAD `card-0929`
+## Status — 2026-09-30, HEAD `card-0930`
 
 1055 tests green. Working tree clean.
 
@@ -309,6 +309,27 @@ correction, so the true drawdown is at least 2.3% and the true peak is higher
 still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
+
+**09-30 card (24h):** n=25 `eff=5`, meanR +0.092, netR +0.021, all 22
+buckets `padj = 1.000`. Window 09-29 14:46 → 09-30 14:46, disjoint from
+09-29. Wins 12 of 25 against a 44.0% bar; fill back up to 48/32/28.
+`learn:` flipped again (BOOST +0.350 over PENALTY −0.300).
+
+**Three first-look `conv:` days pooled:** AI_PICK n=23 **+0.035R**, PASSED
+n=62 **−0.050R** — a gap of +0.085R across readings of −0.61, +0.78 and
++0.22. Still nothing.
+
+**Six disjoint 24h cards since the booking fix:** 168 trades, **−0.041R**
+before costs, **−0.122R** after.
+
+**Watch, not finding: SWING has lost 8 of 8 since 09-27** (0/1, 0/2, 0/2,
+0/3). `0.5^8` is 0.4%, which overstates it three ways: the streak was found
+by scanning six strategies after the fact; three of the eight are one day at
+`sd=0.00` and two fell on 09-28 when every strategy lost, so the independent
+count is nearer four or five; and SWING won its one trade on 09-24.
+Discounted for those it is ordinary. Recorded because Broken #6 calls SWING
+the healthiest detector — if the streak survives another week of disjoint
+cards it is worth a paired look, not before.
 
 **09-29 card (24h):** n=38 `eff=7`, meanR −0.036, netR −0.113, all 22
 buckets `padj = 1.000`. Window 09-28 12:33 → 09-29 12:33, disjoint from the
