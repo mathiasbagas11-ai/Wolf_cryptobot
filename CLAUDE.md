@@ -262,7 +262,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-09-30, HEAD `card-0930`
+## Status — 2026-10-03, HEAD `card-1003`
 
 1055 tests green. Working tree clean.
 
@@ -309,6 +309,23 @@ correction, so the true drawdown is at least 2.3% and the true peak is higher
 still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
+
+**10-03 card (24h):** n=22 `eff=5`, meanR +0.138, netR +0.077, all 19
+buckets `padj = 1.000`. Window 10-02 15:05 → 10-03 15:05 (10-01 was not
+sent). PREDUMP led (+0.850, wr 83%, n=6); `learn:` flipped once more
+(PENALTY +0.473 over BOOST −0.092). No UNRANKED rows this window.
+
+**Four first-look `conv:` days pooled:** AI_PICK n=29 **−0.089R**, PASSED
+n=77 **+0.050R** — gap **−0.14R**, from daily gaps of −0.61, +0.78, +0.22,
+−1.03. Two each way. If anything the room's picks trail what it passes
+over, but nothing here separates from zero.
+
+**SWING is now 0 of 9** since 09-27 (one more stop). Same discounts as
+below; still a watch item.
+
+**Seven disjoint 24h cards since the booking fix:** 190 trades, **−0.020R**
+before costs, **−0.099R** after. Drifting toward breakeven before costs;
+still negative after them.
 
 **09-30 card (24h):** n=25 `eff=5`, meanR +0.092, netR +0.021, all 22
 buckets `padj = 1.000`. Window 09-29 14:46 → 09-30 14:46, disjoint from
