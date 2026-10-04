@@ -262,7 +262,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-03, HEAD `card-1003`
+## Status — 2026-10-04, HEAD `card-1004`
 
 1055 tests green. Working tree clean.
 
@@ -309,6 +309,34 @@ correction, so the true drawdown is at least 2.3% and the true peak is higher
 still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
+
+**10-04 card (24h):** n=19 `eff=4`, meanR −0.071, netR −0.130, all 20
+buckets `padj = 1.000`. Window 10-03 16:47 → 10-04 16:47, disjoint from
+10-03. (The owner re-sent the 10-03 card once in between; it was not
+counted twice.) PREDUMP went 0/4 the day after 5/6; `learn:` flipped back
+(BOOST +0.321, PENALTY −0.480).
+
+**Five first-look `conv:` days pooled:** AI_PICK n=32 **+0.014R**, PASSED
+n=88 **+0.040R** — gap **−0.026R**. Daily gaps −0.61, +0.78, +0.22, −1.03,
++1.03: alternating, centred on zero. This is what a room with no edge looks
+like. UNRANKED is 19 of 19 losses since first look began.
+
+**SWING 0 of 11** since 09-27. Still discounted as below, but the
+independent count is now plausibly seven or eight; one more week of this
+and it earns the paired look.
+
+**PREPUMP printed 1R = 12.57%** (one trade, flat) — the widest stop any
+card has shown; the ladder's last rung sits at +37.7%. PREPUMP still
+carries `max_chase_r = 1.5`, and the sentence below justifying that ("it
+has never emitted a signal, so there is nothing to contaminate") **is no
+longer true**: it has traded on at least four cards. How far an admitted
+signal was chased is not recorded (the re-quote overwrites `entry_price`
+and keeps only `entry_quoted_live`), so whether this 1R is the structural
+base stop or the chase stretching it cannot be told. Recording it was
+offered to the owner on 09-21 and not taken up.
+
+**Eight disjoint 24h cards since the booking fix:** 209 trades, **−0.025R**
+before costs, **−0.102R** after.
 
 **10-03 card (24h):** n=22 `eff=5`, meanR +0.138, netR +0.077, all 19
 buckets `padj = 1.000`. Window 10-02 15:05 → 10-03 15:05 (10-01 was not
@@ -439,8 +467,9 @@ The gate itself is still a self-blinding veto, and now a visible one: every
 drop is recorded (`chase_drops`) and the diag card reports the count, the split
 by strategy, and how far past the quote price had run. **Do not re-argue the
 limit from replayed candle shapes — argue it from those drops.** PREPUMP keeps
-1.5R only because it has never emitted a signal, so there is nothing there to
-contaminate.
+1.5R because, when this was written, it had never emitted a signal and there
+was nothing to contaminate. That premise expired once PREPUMP began trading
+(see the 10-04 card); the exemption now stands on no argument at all.
 
 ```
 /diag 24h 2026-09-18: n=22 eff=4 mean_open=4.44
