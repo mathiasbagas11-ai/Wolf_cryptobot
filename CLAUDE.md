@@ -262,7 +262,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-04, HEAD `card-1004`
+## Status — 2026-10-06, HEAD `card-1006`
 
 1055 tests green. Working tree clean.
 
@@ -309,6 +309,40 @@ correction, so the true drawdown is at least 2.3% and the true peak is higher
 still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
+
+**10-05 and 10-06 cards (24h each):** windows 10-04 16:50 → 10-05 16:50 and
+→ 10-06 16:50, contiguous and disjoint from 10-04. Both bad: meanR −0.205
+(n=15, `eff=5`) and −0.266 (n=20, `eff=6`); wins 5/14 and 7/19 against bars
+of ~50–55%; fill 33/20/7 and 35/20/5. All buckets `padj = 1.000`. PREPUMP
+printed 1R = **10.37%** — the second card running above 10%.
+
+**Ten disjoint 24h cards since the booking fix:** 244 trades, **−0.056R**
+before costs, **−0.135R** after. Worse than the eight-card figure.
+
+**Seven first-look `conv:` days pooled:** AI_PICK n=41 **+0.087R**, PASSED
+n=113 **−0.042R** — gap **+0.128R**. Daily gaps −0.61, +0.78, +0.22, −1.03,
++1.03, +0.97, +0.84: the last three positive. Treating each day as one
+observation, mean gap +0.315, t +1.01 on 6 df — about a one-in-three
+chance of a gap this size from a room with no edge. Not a finding.
+*Correction:* earlier pools weighted by graded n; bucket means are over
+every traded row (flats included), so pools now weight by traded n. The
+five-day gap was −0.041R, not −0.026R; no conclusion moves.
+
+**SWING is 0 of 13, on seven separate days.** The same-day clustering that
+discounted it is now mostly gone. Counting only days (no day with a SWING
+win), the chance is 2.8% at a 40% true win rate and 4.9% at 35% — before
+the post-hoc factor of six strategies scanned, which takes it to roughly
+15–30%. Still not a finding at the most cautious count, but the
+paired look the 10-04 note asked for is now due.
+
+**The contest audit has never been read.** `wolf/contest_audit.py` has
+recorded and graded every displaced `max(score)` candidate since
+2026-09-17 — three weeks — and Broken #5 calls it the paired question to
+read before any level one. `/whatif contest` was due "once pairs
+accumulate (~09-19)" and was never run. It is also SWING's paired look:
+SWING's floor of 55 beats every detector but MOMENTUM, so SWING signals
+that displaced a candidate are paired against it on the same symbol and
+bar. **Next step: run `/whatif contest`.**
 
 **10-04 card (24h):** n=19 `eff=4`, meanR −0.071, netR −0.130, all 20
 buckets `padj = 1.000`. Window 10-03 16:47 → 10-04 16:47, disjoint from
