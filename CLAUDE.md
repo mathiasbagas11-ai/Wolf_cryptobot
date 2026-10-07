@@ -262,9 +262,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-06, HEAD `card-1006`
+## Status — 2026-10-07, HEAD `contest-ties`
 
-1055 tests green. Working tree clean.
+1056 tests green. Working tree clean.
 
 **The ledger was wrong, and every card built on it inherited that.** A position
 that banked TP1 and then timed out was booked as though nothing had been sold —
@@ -310,6 +310,26 @@ still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
 
+**Contest audit, first read (2026-10-07):** 122 paired contests. Winner
+minus displaced candidate **−0.081R**, t −0.55, p 0.588 at `eff=15` — the
+`max(score)` winner does no better than what it threw away. Registry entry
+`contest-max-score-self-blinding` moved **OPEN → INCONCLUSIVE**. Matchups:
+TRAP>SCALP n=87 −0.124R; **MOMENTUM>PREPUMP n=16 +0.234R** (the case Broken
+#5 worried about, and the worry is not supported); SCALP>TRAP n=13 −0.039R.
+Two things fell out of it:
+
+- **TRAP and SCALP are largely one detector scored twice.** About a hundred
+  collisions in three weeks; both gate on a sweep and reclaim. Their card rows
+  are correlated, not independent strategies.
+- **The audit cannot answer SWING.** One SWING contest in three weeks — a 4h
+  detector rarely fires on the same scan as the 15m/1h ones. It was claimed
+  to the owner on 10-06 that it would be SWING's paired look; that was wrong.
+  SWING still has no paired instrument; its `evidence` split is the nearest.
+
+The render printed "winner beat … 30/122", which counted ties as losses and
+read as the contest choosing wrong 92 times. It now prints
+ahead/tied/behind, overall and per matchup.
+
 **10-05 and 10-06 cards (24h each):** windows 10-04 16:50 → 10-05 16:50 and
 → 10-06 16:50, contiguous and disjoint from 10-04. Both bad: meanR −0.205
 (n=15, `eff=5`) and −0.266 (n=20, `eff=6`); wins 5/14 and 7/19 against bars
@@ -342,7 +362,8 @@ read before any level one. `/whatif contest` was due "once pairs
 accumulate (~09-19)" and was never run. It is also SWING's paired look:
 SWING's floor of 55 beats every detector but MOMENTUM, so SWING signals
 that displaced a candidate are paired against it on the same symbol and
-bar. **Next step: run `/whatif contest`.**
+bar. **Next step: run `/whatif contest`.** *(Done 10-07 — see above; it
+turned out not to cover SWING.)*
 
 **10-04 card (24h):** n=19 `eff=4`, meanR −0.071, netR −0.130, all 20
 buckets `padj = 1.000`. Window 10-03 16:47 → 10-04 16:47, disjoint from
@@ -625,7 +646,9 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    relabelled as a `Confluence [MOMENTUM+PREPUMP]` tag on a MOMENTUM row.
    `wolf/contest_audit.py` records the losers and grades them hourly;
    `/whatif contest` pairs each against what the winner actually returned.
-   **This is the paired question — read it before any level one.**
+   **First read 2026-10-07: −0.081R, p 0.588 over 122 pairs — INCONCLUSIVE**;
+   MOMENTUM>PREPUMP went +0.234R for the winner, so the floor-bias worry
+   above has no trade behind it yet. Keep reading it; it keeps recording.
 
    *Settled and closed:* the chase limit. On a near-complete sample
    (2026-09-17) drops returned +0.070 against taken +0.055 — gap +0.015R at
@@ -675,7 +698,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1055 tests, ~12s
+python -m pytest            # 1056 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

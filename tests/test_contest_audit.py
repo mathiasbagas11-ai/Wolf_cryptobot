@@ -178,3 +178,27 @@ def test_nothing_recorded_says_so(store):
     report = audit_contests(_tracker(store))
     assert report["pairs"] == []
     assert "no score contests recorded" in render(report)
+
+
+def test_ties_are_counted_apart_from_losses():
+    """Two co-firing detectors stopped out on the same bar both book -1R.
+
+    Folding that tie into "winner not ahead" made 30 of 122 read as the
+    contest choosing wrong 92 times, when a large share of those contests
+    ended level.
+    """
+    from wolf.contest_audit import _paired_stats, render
+
+    pairs = ([{"winner_r": -1.0, "loser_r": -1.0}] * 5      # stopped out together
+             + [{"winner_r": 1.0, "loser_r": -1.0}] * 2     # winner ahead
+             + [{"winner_r": -1.0, "loser_r": 0.5}] * 3)    # winner behind
+    stats = _paired_stats(pairs, overlap=1.0)
+    assert (stats["winner_better"], stats["tied"], stats["winner_worse"]) == (2, 5, 3)
+
+    text = render({"error": "", "sample": 10, "skipped": {}, "overall": stats, "overlap": 1.0,
+                   "by_matchup": {"TRAP>SCALP": {"n": 10, "mean_diff": -0.05,
+                                                 "winner_better": 2, "tied": 5,
+                                                 "winner_worse": 3}},
+                   "pairs": pairs})
+    assert "ahead 2, tied 5, behind 3 of 10" in text
+    assert "ahead/tied/behind 2/5/3" in text

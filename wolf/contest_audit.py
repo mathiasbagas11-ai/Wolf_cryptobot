@@ -205,6 +205,26 @@ def _outcomes_by_id(tracker: Tracker) -> dict[str, Signal]:
     return out
 
 
+#: Below this a difference is float noise, not an outcome. Two candidates
+#: stopped out on the same bar both book exactly -1R, and that is a tie.
+_TIE = 1e-6
+
+
+def _tally(diffs) -> dict:
+    """Ahead / tied / behind, counted separately.
+
+    "Winner ahead on 30 of 122" read as the contest picking wrong 92 times,
+    when a large share of those were ties: detectors that co-fire on the same
+    bar often carry near-identical entries and stops and end the same way. A
+    count that folds ties into losses is two numbers under one name.
+    """
+    diffs = list(diffs)
+    ahead = sum(1 for d in diffs if d > _TIE)
+    behind = sum(1 for d in diffs if d < -_TIE)
+    return {"winner_better": ahead, "tied": len(diffs) - ahead - behind,
+            "winner_worse": behind}
+
+
 def _paired_stats(pairs: list[dict], overlap: float) -> Optional[dict]:
     """Student's t on the per-contest difference, charged the overlap discount.
 
@@ -235,7 +255,7 @@ def _paired_stats(pairs: list[dict], overlap: float) -> Optional[dict]:
         "t_nominal": round(mean / se_nominal, 2),
         "df": df,
         "p": round(t_to_p(mean / se, df), 3),
-        "winner_better": sum(1 for d in diffs if d > 0),
+        **_tally(diffs),
     }
 
 
@@ -299,7 +319,7 @@ def audit_contests(tracker: Tracker, limit: int = 300, overlap: float = 1.0) -> 
         "by_matchup": {
             k: {"n": len(v),
                 "mean_diff": round(statistics.fmean(p["winner_r"] - p["loser_r"] for p in v), 3),
-                "winner_better": sum(1 for p in v if p["winner_r"] > p["loser_r"])}
+                **_tally(p["winner_r"] - p["loser_r"] for p in v)}
             for k, v in sorted(by_matchup.items(), key=lambda kv: -len(kv[1]))
         },
         "pairs": pairs,
@@ -328,15 +348,15 @@ def render(report: dict) -> str:
             f"(nom {o['t_nominal']:+.2f}) df={o['df']} p={o['p']:.3f}"
         )
         lines.append(
-            f"{'':<12} winner beat the candidate it displaced on "
-            f"{o['winner_better']}/{o['n']} contests"
+            f"{'':<12} winner vs the candidate it displaced: ahead {o['winner_better']}, "
+            f"tied {o['tied']}, behind {o['winner_worse']} of {o['n']}"
         )
     else:
         lines.append(f"{'paired':<12} too few pairs to compute a difference")
     for key, cell in report["by_matchup"].items():
         lines.append(
             f"{key:<12} n={cell['n']} meanDiff={cell['mean_diff']:+.3f}R "
-            f"winner ahead {cell['winner_better']}/{cell['n']}"
+            f"ahead/tied/behind {cell['winner_better']}/{cell['tied']}/{cell['winner_worse']}"
         )
     sk = report.get("skipped") or {}
     if sum(sk.values()):
