@@ -53,6 +53,11 @@ log = logging.getLogger("wolf.contest_audit")
 CONTESTS_KEY = "score_contests"
 
 
+#: Losers the winner's own re-quote rule would have dropped. They could not
+#: have been traded, so there is nothing to grade them on.
+_UNFILLABLE = frozenset({"chase_drop", "past_stop", "unbuildable"})
+
+
 def _loser_signal(row: dict, spec: dict) -> Optional[Signal]:
     """Rebuild a displaced candidate as the signal it would have been.
 
@@ -104,7 +109,7 @@ def _age_hours(row: dict, now: datetime) -> Optional[float]:
 
 
 def _is_gradeable(row: dict, spec: dict, settings, now: datetime) -> bool:
-    if spec.get("graded"):
+    if spec.get("graded") or spec.get("requote") in _UNFILLABLE:
         return False
     age = _age_hours(row, now)
     if age is None:
@@ -268,7 +273,8 @@ def audit_contests(tracker: Tracker, limit: int = 300, overlap: float = 1.0) -> 
     outcomes = _outcomes_by_id(tracker)
 
     pairs: list[dict] = []
-    skipped = {"winner_unresolved": 0, "loser_ungraded": 0, "unbuildable": 0}
+    skipped = {"winner_unresolved": 0, "loser_ungraded": 0, "unbuildable": 0,
+               "legacy": 0, "unfillable": 0}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -276,6 +282,16 @@ def audit_contests(tracker: Tracker, limit: int = 300, overlap: float = 1.0) -> 
         winner_graded = winner is not None and Status(winner.status).is_graded
         for spec in (row.get("losers") or []):
             if not isinstance(spec, dict):
+                continue
+            requote = spec.get("requote")
+            if requote is None and winner is not None and winner.entry_quoted_live:
+                # Recorded before losers were re-quoted: the winner entered at
+                # the live price and this loser at the bar close, which biases
+                # every pair against the winner. Not readable; counted instead.
+                skipped["legacy"] += 1
+                continue
+            if requote in _UNFILLABLE:
+                skipped["unfillable"] += 1
                 continue
             verdict = spec.get("graded")
             if not isinstance(verdict, dict):
@@ -364,6 +380,13 @@ def render(report: dict) -> str:
             f"{'skipped':<12} {sk.get('winner_unresolved', 0)} winners not resolved yet, "
             f"{sk.get('loser_ungraded', 0)} losers not graded yet, "
             f"{sk.get('unbuildable', 0)} could not be rebuilt"
+            + (f", {sk['unfillable']} could not have been entered either"
+               if sk.get("unfillable") else "")
+        )
+    if sk.get("legacy"):
+        lines.append(
+            f"{'legacy':<12} {sk['legacy']} pairs recorded before 2026-10-07 left out: "
+            f"the loser was priced at the bar close and the winner at the live re-quote"
         )
     lines.append(
         f"{'note':<12} paired inside one symbol and bar, so the market move cancels "

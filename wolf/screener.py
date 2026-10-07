@@ -129,7 +129,78 @@ def _loser_spec(candidate: SignalCandidate) -> dict:
         "tps": candidate.tps,
         "timeframe": candidate.timeframe,
         "entry_mode": candidate.entry_mode,
+        "max_chase_r": candidate.max_chase_r,
     }
+
+
+def _rebuild_ladder(tps, tp, quoted: float, sl: float, live: float, is_long: bool):
+    """The ladder moved to a new entry with the stop left where it was.
+
+    Each rung keeps the R multiple it was placed at, measured on the new risk
+    unit. Shared by the winner's re-quote and every loser's, because the two
+    must move by the same rule or the contest compares two different trades.
+    """
+    risk = abs(quoted - sl)
+    new_risk = abs(live - sl)
+    sign = 1 if is_long else -1
+    rebuilt = []
+    for i, rung in enumerate(tps or [], start=1):
+        r = rung.get("r_multiple")
+        if not r:
+            # Hand-built rung with no R stamped: keep its distance in R by
+            # reading it off the entry it was placed against.
+            r = abs(rung["price"] - quoted) / risk
+        rebuilt.append({**rung, "level": rung.get("level", i), "price": live + sign * new_risk * r})
+    if rebuilt:
+        new_tp = rebuilt[-1]["price"]
+    else:
+        new_tp = live + sign * new_risk * (abs(tp - quoted) / risk)
+    return rebuilt or None, new_tp
+
+
+def _requote_spec(spec: dict, live: float, default_limit: float) -> dict:
+    """Move a displaced candidate to the price the winner was actually entered at.
+
+    The winner is re-quoted at the live price before it is recorded; the losers
+    used to be snapshotted one step earlier, at the bar close. So every contest
+    compared a winner entered up to half an R late, on a stretched risk unit and
+    a ladder pushed further out, against a loser filled at a price that was no
+    longer available — and the loser won any outcome that was not a mutual
+    stop-out. TRAP and SCALP share their entry, stop and ladder rule exactly,
+    and still split 16 ahead to 34 behind on the first read; that was this.
+
+    A loser goes through the same rule the winner did. One that rule would have
+    dropped — run past its own chase limit, or already through its stop — could
+    not have been traded either, and is marked so rather than graded on a fill
+    that never existed.
+    """
+    out = dict(spec)
+    if str(spec.get("entry_mode") or "").upper() != EntryMode.MOMENTUM_NOW.value:
+        out["requote"] = "level"  # a pending entry is a level, not a quote
+        return out
+    try:
+        quoted, sl = float(spec["entry_price"]), float(spec["sl"])
+    except (KeyError, TypeError, ValueError):
+        out["requote"] = "unbuildable"
+        return out
+    risk = abs(quoted - sl)
+    if quoted <= 0 or risk <= 0 or not live or live <= 0:
+        out["requote"] = "unbuildable"
+        return out
+    is_long = str(spec.get("direction") or "").upper() == Direction.LONG.value
+    drift = (live - quoted) if is_long else (quoted - live)
+    limit = spec.get("max_chase_r")
+    limit = default_limit if limit is None else float(limit)
+    out["quoted_entry"] = quoted
+    if drift / risk > limit:
+        out["requote"] = "chase_drop"
+        return out
+    if (is_long and live <= sl) or (not is_long and live >= sl):
+        out["requote"] = "past_stop"
+        return out
+    tps, tp = _rebuild_ladder(spec.get("tps"), float(spec.get("tp") or quoted), quoted, sl, live, is_long)
+    out.update({"entry_price": live, "tps": tps, "tp": tp, "requote": "live"})
+    return out
 
 
 def _onchain_annotations(context, direction: str) -> dict:
@@ -632,23 +703,18 @@ class Screener:
             log.info("Skip %s %s: price is already past the stop", candidate.symbol, candidate.direction)
             return True
 
-        new_risk = abs(live - sl)
-        sign = 1 if is_long else -1
-        rebuilt = []
-        for i, rung in enumerate(candidate.tps or [], start=1):
-            r = rung.get("r_multiple")
-            if not r:
-                # Hand-built rung with no R stamped: keep its distance in R by
-                # reading it off the entry it was placed against.
-                r = abs(rung["price"] - quoted) / risk
-            rebuilt.append({**rung, "level": rung.get("level", i), "price": live + sign * new_risk * r})
+        candidate.tps, candidate.tp = _rebuild_ladder(
+            candidate.tps, candidate.tp, quoted, sl, live, is_long
+        )
         candidate.entry_price = live
         candidate.entry_quoted_live = True
-        candidate.tps = rebuilt or None
-        if rebuilt:
-            candidate.tp = rebuilt[-1]["price"]
-        else:
-            candidate.tp = live + sign * new_risk * (abs(candidate.tp - quoted) / risk)
+        # The candidates this one displaced are moved to the same price by the
+        # same rule, so the contest audit compares two trades that could both
+        # have been entered at this moment. See _requote_spec.
+        if candidate.losers:
+            candidate.losers = [
+                _requote_spec(spec, live, self._max_chase_r) for spec in candidate.losers
+            ]
         return False
 
     def _too_expensive(self, candidate: SignalCandidate) -> bool:

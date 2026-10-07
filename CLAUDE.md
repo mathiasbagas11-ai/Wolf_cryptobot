@@ -215,6 +215,20 @@ the reading would have been taken as proof the room works. **Give every unit
 exactly one chance to be chosen — or measure what the extra chances are worth
 before reading any gap.**
 
+**A pair is only paired if both sides go through the same steps.** The
+contest audit was built to cancel the market move by comparing two
+candidates on the same symbol and bar — and then recorded the loser one step
+before the winner was re-quoted at the live price. The winner always entered
+late on a stretched risk unit; the loser was graded on a fill that no longer
+existed. Three weeks of pairs were biased against the winner, and the first
+read (−0.081R) was taken, written down and moved the registry before the
+asymmetry was found. What found it was a count nobody had printed: ties.
+TRAP and SCALP use the same entry, stop and ladder rule, so an honest
+instrument has to score them level nearly every time; it showed them tied
+only 37 times in 87. **When two things that should be identical come out
+different, the instrument is measuring itself — and print the ties, because
+they are where that shows.**
+
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
 unrelated remedies. The provider almost always already said which; the bug was
@@ -262,9 +276,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-07, HEAD `contest-ties`
+## Status — 2026-10-07, HEAD `contest-requote`
 
-1056 tests green. Working tree clean.
+1062 tests green. Working tree clean.
 
 **The ledger was wrong, and every card built on it inherited that.** A position
 that banked TP1 and then timed out was booked as though nothing had been sold —
@@ -310,25 +324,25 @@ still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
 
-**Contest audit, first read (2026-10-07):** 122 paired contests. Winner
-minus displaced candidate **−0.081R**, t −0.55, p 0.588 at `eff=15` — the
-`max(score)` winner does no better than what it threw away. Registry entry
-`contest-max-score-self-blinding` moved **OPEN → INCONCLUSIVE**. Matchups:
-TRAP>SCALP n=87 −0.124R; **MOMENTUM>PREPUMP n=16 +0.234R** (the case Broken
-#5 worried about, and the worry is not supported); SCALP>TRAP n=13 −0.039R.
-Two things fell out of it:
+**Contest audit, first read (2026-10-07) — withdrawn the same day.** It
+read −0.081R (winner minus displaced candidate) over 122 pairs, p 0.588,
+and the registry briefly moved to INCONCLUSIVE. Then the new tie count
+showed TRAP>SCALP at 16 ahead / 37 tied / 34 behind — impossible for an
+honest grader, since the two detectors share entry, stop and ladder. The
+loser had been snapshotted at the bar close while the winner was re-quoted
+at the live price, so every pair was biased against the winner (see the
+lesson). **Fixed:** losers are re-quoted at the winner's live price by the
+same rule (`screener._requote_spec`); a loser that rule would have dropped
+is marked unfillable and never graded; the 122 pre-fix pairs are excluded
+by name as `legacy` — the replay's ~10-day reach means they cannot be
+re-graded. Registry entry back to **OPEN**. The clean sample starts at zero.
 
-- **TRAP and SCALP are largely one detector scored twice.** About a hundred
-  collisions in three weeks; both gate on a sweep and reclaim. Their card rows
-  are correlated, not independent strategies.
-- **The audit cannot answer SWING.** One SWING contest in three weeks — a 4h
-  detector rarely fires on the same scan as the 15m/1h ones. It was claimed
-  to the owner on 10-06 that it would be SWING's paired look; that was wrong.
-  SWING still has no paired instrument; its `evidence` split is the nearest.
-
-The render printed "winner beat … 30/122", which counted ties as losses and
-read as the contest choosing wrong 92 times. It now prints
-ahead/tied/behind, overall and per matchup.
+What survives because it never depended on outcomes: **TRAP and SCALP are
+largely one detector scored twice** (~100 collisions in three weeks), and
+**SWING contested once**, so this audit is not SWING's paired look — a claim
+made to the owner on 10-06 that was wrong. Because the bias ran only against
+the winner, the withdrawn −0.081R is a floor on the true gap in expectation,
+and MOMENTUM's +0.234R over displaced PREPUMP is if anything understated.
 
 **10-05 and 10-06 cards (24h each):** windows 10-04 16:50 → 10-05 16:50 and
 → 10-06 16:50, contiguous and disjoint from 10-04. Both bad: meanR −0.205
@@ -646,9 +660,12 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    relabelled as a `Confluence [MOMENTUM+PREPUMP]` tag on a MOMENTUM row.
    `wolf/contest_audit.py` records the losers and grades them hourly;
    `/whatif contest` pairs each against what the winner actually returned.
-   **First read 2026-10-07: −0.081R, p 0.588 over 122 pairs — INCONCLUSIVE**;
-   MOMENTUM>PREPUMP went +0.234R for the winner, so the floor-bias worry
-   above has no trade behind it yet. Keep reading it; it keeps recording.
+   **The first read (2026-10-07) was biased against every winner and is
+   withdrawn** — losers were priced at the bar close, winners at the live
+   re-quote. Fixed the same day; the 122 pre-fix pairs are excluded as
+   `legacy` and the clean sample starts at zero. Even the biased read had
+   MOMENTUM ahead of displaced PREPUMP (+0.234R, n=16), so the floor-bias
+   worry above has no trade behind it.
 
    *Settled and closed:* the chase limit. On a near-complete sample
    (2026-09-17) drops returned +0.070 against taken +0.055 — gap +0.015R at
@@ -698,7 +715,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1056 tests, ~12s
+python -m pytest            # 1062 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
