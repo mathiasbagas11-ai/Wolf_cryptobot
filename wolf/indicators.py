@@ -9,7 +9,7 @@ monolith.
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 from wolf.models import Candle
 
@@ -178,3 +178,51 @@ def volume_ratio(candles: Sequence[Candle], lookback: int = 20) -> float:
     if baseline == 0:
         return float("nan")
     return recent / baseline
+
+
+def vwap(candles: Sequence[Candle], lookback: Optional[int] = None) -> float:
+    """Volume-weighted average price — the market's fair-value reference.
+
+    Each candle's typical price ``(high+low+close)/3`` is weighted by its volume,
+    so heavily-traded prices count more than thin wicks. A *rolling* VWAP over the
+    window (rather than a session-anchored one) suits the bot's fixed-length
+    candle series. Pass ``lookback`` to restrict it to the most recent N candles.
+    Returns NaN when the window has no traded volume.
+    """
+    window = list(candles) if lookback is None else list(candles[-lookback:])
+    if not window:
+        return float("nan")
+    pv = 0.0
+    vol = 0.0
+    for c in window:
+        pv += (c.high + c.low + c.close) / 3 * c.volume
+        vol += c.volume
+    if vol <= 0:
+        return float("nan")
+    return pv / vol
+
+
+def find_fvgs(candles: Sequence[Candle], lookback: int = 40) -> list[dict]:
+    """Detect Fair Value Gaps — 3-candle price imbalances that act as magnets.
+
+    Bullish FvG: candle[i-2].high < candle[i].low — upward momentum left an
+    unfilled gap; tends to act as future support when price returns.
+    Bearish FvG: candle[i-2].low > candle[i].high — same in reverse; resistance.
+
+    Returns dicts with keys ``type`` ('BULL'|'BEAR'), ``top``, ``bottom``.
+    """
+    gaps: list[dict] = []
+    start = max(0, len(candles) - lookback)
+    window = list(candles[start:])
+    for i in range(2, len(window)):
+        c1, c3 = window[i - 2], window[i]
+        if c3.low > c1.high:
+            gaps.append({"type": "BULL", "top": c3.low, "bottom": c1.high})
+        elif c3.high < c1.low:
+            gaps.append({"type": "BEAR", "top": c1.low, "bottom": c3.high})
+    return gaps
+
+
+def price_in_fvg(price: float, gaps: list[dict], kind: str) -> bool:
+    """True when ``price`` sits inside any gap of the requested kind."""
+    return any(g["type"] == kind and g["bottom"] <= price <= g["top"] for g in gaps)

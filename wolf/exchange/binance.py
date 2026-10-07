@@ -101,6 +101,32 @@ class BinanceClient:
             log.warning("Unexpected premiumIndex payload for %s: %s", symbol, exc)
             return None
 
+    def get_long_short_ratio(
+        self, symbol: str, period: str = "5m", limit: int = 2
+    ) -> Optional[dict]:
+        """Return the latest global long/short *account* positioning.
+
+        Uses the futures ``globalLongShortAccountRatio`` endpoint. Returns a
+        dict ``{"ratio", "long_pct", "short_pct"}`` (ratio = longs/shorts), or
+        ``None`` when unavailable. A ratio > 1 means accounts are net long.
+        """
+        limit = max(1, min(500, limit))
+        data = self._get_json(
+            f"{self._futures_base}/futures/data/globalLongShortAccountRatio",
+            {"symbol": symbol, "period": period, "limit": limit},
+        )
+        if not isinstance(data, list) or not data:
+            return None
+        try:
+            latest = data[-1]
+            ratio = float(latest["longShortRatio"])
+            long_pct = float(latest["longAccount"]) * 100
+            short_pct = float(latest["shortAccount"]) * 100
+        except (KeyError, ValueError, TypeError, IndexError) as exc:
+            log.warning("Unexpected longShortRatio payload for %s: %s", symbol, exc)
+            return None
+        return {"ratio": ratio, "long_pct": long_pct, "short_pct": short_pct}
+
     def get_open_interest_change(
         self, symbol: str, period: str = "5m", limit: int = 12
     ) -> Optional[float]:

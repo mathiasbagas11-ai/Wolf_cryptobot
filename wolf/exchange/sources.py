@@ -104,12 +104,55 @@ class ExchangeSource(ABC):
         """
         return []
 
+    def get_book_depth(self) -> dict[str, float]:
+        """Top-of-book USD depth per symbol, as ``{symbol: bid+ask notional}``.
+
+        The liquidity side of a volume/liquidity ratio, which klines cannot
+        provide. Venues with an all-symbols book ticker answer it in one
+        request; the rest return ``{}`` and callers omit the figure rather than
+        substituting a made-up denominator.
+        """
+        return {}
+
+    def get_book_spread(self) -> dict[str, float]:
+        """Top-of-book spread per symbol, in basis points of the mid.
+
+        The other half of the same book ticker :meth:`get_book_depth` reads,
+        and the half that decides what a round trip costs: a taker buys at the
+        ask and sells at the bid, so the full spread is paid once per trade,
+        on top of both fees.
+
+        Kept separate from the depth figure because the two answer different
+        questions and only one of them is a cost. Venues without an
+        all-symbols book ticker return ``{}``, and callers fall back to the
+        configured constant rather than inventing a spread.
+        """
+        return {}
+
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
         """Recent public trades ``[{id, symbol, price, qty, usd, side, time}]``.
 
         Returns ``[]`` for venues that don't implement it (whale tracker input).
         """
         return []
+
+
+def spread_bps(bid, ask) -> Optional[float]:
+    """Best ask minus best bid, in basis points of the mid, or ``None``.
+
+    Shared by every venue so the four parsers cannot drift apart on the one
+    piece of arithmetic that matters. A crossed or locked book (ask at or
+    below bid) returns ``None`` rather than zero or a negative: it means the
+    snapshot caught the venue mid-update, and zero would read as a free round
+    trip while a negative would credit a rebate that was never earned.
+    """
+    try:
+        b, a = float(bid), float(ask)
+    except (TypeError, ValueError):
+        return None
+    if b <= 0 or a <= b:
+        return None
+    return (a - b) / ((a + b) / 2) * 10_000
 
 
 def split_quote(symbol: str) -> tuple[str, str]:
@@ -166,6 +209,51 @@ class BinanceSource(ExchangeSource):
                 })
             except (KeyError, ValueError, TypeError):
                 continue
+        return out
+
+    def get_book_depth(self) -> dict[str, float]:
+        # One request returns the best bid/ask and their sizes for every symbol.
+        return self.parse_book_depth(self._get_json(f"{self._base}/ticker/bookTicker", {}))
+
+    @staticmethod
+    def parse_book_depth(payload) -> dict[str, float]:
+        """Sum the best bid and ask into one USD depth figure per symbol.
+
+        Top-of-book only — a proxy for how thick the market is, not the full
+        book. That is enough for a *relative* ranking, which is all this is
+        used for.
+        """
+        if not isinstance(payload, list):
+            return {}
+        out: dict[str, float] = {}
+        for r in payload:
+            try:
+                depth = float(r["bidPrice"]) * float(r["bidQty"]) + float(r["askPrice"]) * float(r["askQty"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if depth > 0:
+                out[r["symbol"]] = depth
+        return out
+
+    def get_book_spread(self) -> dict[str, float]:
+        # Same one request as get_book_depth; the payload carries both.
+        return self.parse_book_spread(self._get_json(f"{self._base}/ticker/bookTicker", {}))
+
+    @staticmethod
+    def parse_book_spread(payload) -> dict[str, float]:
+        """Best ask minus best bid, in basis points of the mid, per symbol.
+
+        A crossed or locked book (ask at or below bid) is dropped rather than
+        reported as zero or negative: it means the snapshot caught the venue
+        mid-update, and a zero spread would read as a free round trip.
+        """
+        if not isinstance(payload, list):
+            return {}
+        out: dict[str, float] = {}
+        for r in payload:
+            bps = spread_bps(r.get("bidPrice"), r.get("askPrice"))
+            if bps is not None and r.get("symbol"):
+                out[r["symbol"]] = bps
         return out
 
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
@@ -264,6 +352,27 @@ class OKXSource(ExchangeSource):
         return out
 
 
+    def get_book_spread(self) -> dict[str, float]:
+        # The same all-symbols ticker get_24h_overview already uses; the rows
+        # carry bidPx/askPx alongside the 24h figures.
+        data = self._get_json(f"{self._base}/api/v5/market/tickers", {"instType": "SPOT"})
+        return self.parse_book_spread(data)
+
+    @staticmethod
+    def parse_book_spread(payload) -> dict[str, float]:
+        """Spread in bps per symbol, keyed by the canonical ``BTCUSDT`` form."""
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not rows:
+            return {}
+        out: dict[str, float] = {}
+        for r in rows:
+            inst = r.get("instId") or ""
+            bps = spread_bps(r.get("bidPx"), r.get("askPx"))
+            if bps is not None and inst:
+                out[inst.replace("-", "")] = bps
+        return out
+
+
 class GateSource(ExchangeSource):
     name = "gate"
     # Gate uses native interval codes for minutes/hours/days.
@@ -307,6 +416,23 @@ class GateSource(ExchangeSource):
             return float(payload[0]["last"])
         return None
 
+    def get_book_spread(self) -> dict[str, float]:
+        # No currency_pair means every pair, in one request.
+        return self.parse_book_spread(self._get_json(f"{self._base}/spot/tickers", {}))
+
+    @staticmethod
+    def parse_book_spread(payload) -> dict[str, float]:
+        """Spread in bps per symbol, keyed by the canonical ``BTCUSDT`` form."""
+        if not isinstance(payload, list):
+            return {}
+        out: dict[str, float] = {}
+        for r in payload:
+            pair = r.get("currency_pair") or ""
+            bps = spread_bps(r.get("highest_bid"), r.get("lowest_ask"))
+            if bps is not None and pair:
+                out[pair.replace("_", "")] = bps
+        return out
+
 
 class BybitSource(ExchangeSource):
     name = "bybit"
@@ -347,3 +473,22 @@ class BybitSource(ExchangeSource):
         result = payload.get("result") if isinstance(payload, dict) else None
         rows = result.get("list") if isinstance(result, dict) else None
         return float(rows[0]["lastPrice"]) if rows else None
+
+    def get_book_spread(self) -> dict[str, float]:
+        data = self._get_json(f"{self._base}/v5/market/tickers",
+                              {"category": self._category})
+        return self.parse_book_spread(data)
+
+    @staticmethod
+    def parse_book_spread(payload) -> dict[str, float]:
+        """Spread in bps per symbol; Bybit already quotes ``BTCUSDT``."""
+        result = payload.get("result") if isinstance(payload, dict) else None
+        rows = result.get("list") if isinstance(result, dict) else None
+        if not rows:
+            return {}
+        out: dict[str, float] = {}
+        for r in rows:
+            bps = spread_bps(r.get("bid1Price"), r.get("ask1Price"))
+            if bps is not None and r.get("symbol"):
+                out[r["symbol"]] = bps
+        return out

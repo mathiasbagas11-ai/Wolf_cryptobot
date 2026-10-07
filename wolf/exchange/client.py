@@ -36,6 +36,8 @@ class MarketDataClient:
         self._futures = futures  # provides open-interest change (Binance)
         self._funding_sources = list(funding_sources) if funding_sources else []
         self._preferred: dict[str, str] = {}  # symbol -> source name that last worked
+        #: Venue that last served a book spread, for the diagnostic to name.
+        self.last_spread_source = ""
         self._lock = threading.Lock()
 
     @property
@@ -81,6 +83,31 @@ class MarketDataClient:
                 return data
         return []
 
+    def get_book_depth(self) -> dict[str, float]:
+        """Top-of-book depth per symbol from the first venue that provides it."""
+        for source in self._sources:
+            depth = source.get_book_depth()
+            if depth:
+                return depth
+        return {}
+
+    def get_book_spread(self) -> dict[str, float]:
+        """Top-of-book spread (bps) per symbol from the first venue with one.
+
+        Which venue answered is remembered, because it is the difference
+        between two very different situations. Klines fall through to whichever
+        source is reachable, so the bot runs normally on OKX or Bybit while
+        Binance is unreachable — and a spread that only Binance could serve
+        then comes back empty with nothing else looking wrong.
+        """
+        self.last_spread_source = ""
+        for source in self._sources:
+            spread = source.get_book_spread()
+            if spread:
+                self.last_spread_source = source.name
+                return spread
+        return {}
+
     def get_recent_trades(self, symbol: str, limit: int = 100) -> list[dict]:
         for source in self._ordered(symbol):
             trades = source.get_recent_trades(symbol, limit)
@@ -104,3 +131,6 @@ class MarketDataClient:
 
     def get_open_interest_change(self, symbol: str, period: str = "5m", limit: int = 12) -> Optional[float]:
         return self._futures.get_open_interest_change(symbol, period, limit) if self._futures else None
+
+    def get_long_short_ratio(self, symbol: str, period: str = "5m", limit: int = 2) -> Optional[dict]:
+        return self._futures.get_long_short_ratio(symbol, period, limit) if self._futures else None

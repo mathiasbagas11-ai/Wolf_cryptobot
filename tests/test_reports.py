@@ -12,8 +12,13 @@ class FakeMarketClient:
         self._trades = trades or {}
         self._klines = klines or {}
 
+    depth: dict = {}
+
     def get_market_overview(self):
         return list(self._overview)
+
+    def get_book_depth(self):
+        return dict(self.depth)
 
     def get_recent_trades(self, symbol, limit=100):
         return list(self._trades.get(symbol, []))
@@ -109,3 +114,60 @@ def test_whale_flags_large_trades_and_dedups(store):
 def test_whale_none_when_no_large_trades(store):
     client = FakeMarketClient(trades={"BTCUSDT": [_trade(1, "BTCUSDT", 100, 1)]})
     assert WhaleTracker(client, store, symbols=["BTCUSDT"], min_usd=250_000).build() is None
+
+
+class FakePositioningClient(FakeMarketClient):
+    """Adds the futures positioning surface the whale report can use."""
+
+    def __init__(self, ls=None, oi=None, **kw):
+        super().__init__(**kw)
+        self._ls = ls or {}
+        self._oi = oi or {}
+
+    def get_long_short_ratio(self, symbol, period="5m", limit=2):
+        return self._ls.get(symbol)
+
+    def get_open_interest_change(self, symbol, period="5m", limit=12):
+        return self._oi.get(symbol)
+
+
+def test_whale_positioning_long_short_and_accumulation(store):
+    client = FakePositioningClient(
+        ls={"BTCUSDT": {"ratio": 1.9, "long_pct": 66.0, "short_pct": 34.0}},
+        oi={"BTCUSDT": 3.4},
+    )
+    card = WhaleTracker(client, store, symbols=["BTCUSDT"], min_usd=250_000).build()
+    assert "Positioning" in card
+    assert "L/S 1.90" in card and "longs dominate" in card
+    assert "accumulating" in card
+
+
+def test_whale_positioning_shorts_dominate(store):
+    client = FakePositioningClient(
+        ls={"ETHUSDT": {"ratio": 0.7, "long_pct": 41.0, "short_pct": 59.0}},
+        oi={"ETHUSDT": -3.0},
+    )
+    card = WhaleTracker(client, store, symbols=["ETHUSDT"], min_usd=250_000).build()
+    assert "shorts dominate" in card and "unwinding" in card
+
+
+def test_radar_ranks_by_turnover_when_depth_is_available():
+    """V/L surfaces a thin market churning hard, not just the biggest volume."""
+    client = FakeMarketClient(overview=[
+        _ov("BIGUSDT", 1.0, 100.0, 900_000_000),    # huge volume, deep book
+        _ov("CHURNUSDT", 8.0, 2.0, 60_000_000),     # smaller, but very thin
+    ])
+    client.depth = {"BIGUSDT": 30_000_000, "CHURNUSDT": 200_000}
+    card = MarketRadar(client, top_n=1, min_quote_volume=1_000_000).build()
+    assert "Fastest turnover" in card
+    # CHURN turns over 300x its book against BIG's 30x.
+    section = card.split("Fastest turnover")[1]
+    assert "CHURN" in section and "V/L 300" in section
+
+
+def test_radar_omits_turnover_without_depth():
+    """No depth data means no ratio — never a fabricated denominator."""
+    client = FakeMarketClient(overview=[_ov("AAAUSDT", 3.0, 1.0, 5_000_000)])
+    card = MarketRadar(client, top_n=1, min_quote_volume=1_000_000).build()
+    assert "V/L" not in card
+    assert "Volume leaders" in card
