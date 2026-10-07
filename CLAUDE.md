@@ -276,7 +276,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-07, HEAD `contest-requote`
+## Status — 2026-10-07, HEAD `strategy-pool`
 
 1062 tests green. Working tree clean.
 
@@ -323,6 +323,26 @@ correction, so the true drawdown is at least 2.3% and the true peak is higher
 still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
+
+**Per-strategy pool, ten disjoint 24h cards since the booking fix**
+(09-21 → 10-06, n-weighted; ranges use sd(R)≈1 and ~3.5 overlapping
+positions per independent bet, the same discount the cards charge):
+
+| | n | meanR | after cost | ~95% range | days +/− |
+|---|---|---|---|---|---|
+| MOMENTUM | 44 | +0.076 | +0.016 | −0.48 .. +0.63 | 6/3 |
+| TRAP | 51 | +0.080 | −0.030 | −0.43 .. +0.59 | 8/2 |
+| SCALP | 68 | −0.005 | −0.105 | −0.45 .. +0.44 | 4/6 |
+| PREDUMP | 57 | −0.168 | −0.228 | −0.65 .. +0.32 | 2/8 |
+| PREPUMP | 9 | −0.244 | −0.274 | −1.47 .. +0.98 | 2/3 |
+| SWING | 15 | −0.597 | −0.677 | −1.54 .. +0.35 | 2/7 |
+
+Every range spans zero. No strategy has shown an edge and none has been
+shown to lose. If the means held, SWING would separate in about 40 trades
+(~2–3 weeks); PREDUMP in ~460 (~2.5 months); MOMENTUM and TRAP in ~2,000
+each, which is the "level questions are unaffordable" lesson in numbers.
+TRAP's 8/2 day split is the kind of streak that has collapsed before, and
+TRAP and SCALP are largely one detector — pooled together they are +0.031R.
 
 **Contest audit, first read (2026-10-07) — withdrawn the same day.** It
 read −0.081R (winner minus displaced candidate) over 122 pairs, p 0.588,
