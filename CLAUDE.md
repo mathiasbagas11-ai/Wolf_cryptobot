@@ -276,7 +276,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-07, HEAD `strategy-pool`
+## Status — 2026-10-19, HEAD `twenty-cards`
 
 1062 tests green. Working tree clean.
 
@@ -323,6 +323,58 @@ correction, so the true drawdown is at least 2.3% and the true peak is higher
 still. `trades` reads 554, an undercount of the all-time figure. Neither feeds
 any card or decision. `peak` corrects itself once the balance clears 2,562.58;
 `trades` does not. Read both as starting 2026-09-21.
+
+**Twenty disjoint 24h cards since the booking fix (09-21 → 10-19).** Ten
+more arrived in one batch on 10-19 (10-08 → 10-14 contiguous at 05:27,
+then 10-17 → 10-19; 10-08 and 10-09 were pasted twice and counted once;
+10-15, 10-16 and most of 10-07 were not sent). 450 trades, **−0.027R before
+costs, −0.111R after**; 8 positive days of 20. Taking each day as one
+observation, the after-cost mean is −0.110R at **t −1.95 on 19 df** —
+the closest the level question has come to an answer. Two discounts keep it
+short of one: that figure charges the assumed 20bps (measured runs ~13bps,
+which gives roughly −0.09R), and the owner chooses which days to send.
+Before costs the bot is flat; after them it bleeds slowly.
+
+**The paper balance charges no costs.** `PaperAccount.apply` books
+`pnl_pct` and the tracker never subtracts fees or spread, so `/paper` shows
+the gross curve. At ~0.08R a trade and ~20 trades a day that is the whole
+gap between a flat bot and a losing one; it has to be said whenever the
+balance is quoted to the owner.
+
+| | n | first 10 cards | last 10 cards | all 20 | after cost |
+|---|---|---|---|---|---|
+| MOMENTUM | 94 | +0.076 | +0.101 | +0.089 | +0.029 |
+| SCALP | 142 | −0.005 | +0.044 | +0.020 | −0.080 |
+| TRAP | 87 | +0.080 | −0.154 | −0.017 | −0.127 |
+| PREDUMP | 90 | −0.168 | +0.031 | −0.095 | −0.155 |
+| PREPUMP | 16 | −0.244 | −0.563 | −0.384 | −0.414 |
+| SWING | 21 | −0.597 | +0.250 | −0.355 | −0.435 |
+
+Every range still spans zero. TRAP and PREDUMP swapped places between the
+halves; MOMENTUM is the only strategy positive in both, by a margin no card
+can resolve. **The SWING streak ended at 0/14**: it won 3 of its next 6, so
+the "skip SWING" advice given to the owner on 10-06/10-07 rested on a run
+that the lesson on overlapping streaks already warned about.
+
+**Seventeen first-look `conv:` days:** AI_PICK n=86 +0.068R, PASSED n=252
++0.023R — gap +0.045R; daily gaps positive on 9 of 17, t +0.60. The three
+positive days that ended the 10-06 note were followed by gaps of −0.02,
+−0.17, +1.21, +0.17, −0.79, +0.95, −0.55, +0.09, −0.12, −1.08. No edge.
+
+**PREPUMP's stops keep widening:** 1R = 16.48% (10-12), 9.42% (10-13) and
+**29.44%** (10-14) — a last rung near +88%. Its 1.5R chase exemption stands
+on no argument (see below) and the chase distance of admitted signals is
+still unrecorded, so whether these are base stops or chase stretch cannot
+be told. The only number that matters for real money: at 1% risk a 29% stop
+is a position of 3.4% of the account.
+
+**10-17 was the second-worst day of the era** (meanR −0.560, SCALP 1/8,
+`padj` 0.677 lowest yet, nothing survives). One `onchain:NEUTRAL` label
+appeared on 10-18 — the first on-chain label in weeks; the collector is
+still 1–4 of 15, rate limited.
+
+**Contest audit: clean pairs have been accumulating since 10-07** (twelve
+days). It is the next read.
 
 **Per-strategy pool, ten disjoint 24h cards since the booking fix**
 (09-21 → 10-06, n-weighted; ranges use sd(R)≈1 and ~3.5 overlapping
