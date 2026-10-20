@@ -276,9 +276,66 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-19, HEAD `twenty-cards`
+## Status — 2026-10-20, HEAD `handoff-1020`
 
 1062 tests green. Working tree clean.
+
+### Start here (handoff written 2026-10-20 for the next session)
+
+**Talking to the owner.** Reports go in plain, casual Bahasa Indonesia —
+the owner asked for "bahasa yang paling mudah dipahami" after a technical
+reply lost them. Lead with the conclusion, use simple tables and everyday
+analogies, keep jargon (eff, padj, R) out of the headline or explain it in
+one clause, and end with exactly what they should type or do next. Anything
+the owner has to run should be one Telegram command, not a shell step: they
+operate from a phone, and `railway ssh` was a dead end.
+
+**How cards arrive.** The owner pastes `/diag` cards (24h, usually stamped
+~05:27 UTC), sometimes several days at once and sometimes the same card
+twice. Pool only disjoint windows, count a duplicate once, and say which
+days are missing. Running totals live in the dated blocks below; the latest
+is the twenty-card block.
+
+**Where the evidence stands (450 trades, 09-21 → 10-19).**
+- Bot overall: **−0.027R before costs, −0.111R after**, t −1.95 on 19
+  day-level df. Flat before costs, slowly losing after them. Not yet
+  settled, but the shape is no longer in doubt.
+- **No strategy has a demonstrated edge.** MOMENTUM is the only one positive
+  in both halves (+0.089R pooled, +0.029R after cost) and is smaller than
+  what the best of six zero-edge strategies prints by chance (median
+  +0.32R in simulation). TRAP and PREDUMP swapped sign between halves;
+  SWING's 0/14 streak broke. TRAP and SCALP are largely one detector.
+- **High-Conviction room: no edge** over 17 first-look days (gap +0.045R).
+- **`/paper` is gross of costs** — never quote the balance without saying so.
+- PREPUMP stops reached **29%** (10-14); its 1.5R chase exemption has no
+  remaining justification.
+
+**What the owner has been told to do with real money** (keep consistent):
+don't follow every signal; if following any, MOMENTUM only, small size,
+at most 2–3 positions open at once; skip PREPUMP or size it from the stop;
+ignore the 🥇 badge. Earlier "skip SWING" advice was withdrawn on 10-19.
+
+**Open offers the owner has not yet accepted — ask before building:**
+1. **Liquidity split on `/diag`** (offered 10-19, "gas bikin"): bucket
+   trades by recorded `spread_bps` (tight vs wide book) to ask whether thin
+   coins drag the result. Retroactive — `spread_bps` is on every row — so it
+   answers from existing data. Context: on 15m–1h stops, majors pay *more*
+   cost per R (fee is a fixed % over a tighter stop; the 0.15R gate rejects
+   1R < 1.33%), so "fewer, bigger coins" only helps on longer timeframes.
+2. **Record chase distance on admitted signals** (offered 09-21, 10-04,
+   "gas catat chase"): keep `quoted_entry`/`chase_r` before the re-quote
+   overwrites `entry_price`. Needed to explain PREPUMP's huge stops.
+3. Not yet offered: a net-of-cost line on `/paper`, given the point above.
+
+**Next read: `/whatif contest`.** Clean, re-quoted pairs have accumulated
+since 2026-10-07; pre-fix pairs show as `legacy` and must stay excluded.
+It is the one paired question that can answer faster than months of level
+data. It does not cover SWING (4h rarely co-fires).
+
+**Do not**: change any strategy, gate or threshold (rule 1 — the sample is
+still landing); re-argue the chase limit; act on a single card or a streak;
+pool across the era table.
+
 
 **The ledger was wrong, and every card built on it inherited that.** A position
 that banked TP1 and then timed out was booked as though nothing had been sold —
