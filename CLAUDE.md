@@ -227,7 +227,12 @@ TRAP and SCALP use the same entry, stop and ladder rule, so an honest
 instrument has to score them level nearly every time; it showed them tied
 only 37 times in 87. **When two things that should be identical come out
 different, the instrument is measuring itself — and print the ties, because
-they are where that shows.**
+they are where that shows.** The tie argument itself was only half right,
+which is the coda worth keeping: TRAP and SCALP share entry, stop and ladder
+but not the timeout (4h against 10h), so any trade still open at 4h *should*
+split. The bias was real by mechanism; how much of the 37/87 it explained was
+never separated from the timeout. **Before calling two things identical,
+list every parameter, not the ones the argument needs.**
 
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
@@ -270,13 +275,15 @@ Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
 `replay-over-a-truncated-log`. One added 2026-09-24:
 `conviction-room-picks-unrecorded`. **`chase-gate-self-blinding` moved OPEN →
 INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
+**`contest-max-score-self-blinding` moved OPEN → INCONCLUSIVE on 2026-10-20 —
+max(score) is not a lever either; the floor-bias worry is closed.**
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-20, HEAD `handoff-1020`
+## Status — 2026-10-20, contest audit read
 
 1062 tests green. Working tree clean.
 
@@ -327,10 +334,19 @@ ignore the 🥇 badge. Earlier "skip SWING" advice was withdrawn on 10-19.
    overwrites `entry_price`. Needed to explain PREPUMP's huge stops.
 3. Not yet offered: a net-of-cost line on `/paper`, given the point above.
 
-**Next read: `/whatif contest`.** Clean, re-quoted pairs have accumulated
-since 2026-10-07; pre-fix pairs show as `legacy` and must stay excluded.
-It is the one paired question that can answer faster than months of level
-data. It does not cover SWING (4h rarely co-fires).
+**`/whatif contest` has been read (2026-10-20): the contest decides
+nothing.** 56 clean pairs, winner minus displaced candidate **+0.000R**,
+se 0.103, eff 9, p 0.998; ahead 11 / tied 30 / behind 15. TRAP>SCALP n=40
+−0.012R, MOMENTUM>PREPUMP n=9 −0.000R, SCALP>TRAP n=6 +0.082R. The ~95%
+range is ±0.24R. Registry → INCONCLUSIVE, read like the chase gate: not a
+lever. Two side results: TRAP-vs-SCALP is in effect a paired 4h-vs-10h
+timeout test (same entry/stop/ladder, different timeout) and reads zero;
+and the 10-07 tie argument overlooked that timeout difference (see the
+lesson). 84 winners were still unresolved — one re-read when they settle,
+no more. SWING still has no paired look (one pair).
+
+**Next read:** nothing paired is left queued. The level question keeps
+landing card by card; the two open offers below are what would sharpen it.
 
 **Do not**: change any strategy, gate or threshold (rule 1 — the sample is
 still landing); re-argue the chase limit; act on a single card or a streak;
@@ -430,8 +446,7 @@ is a position of 3.4% of the account.
 appeared on 10-18 — the first on-chain label in weeks; the collector is
 still 1–4 of 15, rate limited.
 
-**Contest audit: clean pairs have been accumulating since 10-07** (twelve
-days). It is the next read.
+**Contest audit:** read 10-20, +0.000R over 56 clean pairs — see Start here.
 
 **Per-strategy pool, ten disjoint 24h cards since the booking fix**
 (09-21 → 10-06, n-weighted; ranges use sd(R)≈1 and ~3.5 overlapping
@@ -465,6 +480,7 @@ same rule (`screener._requote_spec`); a loser that rule would have dropped
 is marked unfillable and never graded; the 122 pre-fix pairs are excluded
 by name as `legacy` — the replay's ~10-day reach means they cannot be
 re-graded. Registry entry back to **OPEN**. The clean sample starts at zero.
+*(Clean read 10-20: +0.000R, p 0.998 — INCONCLUSIVE, not a lever.)*
 
 What survives because it never depended on outcomes: **TRAP and SCALP are
 largely one detector scored twice** (~100 collisions in three weeks), and
@@ -792,7 +808,8 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    **The first read (2026-10-07) was biased against every winner and is
    withdrawn** — losers were priced at the bar close, winners at the live
    re-quote. Fixed the same day; the 122 pre-fix pairs are excluded as
-   `legacy` and the clean sample starts at zero. Even the biased read had
+   `legacy` and the clean sample starts at zero. **Clean read 2026-10-20:
+   +0.000R over 56 pairs, p 0.998 — closed as not a lever.** Even the biased read had
    MOMENTUM ahead of displaced PREPUMP (+0.234R, n=16), so the floor-bias
    worry above has no trade behind it.
 
