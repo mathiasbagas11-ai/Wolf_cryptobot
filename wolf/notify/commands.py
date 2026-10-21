@@ -9,6 +9,7 @@ Commands:
     /analyze <SYM>  technical read on one coin (bare /btc works too)
     /stats          aggregate win-rate / PnL
     /paper          paper-trading balance, return, drawdown
+    /montecarlo     the bad run to size against, net of costs
     /learning       per-strategy edge + blacklist
     /active         open (pending/active) signals
     /help           this list
@@ -30,6 +31,8 @@ _HELP = (
     "<code>/calc BTC 500</code> — position size &amp; leverage for your balance\n"
     "<code>/stats</code> — win-rate &amp; PnL\n"
     "<code>/paper</code> — paper balance &amp; return\n"
+    "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
+    "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
     "<code>/learning</code> — strategy edge &amp; blacklist\n"
     "<code>/active</code> — open signals\n"
     "<code>/rank</code> — AI ranking of the live signals, best first\n"
@@ -74,6 +77,8 @@ class CommandRouter:
             return self._stats()
         if cmd == "paper":
             return self._paper()
+        if cmd in ("montecarlo", "mc"):
+            return self._montecarlo(arg)
         if cmd == "learning":
             return self._learning()
         if cmd == "active":
@@ -434,6 +439,23 @@ class CommandRouter:
             f"Peak {p['peak']:,.2f} · Max DD {p['max_drawdown_pct']:.2f}%\n"
             f"Trades {p['trades']} · Realized {p['realized']:+.2f} USD"
         )
+
+    def _montecarlo(self, arg: str) -> str:
+        """Deal the ledger's days again to show the bad run before it arrives."""
+        from wolf.montecarlo import render, simulate
+
+        settings = self._app.settings
+        try:
+            report = simulate(
+                self._app.tracker.outcomes(),
+                risk_pct=settings.paper_risk_pct,
+                round_trip_bps=settings.round_trip_cost_bps,
+                strategy=arg.split()[0] if arg else None,
+            )
+        except Exception:
+            log.exception("Monte Carlo failed")
+            return "⚠️ Monte Carlo failed — see logs."
+        return f"<pre>{esc(render(report))}</pre>"
 
     def _learning(self) -> str:
         learning = getattr(self._app, "learning", None)

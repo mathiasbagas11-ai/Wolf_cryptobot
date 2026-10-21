@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-20, contest audit read
+## Status — 2026-10-21, `/montecarlo` added
 
-1062 tests green. Working tree clean.
+1070 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -345,7 +345,29 @@ and the 10-07 tie argument overlooked that timeout difference (see the
 lesson). 84 winners were still unresolved — one re-read when they settle,
 no more. SWING still has no paired look (one pair).
 
-**Next read:** nothing paired is left queued. The level question keeps
+**`/montecarlo` (2026-10-21) — a sizing tool, not evidence.** Built after
+the owner shared a "build trading systems with AI" carousel and asked to
+take what was good from it. It deals the ledger's resolution *days* (kept
+whole) into 2000 thirty-day paths at `paper_risk_pct`, each trade charged
+`round_trip_cost_bps` on its own stop, and prints return and max-drawdown
+percentiles, the p95 losing streak, the one lived path, and every ISO week
+in the log. Two deliberate departures from the textbook version: days not
+trades are the unit, because same-day stops are one move (09-28: ~−15.7%
+in a day) and a trade shuffle prints a shallower hole — the shuffle figure
+is shown beside it for the gap, like `nom`; and costs are charged, because
+`/paper` is gross. The weekly table also removes the owner's choice of
+which days to send. It resamples the measured mean, so it says nothing
+about whether there is an edge; with a negative mean it shows how fast the
+hole grows. **Not yet run on live data — the first reading is due.**
+From the same carousel, considered and not built: a post-AI risk gate,
+daily-loss limit and kill switch (no orders to stop; the drawdown pause
+already exists in config and is off for the reason written there), LLM
+agent roles (rule 4), profit factor (the card's avgWin/avgLoss/needs-WR
+already carries it) and stale-feed checks (closed bars only; collectors
+are staleness-checked in `wolf/market.py`).
+
+**Next read:** `/montecarlo`, then `/montecarlo MOMENTUM` — the one the
+owner is told to follow with real money. Nothing paired is left queued. The level question keeps
 landing card by card; the two open offers below are what would sharpen it.
 
 **Do not**: change any strategy, gate or threshold (rule 1 — the sample is
@@ -861,7 +883,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1062 tests, ~12s
+python -m pytest            # 1070 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -874,6 +896,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/whatif.py` | paired re-scoring: stop rules, ladder geometry, whale policies |
 | `wolf/chase_audit.py` | grades what the chase gate dropped (settled: not a lever) |
 | `wolf/contest_audit.py` | pairs each displaced candidate against the winner that beat it |
+| `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |
