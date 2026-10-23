@@ -283,7 +283,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-21, `/montecarlo` added
+## Status — 2026-10-23, first `/montecarlo` reading
 
 1070 tests green. Working tree clean.
 
@@ -318,9 +318,13 @@ is the twenty-card block.
   remaining justification.
 
 **What the owner has been told to do with real money** (keep consistent):
-don't follow every signal; if following any, MOMENTUM only, small size,
-at most 2–3 positions open at once; skip PREPUMP or size it from the stop;
-ignore the 🥇 badge. Earlier "skip SWING" advice was withdrawn on 10-19.
+**as of 10-23, pause real-money following** — no strategy is positive after
+costs, MOMENTUM included. If they insist, MOMENTUM only at 0.25–0.5% risk
+(drawdown scales roughly with risk: p95 ~33% at 1% → ~8–17%), at most 2–3
+positions open; never follow every signal (that is the −44% lived path);
+skip PREPUMP; ignore the 🥇 badge. Earlier "skip SWING" advice was
+withdrawn on 10-19; the 10-19 "MOMENTUM only, small size" was superseded
+on 10-23 by the reading above.
 
 **Open offers the owner has not yet accepted — ask before building:**
 1. **Liquidity split on `/diag`** (offered 10-19, "gas bikin"): bucket
@@ -358,7 +362,22 @@ is shown beside it for the gap, like `nom`; and costs are charged, because
 `/paper` is gross. The weekly table also removes the owner's choice of
 which days to send. It resamples the measured mean, so it says nothing
 about whether there is an edge; with a negative mean it shows how fast the
-hole grows. **Not yet run on live data — the first reading is due.**
+hole grows.
+
+**First reading (2026-10-23, pool 09-29 → 10-22).** All strategies: 498
+trades over 24 days, meanR −0.024 gross / **−0.110 net** — the same net
+figure the twenty-card pool gave (−0.111), which is the cross-check that
+the tool prices cost the way the card does. Lived path at 1% risk: **net
+−43.7%, max DD 45.1%**; 30-day median −51.7%, 99% of paths lose. Day vs
+trade shuffle differ by only 1.4 points because 09-28, the clustered day,
+has already fallen out of the capped log. MOMENTUM: 110 trades over 22
+days, **−0.025 gross / −0.098 net** — its earlier +0.089 (cards 09-21 →
+10-19) is gone, carried down by W42 −0.400 and W43 −0.296 gross after W41
++0.421. 30-day median −14.4%, max DD p95 33.1% at 1% risk, 90% of paths
+lose. Two weeks is a streak and is read as one; it does not show MOMENTUM
+loses, but it removes the one positive reading the real-money advice
+rested on. The plain arithmetic for the owner: ~21 trades a day at 1%
+risk turns −0.11R into roughly −2% a day.
 From the same carousel, considered and not built: a post-AI risk gate,
 daily-loss limit and kill switch (no orders to stop; the drawdown pause
 already exists in config and is off for the reason written there), LLM
@@ -366,8 +385,9 @@ agent roles (rule 4), profit factor (the card's avgWin/avgLoss/needs-WR
 already carries it) and stale-feed checks (closed bars only; collectors
 are staleness-checked in `wolf/market.py`).
 
-**Next read:** `/montecarlo`, then `/montecarlo MOMENTUM` — the one the
-owner is told to follow with real money. Nothing paired is left queued. The level question keeps
+**Next read:** `/montecarlo MOMENTUM` again in a week — not to chase the
+streak, but because it is the only number the real-money advice hangs on.
+Nothing paired is left queued. The level question keeps
 landing card by card; the two open offers below are what would sharpen it.
 
 **Do not**: change any strategy, gate or threshold (rule 1 — the sample is
