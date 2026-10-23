@@ -260,7 +260,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-six entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-seven entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -283,7 +283,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-23, net line on `/paper`
+## Status — 2026-10-23, cost gate read: not a lever
 
 1076 tests green. Working tree clean.
 
@@ -341,11 +341,17 @@ on 10-23 by the reading above.
    "gas catat chase"): keep `quoted_entry`/`chase_r` before the re-quote
    overwrites `entry_price`. Needed to explain PREPUMP's huge stops.
 3. ~~Net-of-cost line on `/paper`~~ — built 2026-10-23 ("gas bikin net paper").
-4. **Cost lever, offered 10-23 as a measurement first:** gross is ~flat and
-   costs are ~0.086R a trade, so cost is the whole loss. `/whatif cost`
-   (already built) shows what each `max_cost_r` would have kept, on the
-   same trades. Read it before proposing any gate change; changing the gate
-   is a strategy change and waits on the owner's call under rule 1.
+4. ~~Cost lever~~ — read 10-23, **not a lever** (registry
+   `tighter-cost-gate`). `/whatif cost` at 0.10 keeps 287 of 485, cost
+   0.086 → 0.059R, but gross falls −0.024 → −0.053R and net is unchanged
+   (−0.110 → −0.112). The dropped tight-stop trades were the gross-better
+   ones (+0.018R gross, 0.125R cost). The loss is spread across stop widths,
+   so no gate setting removes it. The owner had also asked how to lift a
+   ~50% signal to 60–90% "with learning"; they were told win rate is the
+   wrong target (expectancy is), that the old learning layer was moved to
+   monitor mode for overfitting noise, and that +0.1–0.2R net is the
+   realistic goal — reached, if at all, by finding a gross-positive subset
+   in existing data (liquidity split, `evidence` bucket) rather than tuning.
 
 **`/whatif contest` has been read (2026-10-20): the contest decides
 nothing.** 56 clean pairs, winner minus displaced candidate **+0.000R**,
