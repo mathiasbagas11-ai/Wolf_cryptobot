@@ -260,7 +260,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-seven entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-eight entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -283,7 +283,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-24, long replies split for Telegram
+## Status — 2026-10-24, first `/diag 600` read (liquidity split)
 
 1085 tests green. Working tree clean.
 
@@ -413,8 +413,26 @@ the 24h card had been growing one bucket family at a time (`evidence:`,
 `conv:`, `liq:`) toward the same wall; a daily digest that quietly stops
 arriving would have read as the bot being down.
 
-**Next read:** `/diag 600` for the first `liq:` reading (arrives in
-several messages now); then
+**First `/diag 600` (2026-10-23, ~09-29 → 10-23, 498 traded, `eff=63`,
+`mean_open` 7.82) — the largest effective sample any card has carried.**
+Overall gross −0.024, net −0.112 assumed (measured fee+spread 0.060R →
+about −0.084). Strategies, all `padj` 1.000: TRAP +0.072 / PREDUMP +0.071
+(net +0.012, the only net-positive row) / SCALP +0.011 / MOMENTUM −0.015 /
+PREPUMP −0.413 / SWING −0.458 (n=36, wr 25%). Ladder needs WR 48.8%
+against ~47.7% achieved. **`liq:` (registry `thin-books-drag-the-result`,
+INCONCLUSIVE with a pre-registered replication):** TIGHT +0.032 gross /
+−0.026 net, MID −0.011 / −0.071, WIDE −0.170 / −0.236 — monotone, and the
+gap sits in gross, not cost (0.058 vs 0.066R). Other shapes, none a
+finding: `evidence:` PRIMARY +0.027 vs THIN −0.231; `whale:` WITH +0.185
+vs AGAINST −0.111 (SCALP WITH n=59 +0.37 the largest `wxs` cell — a max
+over 18 cells); `conv:` PASSED +0.119 vs AI_PICK −0.011 and `ai:` REJECT
++0.115 vs CONFIRM −0.034, so the AI layer still adds nothing.
+`conv:UNRANKED` n=60 −0.745 (lowest padj, 0.989) is the known first-look
+artifact, not a signal. The paste arrived in two messages, confirming the
+split fix is live; the owner first sent the tail of a 24h card by mistake.
+
+**Next read:** `/diag 600` again once the capped log has rolled over to a
+disjoint sample (~3–4 weeks) — the `liq:` replication; meanwhile
 `/montecarlo MOMENTUM` again in a week — not to chase the
 streak, but because it is the only number the real-money advice hangs on.
 Nothing paired is left queued. The level question keeps

@@ -215,6 +215,14 @@
       "settled_on": "2026-10-23",
       "evidence": "/whatif cost over 485 resolved signals (log 09-29 -> 10-22). At 0.15 (live) and every looser setting: kept 485, meanR -0.024 gross, cost 0.086R, netR -0.110. At 0.10: kept 287 (59%), meanR -0.053, cost 0.059, netR -0.112. Derived from the two rows: the 198 trades a 0.10 gate would drop were gross +0.018R and paid 0.125R, net -0.107R; the 287 it keeps are gross -0.053R and pay 0.059R, net -0.112R. The gate trades cost for gross one for one: the tight-stop trades it removes were the gross-better ones, so net does not move. Settings above 0.15 are identical to no gate because the live gate already removed those rows before they were recorded.",
       "note": "Not a lever, read like the chase gate and the contest. Costs are ~0.086R of a ~0.11R net loss, but they are not concentrated in a population that can be cut: the loss is spread evenly across stop widths. One threshold was tried (0.10) on the trades it is scored against, so this is a shape, not a fitted optimum. The curve cannot see below-0.15 rows the live gate already dropped, nor how a tighter gate would change what is recorded later. Owner asked 10-23 how to lose less; this is the answer for the cost route. Do not re-open without a different population (e.g. a longer-timeframe detector)."
+    },
+    {
+      "id": "thin-books-drag-the-result",
+      "question": "Do signals on wide-spread (thin) books do worse than on tight ones, before or after cost?",
+      "status": "INCONCLUSIVE",
+      "settled_on": "2026-10-24",
+      "evidence": "First liq: read, /diag 600 on 2026-10-23 (resolution window ~09-29 -> 10-23, 498 traded, eff 63, mean_open 7.82). TIGHT (<2bps, median 1.2) n=155 gross +0.032 fee+spread 0.058R net -0.026; MID (2-8, median 4.0) n=256 gross -0.011 cost 0.060 net -0.071; WIDE (>=8, median 10.8) n=85 gross -0.170 cost 0.066 net -0.236; NO_SPREAD n=2. All padj 1.000 in a 33-bucket family. Shape is monotone in the expected direction, and almost all of the TIGHT-WIDE gap (~0.20R) is in gross, not cost (0.058 vs 0.066R): thin books carry worse signals, not just dearer ones. Rough gap t ~0.5 with the overlap discount (eff ~20 vs ~11); a monotone order of three tiers happens 1 time in 3 under the null.",
+      "note": "Not a finding and not a lever yet: even TIGHT is net negative, so dropping WIDE would cut the loss, not make a profit. Pre-registered replication: the outcome log is capped, so in ~3-4 weeks /diag 600 will cover a sample disjoint from this one. Prediction written before that read: WIDE gross below TIGHT gross again. If it repeats on disjoint trades, move to a /whatif-style read of a spread gate; if it flips, close this. Do not adjust the 2/8bps edges, which were fixed before the first reading."
     }
   ]
 }
