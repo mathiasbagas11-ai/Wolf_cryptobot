@@ -334,6 +334,33 @@ def _primary_components() -> dict[str, frozenset]:
     }
 
 
+#: Spread tiers for the liquidity split, in basis points. Fixed before any
+#: reading rather than cut at the card's own median or tertiles: a cut that
+#: moves with each window cannot be pooled across cards, and one chosen after
+#: looking would be the threshold picked on the trades it is scored against.
+#: Roughly: majors quote under 2bps, mid-caps 2-8, a thin or freshly rotated
+#: alt 8 and up.
+LIQ_TIGHT_BPS = 2.0
+LIQ_WIDE_BPS = 8.0
+
+
+def _liquidity_label(outcome) -> str:
+    """TIGHT / MID / WIDE by the spread the signal faced when it was emitted.
+
+    ``NO_SPREAD`` is its own label for the same reason ``UNRECORDED`` is on the
+    evidence split: rows from before the spread was recorded, or whose book
+    read failed, are missing data rather than a liquidity tier.
+    """
+    spread = getattr(outcome, "spread_bps", None)
+    if spread is None:
+        return "NO_SPREAD"
+    if spread < LIQ_TIGHT_BPS:
+        return "TIGHT"
+    if spread < LIQ_WIDE_BPS:
+        return "MID"
+    return "WIDE"
+
+
 def _evidence_label(outcome) -> str:
     """PRIMARY when the signal carried its detector's own evidence, else THIN.
 
@@ -427,7 +454,7 @@ _COLLECTOR_KEYS = {
 #: — an all-NONE column means the engine simply had nothing to say, which is a
 #: finding rather than an outage, and quoting a collector status for it would
 #: name a fault that does not exist.
-_NO_COLLECTOR = ("learn", "conv")
+_NO_COLLECTOR = ("learn", "conv", "liq")
 
 
 def _collector_status(tracker, key: str) -> str:
@@ -768,6 +795,24 @@ def diagnose(
     # on the card.
     by_evidence = _buckets_by(_evidence_label)
 
+    # Do thin books drag the result? Asked because costs are most of the loss
+    # and the cost gate turned out not to be a lever (tighter-cost-gate): it
+    # trades cost for gross one for one, so the question moves to whether some
+    # population is gross-positive and merely paying too much to show it. Each
+    # tier also carries its own measured fee+spread, because the assumed 20bps
+    # charges a major and a thin alt the same, and that is the very difference
+    # this split exists to see. Read the gross column for edge and the net one
+    # for whether it survives; the tiers are not paired, so this is a level
+    # question and needs far more sample than the paired ones.
+    by_liquidity = _buckets_by(_liquidity_label)
+    for label, cell in by_liquidity.items():
+        rows = [o for o in traded if _liquidity_label(o) == label]
+        measured = _measured_cost(rows, taker_fee_bps, round_trip_bps)
+        if measured.get("cost_r") is not None:
+            cell["median_spread_bps"] = measured["median_spread_bps"]
+            cell["fee_spread_r"] = measured["cost_r"]
+            cell["net_fee_spread_r"] = round(cell["mean_r"] - measured["cost_r"], 3)
+
     # Each bucket above is measured against zero, which on a system whose
     # overall mean is negative answers a question nobody asked: every bucket
     # will read negative because every bucket pays the same costs. What decides
@@ -843,7 +888,7 @@ def diagnose(
     # point: the reader who scans the strategy rows is now scanning the AI rows
     # too, and the correction has to know that.
     families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict,
-                by_learning_action, by_evidence, by_conviction]
+                by_learning_action, by_evidence, by_conviction, by_liquidity]
     if ai_edge is not None:
         families.append({"ai_edge": ai_edge})
     _apply_fdr(tuple(families))
@@ -937,6 +982,7 @@ def diagnose(
         "by_learning_action": by_learning_action,
         "by_evidence": by_evidence,
         "by_conviction": by_conviction,
+        "by_liquidity": by_liquidity,
         "ai_edge": ai_edge,
         "collector_status": {
             label: _collector_status(tracker, key)
@@ -1117,6 +1163,7 @@ def render_digest(diag: dict) -> str:
         ("learn", "NONE", diag.get("by_learning_action") or {}),
         ("evidence", "UNRECORDED", diag.get("by_evidence") or {}),
         ("conv", "UNRANKED", diag.get("by_conviction") or {}),
+        ("liq", "NO_SPREAD", diag.get("by_liquidity") or {}),
     ):
         real = {k: v for k, v in buckets.items() if k != sentinel}
         if not real:
@@ -1134,6 +1181,9 @@ def render_digest(diag: dict) -> str:
                 f"{label + ':' + name:<22} n={b['n']} graded={b['graded']} "
                 f"wr={b['win_rate']:.1f} meanR={b['mean_r']:+.3f} t={b['t']:+.2f} "
                 f"{_fdr_col(b)}=> {b['verdict']}"
+                + (f" | spread {b['median_spread_bps']:.1f}bps fee+spread="
+                   f"{b['fee_spread_r']:.3f}R net={b['net_fee_spread_r']:+.3f}"
+                   if "fee_spread_r" in b else "")
             )
 
     # The contrast the AI rows exist to support. Printed on its own line rather
@@ -1207,7 +1257,7 @@ def render_digest(diag: dict) -> str:
         len(diag.get(k) or {})
         for k in ("by_strategy", "by_whale_stance", "by_onchain_bias",
                   "by_ai_verdict", "by_learning_action", "by_evidence",
-                  "by_conviction")
+                  "by_conviction", "by_liquidity")
     ) + (1 if diag.get("ai_edge") else 0)
     if n_family:
         lines.append(

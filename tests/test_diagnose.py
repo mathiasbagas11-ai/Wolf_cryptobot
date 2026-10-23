@@ -1145,3 +1145,66 @@ def test_the_evidence_bucket_enters_the_fdr_family(store, fake_client, tracker_s
     diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
     for cell in diag["by_evidence"].values():
         assert cell.get("p_adj") is not None
+
+
+# ── Liquidity split ───────────────────────────────────────────────────────
+
+def _with_spread(rows, spreads):
+    for row, spread in zip(rows, spreads):
+        row["spread_bps"] = spread
+    return rows
+
+
+def test_the_card_splits_trades_by_the_spread_they_faced_at_fixed_edges(
+    store, fake_client, tracker_settings
+):
+    rows = []
+    for i in range(12):
+        _outcome(rows, r=1.0 if i % 2 else -1.0,
+                 status=Status.TP_HIT.value if i % 2 else Status.SL_HIT.value, n=i)
+    # Edges are 2 and 8bps: 1.99 is TIGHT, 2.0 is MID, 8.0 is WIDE.
+    _with_spread(rows, [0.5, 1.99, 0.8, 2.0, 5.0, 7.99, 8.0, 15.0, 30.0, None, None, None])
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    liq = diag["by_liquidity"]
+    assert {k: v["n"] for k, v in liq.items()} == {
+        "TIGHT": 3, "MID": 3, "WIDE": 3, "NO_SPREAD": 3}
+    assert "liq:TIGHT" in render_digest(diag)
+
+
+def test_each_liquidity_tier_is_charged_its_own_fee_and_spread(
+    store, fake_client, tracker_settings
+):
+    """The assumed 20bps charges a major and a thin alt the same, which is the
+    very difference the split exists to see."""
+    rows = []
+    for i in range(8):
+        _outcome(rows, r=0.5, status=Status.TP_HIT.value, n=i)
+    _with_spread(rows, [1.0] * 4 + [20.0] * 4)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows),
+                    taker_fee_bps=5.0)
+    tight, wide = diag["by_liquidity"]["TIGHT"], diag["by_liquidity"]["WIDE"]
+    # 1% stop: (2x5 + 1)bps = 0.11R against (2x5 + 20)bps = 0.30R.
+    assert tight["fee_spread_r"] == 0.11 and wide["fee_spread_r"] == 0.3
+    assert tight["net_fee_spread_r"] == 0.39 and wide["net_fee_spread_r"] == 0.2
+    assert "fee+spread=0.300R net=+0.200" in render_digest(diag)
+
+
+def test_rows_with_no_recorded_spread_are_not_a_liquidity_tier(
+    store, fake_client, tracker_settings
+):
+    rows = []
+    for i in range(8):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=i)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert set(diag["by_liquidity"]) == {"NO_SPREAD"}
+    assert "liq:" not in render_digest(diag)
+
+
+def test_the_liquidity_bucket_enters_the_fdr_family(store, fake_client, tracker_settings):
+    rows = []
+    for i in range(8):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, n=i)
+    _with_spread(rows, [1.0] * 4 + [20.0] * 4)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    for cell in diag["by_liquidity"].values():
+        assert cell.get("p_adj") is not None

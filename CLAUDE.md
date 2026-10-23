@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-23, cost gate read: not a lever
+## Status — 2026-10-23, liquidity split on `/diag`
 
-1076 tests green. Working tree clean.
+1080 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -331,12 +331,16 @@ withdrawn on 10-19; the 10-19 "MOMENTUM only, small size" was superseded
 on 10-23 by the reading above.
 
 **Open offers the owner has not yet accepted — ask before building:**
-1. **Liquidity split on `/diag`** (offered 10-19, "gas bikin"): bucket
-   trades by recorded `spread_bps` (tight vs wide book) to ask whether thin
-   coins drag the result. Retroactive — `spread_bps` is on every row — so it
-   answers from existing data. Context: on 15m–1h stops, majors pay *more*
-   cost per R (fee is a fixed % over a tighter stop; the 0.15R gate rejects
-   1R < 1.33%), so "fewer, bigger coins" only helps on longer timeframes.
+1. ~~Liquidity split on `/diag`~~ — **built 2026-10-23** ("gas A"). `liq:`
+   rows bucket every traded row by recorded `spread_bps` at fixed edges
+   (`TIGHT` <2bps, `MID` 2–8, `WIDE` ≥8, `NO_SPREAD` kept separate), chosen
+   before any reading so cards pool. Each tier also prints its own measured
+   fee+spread in R and the net after it. In the BH-FDR family. A level
+   question, not paired — read gross for edge, net for survival, shape
+   across tiers, and expect `padj` 1.000 on a 24h card. **First read due:
+   `/diag 600`** (the capped log reaches ~25 days back). Context: on 15m–1h
+   stops majors can pay *more* cost per R (fixed % fee over a tighter stop),
+   so `TIGHT` is not automatically cheaper in R.
 2. **Record chase distance on admitted signals** (offered 09-21, 10-04,
    "gas catat chase"): keep `quoted_entry`/`chase_r` before the re-quote
    overwrites `entry_price`. Needed to explain PREPUMP's huge stops.
@@ -400,7 +404,8 @@ agent roles (rule 4), profit factor (the card's avgWin/avgLoss/needs-WR
 already carries it) and stale-feed checks (closed bars only; collectors
 are staleness-checked in `wolf/market.py`).
 
-**Next read:** `/montecarlo MOMENTUM` again in a week — not to chase the
+**Next read:** `/diag 600` for the first `liq:` reading; then
+`/montecarlo MOMENTUM` again in a week — not to chase the
 streak, but because it is the only number the real-money advice hangs on.
 Nothing paired is left queued. The level question keeps
 landing card by card; the two open offers below are what would sharpen it.
@@ -918,7 +923,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1076 tests, ~12s
+python -m pytest            # 1080 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
