@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-23, first `/montecarlo` reading
+## Status — 2026-10-23, net line on `/paper`
 
-1070 tests green. Working tree clean.
+1076 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -313,7 +313,11 @@ is the twenty-card block.
   +0.32R in simulation). TRAP and PREDUMP swapped sign between halves;
   SWING's 0/14 streak broke. TRAP and SCALP are largely one detector.
 - **High-Conviction room: no edge** over 17 first-look days (gap +0.045R).
-- **`/paper` is gross of costs** — never quote the balance without saying so.
+- **`/paper`'s headline balance is gross of costs** — it now says so on the
+  card. Since 2026-10-23 a net balance runs beside it (`cost_bps` on each
+  trade's own stop; flat timeouts pay fees too), anchored on the gross
+  balance at its first trade, plus a ledger line compounding the capped log
+  gross and net. Quote the net figures to the owner.
 - PREPUMP stops reached **29%** (10-14); its 1.5R chase exemption has no
   remaining justification.
 
@@ -336,7 +340,12 @@ on 10-23 by the reading above.
 2. **Record chase distance on admitted signals** (offered 09-21, 10-04,
    "gas catat chase"): keep `quoted_entry`/`chase_r` before the re-quote
    overwrites `entry_price`. Needed to explain PREPUMP's huge stops.
-3. Not yet offered: a net-of-cost line on `/paper`, given the point above.
+3. ~~Net-of-cost line on `/paper`~~ — built 2026-10-23 ("gas bikin net paper").
+4. **Cost lever, offered 10-23 as a measurement first:** gross is ~flat and
+   costs are ~0.086R a trade, so cost is the whole loss. `/whatif cost`
+   (already built) shows what each `max_cost_r` would have kept, on the
+   same trades. Read it before proposing any gate change; changing the gate
+   is a strategy change and waits on the owner's call under rule 1.
 
 **`/whatif contest` has been read (2026-10-20): the contest decides
 nothing.** 56 clean pairs, winner minus displaced candidate **+0.000R**,
@@ -903,7 +912,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1070 tests, ~12s
+python -m pytest            # 1076 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

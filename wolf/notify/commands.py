@@ -433,12 +433,40 @@ class CommandRouter:
         if acct is None:
             return "Paper trading is disabled."
         p = acct.summary()
-        return (
-            f"🏦 <b>PAPER ACCOUNT</b>\n{DIVIDER}\n"
-            f"Balance <b>{p['balance']:,.2f}</b> USD ({p['return_pct']:+.2f}%)\n"
-            f"Peak {p['peak']:,.2f} · Max DD {p['max_drawdown_pct']:.2f}%\n"
-            f"Trades {p['trades']} · Realized {p['realized']:+.2f} USD"
-        )
+        lines = [
+            f"🏦 <b>PAPER ACCOUNT</b>\n{DIVIDER}",
+            f"Balance <b>{p['balance']:,.2f}</b> USD ({p['return_pct']:+.2f}%) "
+            f"— <i>gross, no fees charged</i>",
+            f"Peak {p['peak']:,.2f} · Max DD {p['max_drawdown_pct']:.2f}%",
+            f"Trades {p['trades']} · Realized {p['realized']:+.2f} USD",
+        ]
+        if "net_balance" in p:
+            lines.append(
+                f"💸 Net of {p['net_cost_bps']:g}bps: <b>{p['net_balance']:,.2f}</b> USD "
+                f"({p['net_return_pct']:+.2f}%) since {p['net_since']}, "
+                f"{p['net_trades']} trades — gross {p['gross_return_since_pct']:+.2f}% "
+                f"over the same trades"
+            )
+        else:
+            lines.append("💸 Net balance starts on the next resolved trade.")
+        try:
+            from wolf.montecarlo import ledger_path
+
+            led = ledger_path(
+                self._app.tracker.outcomes(),
+                risk_pct=self._app.settings.paper_risk_pct,
+                round_trip_bps=self._app.settings.round_trip_cost_bps,
+            )
+        except Exception:
+            log.debug("Ledger path for /paper failed", exc_info=True)
+            led = None
+        if led:
+            lines.append(
+                f"📒 Ledger {led['first_day']} → {led['last_day']}, {led['trades']} trades: "
+                f"gross {led['gross_pct']:+.1f}% · <b>net {led['net_pct']:+.1f}%</b> "
+                f"(max DD {led['net_max_dd']:.1f}%)"
+            )
+        return "\n".join(lines)
 
     def _montecarlo(self, arg: str) -> str:
         """Deal the ledger's days again to show the bad run before it arrives."""

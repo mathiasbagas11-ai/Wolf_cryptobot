@@ -9,6 +9,15 @@ without pretending to know a real exchange balance.
 
 State is persisted through :class:`~wolf.state.StateStore` so the curve survives
 restarts.
+
+The balance is **gross**: it books ``pnl_pct`` and nothing pays a fee. At about
+twenty trades a day that is the whole difference between a flat bot and a
+losing one, so a second, net balance runs beside it from the day it was added:
+every traded outcome pays ``cost_bps`` on its own stop distance, and a timeout
+inside the noise band, which leaves the gross balance alone, still pays its
+fees — it was a trade. The net curve cannot be back-filled honestly (the
+outcome log is capped, and replaying a capped log re-anchors rather than
+corrects), so it starts at the gross balance on its first trade and says when.
 """
 
 from __future__ import annotations
@@ -25,10 +34,12 @@ ACCOUNT_KEY = "paper_account"
 
 
 class PaperAccount:
-    def __init__(self, store: StateStore, start_balance: float = 1000.0, risk_pct: float = 1.0) -> None:
+    def __init__(self, store: StateStore, start_balance: float = 1000.0, risk_pct: float = 1.0,
+                 cost_bps: float = 0.0) -> None:
         self._store = store
         self._start = float(start_balance)
         self._risk_pct = max(0.0, float(risk_pct))
+        self._cost_bps = max(0.0, float(cost_bps))
 
     def _state(self) -> dict:
         st = self._store.read(ACCOUNT_KEY, default=None)
@@ -71,7 +82,38 @@ class PaperAccount:
             "max_drawdown_pct": round(self.drawdown_pct(), 2),
             "trades": int(st.get("trades", 0)),
             "realized": round(float(st.get("realized", 0.0)), 2),
+            **self._net_summary(st, bal),
         }
+
+    def _net_summary(self, st: dict, gross_now: float) -> dict:
+        if "net_balance" not in st:
+            return {}
+        anchor = float(st.get("net_anchor") or 0.0)
+        net = float(st["net_balance"])
+        return {
+            "net_balance": round(net, 2),
+            "net_since": st.get("net_since", ""),
+            "net_trades": int(st.get("net_trades", 0)),
+            "net_cost_bps": self._cost_bps,
+            "net_return_pct": round((net - anchor) / anchor * 100, 2) if anchor else 0.0,
+            "gross_return_since_pct": (
+                round((gross_now - anchor) / anchor * 100, 2) if anchor else 0.0),
+        }
+
+    def _charge_net(self, st: dict, signal: Signal, r_multiple: float, risk_leg: float) -> None:
+        """Move the net balance by this trade's R less its own round-trip cost."""
+        if not risk_leg:
+            return
+        if "net_balance" not in st:
+            st["net_balance"] = st["net_anchor"] = float(st["balance"])
+            st["net_since"] = (signal.resolved_at or signal.exit_time or "")[:10]
+            st["net_trades"] = 0
+        cost_r = (self._cost_bps / 100.0) / risk_leg
+        scale = getattr(signal, "risk_scale", 1.0) or 1.0
+        net = float(st["net_balance"])
+        net += net * (self._risk_pct / 100) * scale * (r_multiple - cost_r)
+        st["net_balance"] = round(net, 2)
+        st["net_trades"] = int(st.get("net_trades", 0)) + 1
 
     @staticmethod
     def risk_pct_of(signal: Signal) -> float:
@@ -88,6 +130,14 @@ class PaperAccount:
         INVALIDATED) that shouldn't touch equity.
         """
         status = Status(signal.status)
+        if status is Status.EXPIRED_FLAT:
+            # No verdict and no move in the gross balance, but the fees were paid.
+            st = self._state()
+            risk_leg = self.risk_pct_of(signal)
+            pnl = signal.pnl_pct or 0.0
+            self._charge_net(st, signal, (pnl / risk_leg) if risk_leg else 0.0, risk_leg)
+            self._store.write(ACCOUNT_KEY, st)
+            return None
         if not (status.is_win or status.is_loss):
             return None
 
@@ -101,6 +151,9 @@ class PaperAccount:
         pnl_pct = signal.pnl_pct or 0.0
         r_multiple = (pnl_pct / risk_leg) if risk_leg else 0.0
         pnl_amount = risk_amount * r_multiple
+        # Before the gross balance moves, so a first net trade anchors on the
+        # balance it was taken against.
+        self._charge_net(st, signal, r_multiple, risk_leg)
 
         balance += pnl_amount
         st["balance"] = round(balance, 2)

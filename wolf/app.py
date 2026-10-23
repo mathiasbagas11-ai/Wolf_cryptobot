@@ -201,6 +201,7 @@ def build_application(settings: Settings | None = None) -> Application:
         store,
         start_balance=settings.paper_start_balance,
         risk_pct=settings.paper_risk_pct,
+        cost_bps=settings.round_trip_cost_bps,
     )
     notifier = TelegramNotifier(
         settings.telegram, timeout=settings.http_timeout, tz=settings.timezone,

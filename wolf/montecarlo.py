@@ -102,6 +102,28 @@ def _walk(trades: Iterable[tuple[float, float]], k: float) -> tuple[float, float
     return (eq - 1.0) * 100, max_dd * 100, worst
 
 
+def ledger_path(outcomes: Iterable[Signal], *, risk_pct: float = 1.0,
+                round_trip_bps: float = 20.0) -> Optional[dict]:
+    """The one path the capped log holds, compounded gross and net of cost.
+
+    For ``/paper``: the net balance there only starts on the day it was added,
+    and this is what the same arithmetic says about the weeks before it.
+    """
+    rows = _trade_rows(outcomes, round_trip_bps, None)
+    if not rows:
+        return None
+    k = risk_pct / 100.0
+    gross = _walk(((t["gross"], t["scale"]) for t in rows), k)
+    net = _walk(((t["net"], t["scale"]) for t in rows), k)
+    return {
+        "first_day": rows[0]["at"].date().isoformat(),
+        "last_day": rows[-1]["at"].date().isoformat(),
+        "trades": len(rows),
+        "gross_pct": round(gross[0], 1), "net_pct": round(net[0], 1),
+        "net_max_dd": round(net[1], 1),
+    }
+
+
 def _pct(values: list[float], q: float) -> float:
     s = sorted(values)
     if not s:
