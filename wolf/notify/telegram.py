@@ -28,6 +28,45 @@ from wolf.textfmt import DIVIDER, esc, fmt_price, now
 
 log = logging.getLogger("wolf.telegram")
 
+#: Telegram rejects a message over 4096 characters with a 400 and delivers
+#: nothing. The limit applies after entity parsing, so measuring the raw HTML
+#: against a slightly lower figure is always safe.
+MAX_MESSAGE_CHARS = 4000
+
+
+def split_message(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
+    """Cut ``text`` into sendable pieces on line boundaries.
+
+    A long ``/diag`` window produced a card Telegram refused outright, so the
+    owner got no reply at all — and a reply that silently fails to arrive reads
+    exactly like a bot that is down. A card wrapped in ``<pre>`` is re-wrapped
+    piece by piece so every part still renders as a monospaced block. A single
+    line longer than the limit is hard-cut rather than dropped.
+    """
+    if len(text) <= limit:
+        return [text]
+    pre = text.startswith("<pre>") and text.endswith("</pre>")
+    body = text[len("<pre>"):-len("</pre>")] if pre else text
+    room = limit - (len("<pre></pre>") if pre else 0)
+    pieces: list[str] = []
+    current = ""
+    for line in body.split("\n"):
+        while len(line) > room:
+            if current:
+                pieces.append(current)
+                current = ""
+            pieces.append(line[:room])
+            line = line[room:]
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > room:
+            pieces.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        pieces.append(current)
+    return [f"<pre>{p}</pre>" for p in pieces] if pre else pieces
+
 # Signal types routed to the dedicated High-Conviction topic (when configured).
 HIGH_CONVICTION_TYPES = frozenset({"TRAP"})
 
@@ -92,6 +131,10 @@ class TelegramNotifier:
 
     # ── transport ───────────────────────────────────────────────────────
     def send(self, text: str, thread_id: str = "") -> bool:
+        results = [self._send_one(part, thread_id) for part in split_message(text)]
+        return all(results)
+
+    def _send_one(self, text: str, thread_id: str = "") -> bool:
         ok, desc, _mid = self._post(text, thread_id)
         # If the topic is misconfigured (wrong/stale thread id), don't drop the
         # message — retry once on the main channel so the alert still lands.
@@ -173,6 +216,9 @@ class TelegramNotifier:
         """Send to an explicit chat/thread (used to reply to incoming commands)."""
         if not self._settings.bot_token or not chat_id:
             return False
+        parts = split_message(text)
+        if len(parts) > 1:
+            return all([self.send_raw(chat_id, part, thread_id) for part in parts])
         url = f"https://api.telegram.org/bot{self._settings.bot_token}/sendMessage"
         payload: dict = {
             "chat_id": chat_id,

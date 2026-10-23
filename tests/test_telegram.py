@@ -573,3 +573,67 @@ def test_a_working_topic_announces_nothing(monkeypatch):
 
     n.send("digest", "42")
     assert not any("Topic unavailable" in t for t, _ in posts)
+
+
+# ── Messages over Telegram's limit ─────────────────────────────────────────
+# A long /diag window produced a card Telegram refused with a 400, so the
+# owner got no reply at all, which reads exactly like a bot that is down.
+
+def test_a_short_message_is_sent_as_it_is():
+    from wolf.notify.telegram import split_message
+
+    assert split_message("<pre>card</pre>") == ["<pre>card</pre>"]
+
+
+def test_a_long_card_is_cut_on_line_boundaries_and_every_piece_stays_monospaced():
+    from wolf.notify.telegram import MAX_MESSAGE_CHARS, split_message
+
+    lines = [f"liq:ROW{i:03d} n=10 meanR=+0.100 padj=1.000 => INCONCLUSIVE" for i in range(200)]
+    card = "<pre>" + "\n".join(lines) + "</pre>"
+    parts = split_message(card)
+    assert len(parts) > 1
+    assert all(len(p) <= MAX_MESSAGE_CHARS for p in parts)
+    assert all(p.startswith("<pre>") and p.endswith("</pre>") for p in parts)
+    # Nothing lost, nothing reordered, no line split in two.
+    rejoined = "\n".join(p[len("<pre>"):-len("</pre>")] for p in parts)
+    assert rejoined.split("\n") == lines
+
+
+def test_a_single_line_longer_than_the_limit_is_cut_not_dropped():
+    from wolf.notify.telegram import split_message
+
+    parts = split_message("x" * 9000, limit=4000)
+    assert [len(p) for p in parts] == [4000, 4000, 1000]
+
+
+def test_a_command_reply_over_the_limit_arrives_in_several_messages(monkeypatch):
+    from wolf.config import TelegramSettings
+    from wolf.notify.telegram import TelegramNotifier
+
+    sent: list[str] = []
+
+    class _Resp:
+        status_code = 200
+
+    class _Session:
+        def post(self, url, json, timeout):
+            sent.append(json["text"])
+            return _Resp()
+
+    n = TelegramNotifier(TelegramSettings(bot_token="t", chat_id="c"), session=_Session())
+    card = "<pre>" + "\n".join(f"row {i} " + "." * 60 for i in range(150)) + "</pre>"
+    assert n.send_raw("c", card) is True
+    assert len(sent) > 1
+    assert all(len(t) <= 4096 for t in sent)
+
+
+def test_a_digest_over_the_limit_arrives_in_several_messages(monkeypatch):
+    from wolf.config import TelegramSettings
+    from wolf.notify.telegram import TelegramNotifier
+
+    posts: list[str] = []
+    n = TelegramNotifier(TelegramSettings(bot_token="t", chat_id="c"))
+    monkeypatch.setattr(n, "_post",
+                        lambda text, thread_id="": (posts.append(text), (True, "", 1))[1])
+    assert n.send("\n".join("y" * 70 for _ in range(150))) is True
+    assert len(posts) > 1

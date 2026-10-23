@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-23, liquidity split on `/diag`
+## Status — 2026-10-24, long replies split for Telegram
 
-1080 tests green. Working tree clean.
+1085 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -404,7 +404,17 @@ agent roles (rule 4), profit factor (the card's avgWin/avgLoss/needs-WR
 already carries it) and stale-feed checks (closed bars only; collectors
 are staleness-checked in `wolf/market.py`).
 
-**Next read:** `/diag 600` for the first `liq:` reading; then
+**Long replies were silently lost (fixed 2026-10-24).** The owner ran
+`/diag 600` and got nothing back: the card passed Telegram's 4096-char
+limit, the API answered 400, and `send_raw` only logged it. Every reply and
+digest now goes through `telegram.split_message`, cut on line boundaries
+at 4000 chars with each piece re-wrapped in `<pre>`. Worth remembering that
+the 24h card had been growing one bucket family at a time (`evidence:`,
+`conv:`, `liq:`) toward the same wall; a daily digest that quietly stops
+arriving would have read as the bot being down.
+
+**Next read:** `/diag 600` for the first `liq:` reading (arrives in
+several messages now); then
 `/montecarlo MOMENTUM` again in a week — not to chase the
 streak, but because it is the only number the real-money advice hangs on.
 Nothing paired is left queued. The level question keeps
@@ -923,7 +933,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1080 tests, ~12s
+python -m pytest            # 1085 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
