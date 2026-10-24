@@ -1,10 +1,10 @@
 [build]
-builder = "nixpacks"
+# Dockerfile, not auto-detection: with dashboard/ (Next.js) in the repo the
+# detector built an image with no Python in it.
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "python -m wolf.main"
 restartPolicyType = "always"
 restartPolicyMaxRetries = 10
-
-[nixpacks]
-pythonVersion = "3.11"

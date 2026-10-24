@@ -463,6 +463,19 @@ New `/montecarlo` endpoint; `/paper` now carries the net `ledger`.
 TradingView *MCP* was discussed and not built: an MCP is for an AI reading
 charts, and on the signal path it would break rule 4.
 
+**The dashboard push crash-looped the bot (fixed 2026-10-24).** Within
+half an hour of `dashboard/` landing, Railway's auto-detected build came up
+with no Python in the image and the worker looped on `python: command not
+found` — the ledger was safe on the volume, but no signals were recorded
+while it lasted (roughly 11:33 → the fix's deploy, WIB). The build is now an
+explicit `Dockerfile` (python:3.11-slim + `tzdata`, since slim has no
+zoneinfo and the reports run in WIB), selected by `railway.toml`, with a
+`.dockerignore` that keeps `dashboard/` and tests out. **Count that outage
+as a gap, not as a quiet day**, when its 24h card arrives. Also found: the
+GitHub default branch was an old `claude/…` branch, which is what Vercel
+first imported; the owner was told to set Vercel's production branch and
+the repo default to `main`.
+
 **Next read:** `/diag 600` again once the capped log has rolled over to a
 disjoint sample (~3–4 weeks) — the `liq:` replication — and `/diag 720`
 around 11-21 for COMBO; meanwhile
