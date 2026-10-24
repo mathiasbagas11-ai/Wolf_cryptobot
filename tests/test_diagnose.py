@@ -1208,3 +1208,62 @@ def test_the_liquidity_bucket_enters_the_fdr_family(store, fake_client, tracker_
     diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
     for cell in diag["by_liquidity"].values():
         assert cell.get("p_adj") is not None
+
+
+# ── Pre-registered composite ───────────────────────────────────────────────
+# The three filters were each chosen because they looked good on the trades
+# already in the log, so the rule is scored only on signals created after it
+# was written down.
+
+from wolf.diagnose import COMBO_SINCE  # noqa: E402
+
+
+def _combo_rows(specs, *, created):
+    """specs: (r, primary, whale, spread) per row."""
+    rows = []
+    for n, (r, primary, whale, spread) in enumerate(specs):
+        _predump_outcome(rows, r=r, primary=primary, n=n)
+        rows[-1].update(whale_stance=whale, spread_bps=spread, created_at=created.isoformat())
+    return rows
+
+
+def test_signals_created_before_the_rule_was_written_are_never_scored(
+    store, fake_client, tracker_settings
+):
+    rows = _combo_rows([(1.4, True, "WITH", 1.0)] * 6,
+                       created=COMBO_SINCE - timedelta(hours=1))
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert diag["by_combo"] == {} and diag["combo_edge"] is None
+    assert "no signal created since then has resolved" in render_digest(diag)
+
+
+def test_only_a_signal_passing_all_three_filters_is_combo(store, fake_client, tracker_settings):
+    after = COMBO_SINCE + timedelta(hours=1)
+    rows = _combo_rows([
+        (1.0, True, "WITH", 1.0),      # all three: COMBO
+        (1.0, True, "WITH", 7.99),     # under the WIDE edge: COMBO
+        (1.0, True, "AGAINST", 1.0),   # whale against
+        (1.0, True, "", 1.0),          # no whale read counts as not passing
+        (1.0, True, "WITH", 8.0),      # WIDE book
+        (1.0, True, "WITH", None),     # no recorded spread
+        (1.0, False, "WITH", 1.0),     # THIN evidence
+    ], created=after)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert {k: v["n"] for k, v in diag["by_combo"].items()} == {"COMBO": 2, "OTHER": 5}
+
+
+def test_the_combo_gap_is_printed_and_corrected_with_every_other_bucket(
+    store, fake_client, tracker_settings
+):
+    after = COMBO_SINCE + timedelta(hours=1)
+    rows = _combo_rows(
+        [(r, True, "WITH", 1.0) for r in (1.4, 0.6, 2.0, 1.1, 0.8, 1.6)]
+        + [(r, False, "AGAINST", 12.0) for r in (-1.0, 0.4, -1.0, -0.3, -1.0, 0.2)],
+        created=after)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    gap = diag["combo_edge"]
+    assert gap is not None and gap["gap_r"] > 0 and gap.get("p_adj") is not None
+    for cell in diag["by_combo"].values():
+        assert cell.get("p_adj") is not None
+    card = render_digest(diag)
+    assert "combo:COMBO-OTHER" in card and "combo:COMBO" in card

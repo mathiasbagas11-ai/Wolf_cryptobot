@@ -361,6 +361,39 @@ def _liquidity_label(outcome) -> str:
     return "WIDE"
 
 
+#: The composite rule, fixed on 2026-10-24 before any trade could be scored
+#: against it. Its three parts were each picked because they looked good on
+#: the first /diag 600 read (whale WITH, a book under the WIDE edge, PRIMARY
+#: evidence), so scoring the combination on those same trades would grade the
+#: rule on the data that chose it, which flatters it almost every time. Only
+#: signals *created* after this instant are scored; everything earlier is left
+#: out by name. Do not edit the rule or the date after the first reading —
+#: a moved goalpost re-opens the very bias this exists to close.
+COMBO_SINCE = datetime(2026, 10, 24, tzinfo=timezone.utc)
+
+
+def _combo_label(outcome) -> str:
+    """COMBO when a signal passes all three filters, OTHER when it does not.
+
+    ``BEFORE`` marks signals created before the rule was written; they are
+    dropped from the bucket entirely rather than reported, because they are
+    the sample the rule was fitted to. Missing data counts as not passing:
+    a signal with no whale read or no recorded spread is OTHER, as written
+    down on the day.
+    """
+    created = _safe_dt(getattr(outcome, "created_at", None))
+    if created is None or created < COMBO_SINCE:
+        return "BEFORE"
+    spread = getattr(outcome, "spread_bps", None)
+    if (
+        (getattr(outcome, "whale_stance", "") or "") == "WITH"
+        and spread is not None and spread < LIQ_WIDE_BPS
+        and _evidence_label(outcome) == "PRIMARY"
+    ):
+        return "COMBO"
+    return "OTHER"
+
+
 def _evidence_label(outcome) -> str:
     """PRIMARY when the signal carried its detector's own evidence, else THIN.
 
@@ -454,7 +487,7 @@ _COLLECTOR_KEYS = {
 #: — an all-NONE column means the engine simply had nothing to say, which is a
 #: finding rather than an outage, and quoting a collector status for it would
 #: name a fault that does not exist.
-_NO_COLLECTOR = ("learn", "conv", "liq")
+_NO_COLLECTOR = ("learn", "conv", "liq", "combo")
 
 
 def _collector_status(tracker, key: str) -> str:
@@ -804,14 +837,32 @@ def diagnose(
     # this split exists to see. Read the gross column for edge and the net one
     # for whether it survives; the tiers are not paired, so this is a level
     # question and needs far more sample than the paired ones.
-    by_liquidity = _buckets_by(_liquidity_label)
-    for label, cell in by_liquidity.items():
-        rows = [o for o in traded if _liquidity_label(o) == label]
-        measured = _measured_cost(rows, taker_fee_bps, round_trip_bps)
-        if measured.get("cost_r") is not None:
-            cell["median_spread_bps"] = measured["median_spread_bps"]
-            cell["fee_spread_r"] = measured["cost_r"]
-            cell["net_fee_spread_r"] = round(cell["mean_r"] - measured["cost_r"], 3)
+    def _with_measured_cost(buckets: dict[str, dict], label_of) -> dict[str, dict]:
+        for label, cell in buckets.items():
+            rows = [o for o in traded if label_of(o) == label]
+            measured = _measured_cost(rows, taker_fee_bps, round_trip_bps)
+            if measured.get("cost_r") is not None:
+                cell["median_spread_bps"] = measured["median_spread_bps"]
+                cell["fee_spread_r"] = measured["cost_r"]
+                cell["net_fee_spread_r"] = round(cell["mean_r"] - measured["cost_r"], 3)
+        return buckets
+
+    by_liquidity = _with_measured_cost(_buckets_by(_liquidity_label), _liquidity_label)
+
+    # The pre-registered composite (see COMBO_SINCE). Scored only on signals
+    # created after the rule was written, so the BEFORE rows are not a bucket
+    # at all: reporting them would put the in-sample reading back on the card
+    # beside the honest one. The gap is the number that matters, so it is
+    # computed directly and joins the FDR family like the AI contrast.
+    by_combo = _with_measured_cost(
+        {k: v for k, v in _buckets_by(_combo_label).items() if k != "BEFORE"},
+        _combo_label,
+    )
+    combo_edge = mean_gap(
+        [r_multiple_of(o) for o in traded if _combo_label(o) == "COMBO"],
+        [r_multiple_of(o) for o in traded if _combo_label(o) == "OTHER"],
+        overlap,
+    )
 
     # Each bucket above is measured against zero, which on a system whose
     # overall mean is negative answers a question nobody asked: every bucket
@@ -888,9 +939,11 @@ def diagnose(
     # point: the reader who scans the strategy rows is now scanning the AI rows
     # too, and the correction has to know that.
     families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict,
-                by_learning_action, by_evidence, by_conviction, by_liquidity]
+                by_learning_action, by_evidence, by_conviction, by_liquidity, by_combo]
     if ai_edge is not None:
         families.append({"ai_edge": ai_edge})
+    if combo_edge is not None:
+        families.append({"combo_edge": combo_edge})
     _apply_fdr(tuple(families))
 
     ladder = _ladder_economics(traded)
@@ -983,6 +1036,8 @@ def diagnose(
         "by_evidence": by_evidence,
         "by_conviction": by_conviction,
         "by_liquidity": by_liquidity,
+        "by_combo": by_combo,
+        "combo_edge": combo_edge,
         "ai_edge": ai_edge,
         "collector_status": {
             label: _collector_status(tracker, key)
@@ -1164,6 +1219,7 @@ def render_digest(diag: dict) -> str:
         ("evidence", "UNRECORDED", diag.get("by_evidence") or {}),
         ("conv", "UNRANKED", diag.get("by_conviction") or {}),
         ("liq", "NO_SPREAD", diag.get("by_liquidity") or {}),
+        ("combo", "", diag.get("by_combo") or {}),
     ):
         real = {k: v for k, v in buckets.items() if k != sentinel}
         if not real:
@@ -1190,6 +1246,20 @@ def render_digest(diag: dict) -> str:
     # than left as a subtraction for the reader, because the two means it draws
     # from carry standard errors that do not appear on either row and the gap
     # is far noisier than either mean.
+    combo_gap = diag.get("combo_edge")
+    if combo_gap:
+        lines.append(
+            f"{'combo:COMBO-OTHER':<22} gap={combo_gap['gap_r']:+.3f}R "
+            f"se={combo_gap['se_r']:.3f} t={combo_gap['t']:+.2f} df={combo_gap['df']} "
+            f"{_fdr_col(combo_gap)}(n={combo_gap['n_a']}v{combo_gap['n_b']} "
+            f"eff={combo_gap['eff_n']} nom_t={combo_gap['t_nominal']:+.2f})"
+        )
+    elif not diag.get("by_combo"):
+        lines.append(
+            f"{'combo:':<9} rule fixed {COMBO_SINCE:%Y-%m-%d} "
+            "— no signal created since then has resolved in this window"
+        )
+
     gap = diag.get("ai_edge")
     if gap:
         lines.append(
@@ -1257,8 +1327,8 @@ def render_digest(diag: dict) -> str:
         len(diag.get(k) or {})
         for k in ("by_strategy", "by_whale_stance", "by_onchain_bias",
                   "by_ai_verdict", "by_learning_action", "by_evidence",
-                  "by_conviction", "by_liquidity")
-    ) + (1 if diag.get("ai_edge") else 0)
+                  "by_conviction", "by_liquidity", "by_combo")
+    ) + (1 if diag.get("ai_edge") else 0) + (1 if diag.get("combo_edge") else 0)
     if n_family:
         lines.append(
             f"fdr      padj = p across all {n_family} buckets at FDR "

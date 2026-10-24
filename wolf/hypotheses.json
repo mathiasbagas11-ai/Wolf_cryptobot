@@ -223,6 +223,14 @@
       "settled_on": "2026-10-24",
       "evidence": "First liq: read, /diag 600 on 2026-10-23 (resolution window ~09-29 -> 10-23, 498 traded, eff 63, mean_open 7.82). TIGHT (<2bps, median 1.2) n=155 gross +0.032 fee+spread 0.058R net -0.026; MID (2-8, median 4.0) n=256 gross -0.011 cost 0.060 net -0.071; WIDE (>=8, median 10.8) n=85 gross -0.170 cost 0.066 net -0.236; NO_SPREAD n=2. All padj 1.000 in a 33-bucket family. Shape is monotone in the expected direction, and almost all of the TIGHT-WIDE gap (~0.20R) is in gross, not cost (0.058 vs 0.066R): thin books carry worse signals, not just dearer ones. Rough gap t ~0.5 with the overlap discount (eff ~20 vs ~11); a monotone order of three tiers happens 1 time in 3 under the null.",
       "note": "Not a finding and not a lever yet: even TIGHT is net negative, so dropping WIDE would cut the loss, not make a profit. Pre-registered replication: the outcome log is capped, so in ~3-4 weeks /diag 600 will cover a sample disjoint from this one. Prediction written before that read: WIDE gross below TIGHT gross again. If it repeats on disjoint trades, move to a /whatif-style read of a spread gate; if it flips, close this. Do not adjust the 2/8bps edges, which were fixed before the first reading."
+    },
+    {
+      "id": "combo-whale-liquid-primary",
+      "question": "Does a signal that is whale WITH, on a book under 8bps spread, and carrying PRIMARY evidence beat the rest, and survive costs?",
+      "status": "OPEN",
+      "settled_on": "",
+      "evidence": "Rule written 2026-10-24 before any trade was scored against it (diagnose.COMBO_SINCE = 2026-10-24T00:00Z, by signal creation time). COMBO = whale_stance == WITH AND spread_bps < 8 (recorded) AND evidence PRIMARY; missing whale or spread counts as OTHER. Each part was chosen because it looked good on the first /diag 600 (whale WITH +0.185 vs AGAINST -0.111; TIGHT/MID vs WIDE -0.170; PRIMARY +0.027 vs THIN -0.231), so the in-sample combination would flatter it and is deliberately not reported: BEFORE rows are dropped from the bucket. Expected volume roughly a quarter of signals (~5/day) if the parts were independent; they may overlap (whales may favour liquid books), which would make the three one effect counted thrice.",
+      "note": "Read with /diag 720 around 2026-11-21. Success: combo:COMBO-OTHER gap positive with padj < 0.05, and COMBO net of its own fee+spread above zero. Close as REJECTED if the gap is at or below zero then. Anything between stays INCONCLUSIVE and keeps running; do not shorten the wait on a good-looking early card, and do not edit the rule, its edges or the date once readings start. Owner asked 10-24 to combine the 'good' filters into one signal; this is that idea in a form that can be wrong. Only after it passes would emitting COMBO-only signals be a strategy change worth proposing."
     }
   ]
 }

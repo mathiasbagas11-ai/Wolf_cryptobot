@@ -260,7 +260,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-eight entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-nine entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-24, first `/diag 600` read (liquidity split)
+## Status — 2026-10-24, pre-registered COMBO bucket
 
-1085 tests green. Working tree clean.
+1088 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -431,8 +431,23 @@ over 18 cells); `conv:` PASSED +0.119 vs AI_PICK −0.011 and `ai:` REJECT
 artifact, not a signal. The paste arrived in two messages, confirming the
 split fix is live; the owner first sent the tail of a 24h card by mistake.
 
+**COMBO, pre-registered 2026-10-24 ("oke gas").** The owner asked to merge
+the filters that looked good (whale WITH, liquid book, PRIMARY evidence)
+into one signal. They were told none is proven, that a combination scored
+on the data that chose it flatters itself, and that the parts may be one
+effect counted thrice. Built as measurement only: `diagnose._combo_label`
+tags COMBO / OTHER, **scored only on signals created after
+`COMBO_SINCE` (2026-10-24T00:00Z)** — earlier rows are dropped, not shown —
+with `combo:COMBO-OTHER` gap in the FDR family and each side's measured
+fee+spread. Until such trades resolve the card prints a one-line
+placeholder. Registry `combo-whale-liquid-primary` (OPEN) holds the success
+and kill criteria; **read with `/diag 720` around 2026-11-21, not before**,
+and do not touch the rule or date once readings start. No signal is
+filtered; nothing the bot emits changes.
+
 **Next read:** `/diag 600` again once the capped log has rolled over to a
-disjoint sample (~3–4 weeks) — the `liq:` replication; meanwhile
+disjoint sample (~3–4 weeks) — the `liq:` replication — and `/diag 720`
+around 11-21 for COMBO; meanwhile
 `/montecarlo MOMENTUM` again in a week — not to chase the
 streak, but because it is the only number the real-money advice hangs on.
 Nothing paired is left queued. The level question keeps
@@ -951,7 +966,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1085 tests, ~12s
+python -m pytest            # 1088 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
