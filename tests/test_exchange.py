@@ -271,3 +271,47 @@ def test_overview_fallback_across_sources():
 
 def test_overview_empty_when_unsupported():
     assert MarketDataClient([FakeSource("a", [])]).get_market_overview() == []
+
+
+# ── microstructure fields (order-flow inputs) ─────────────────────────────
+def test_binance_klines_carry_trades_and_taker_split():
+    """Kline fields 8 and 9 are what make flow direction knowable at all."""
+    payload = [[
+        1_700_000_000_000, "100", "110", "95", "105", "1000",
+        1_700_000_899_999, "105000", 250, "600", "63000", "0",
+    ]]
+    candle = BinanceSource().parse_klines(payload)[0]
+    assert candle.trades == 250
+    assert candle.taker_buy_volume == 600.0
+    assert candle.taker_sell_volume == 400.0
+    assert candle.has_flow_data is True
+
+
+def test_klines_without_microstructure_degrade_gracefully():
+    """A short row (or another venue) parses fine, just without flow data."""
+    candle = BinanceSource().parse_klines([[1_700_000_000_000, "100", "110", "95", "105", "1000"]])[0]
+    assert candle.trades == 0
+    assert candle.taker_buy_volume == 0.0
+    assert candle.has_flow_data is False
+
+
+def test_binance_parse_book_depth():
+    payload = [
+        {"symbol": "BTCUSDT", "bidPrice": "100", "bidQty": "2", "askPrice": "101", "askQty": "1"},
+        {"symbol": "ZEROUSDT", "bidPrice": "0", "bidQty": "0", "askPrice": "0", "askQty": "0"},
+        {"symbol": "BADUSDT"},   # missing fields -> skipped
+    ]
+    assert BinanceSource().parse_book_depth(payload) == {"BTCUSDT": 301.0}
+
+
+def test_book_depth_falls_back_across_sources():
+    class DepthSource(FakeSource):
+        def get_book_depth(self):
+            return {"BTCUSDT": 500.0}
+
+    client = MarketDataClient([FakeSource("a", []), DepthSource("b", [])])
+    assert client.get_book_depth() == {"BTCUSDT": 500.0}
+
+
+def test_book_depth_empty_when_no_venue_supports_it():
+    assert MarketDataClient([FakeSource("a", [])]).get_book_depth() == {}
