@@ -29,6 +29,7 @@ from wolf.diagnose import diagnose, render_digest
 from wolf.logging_setup import setup_logging
 from wolf.chase_audit import grade_chase_drops, render as render_chase
 from wolf.contest_audit import audit_contests, render as render_contest
+from wolf.montecarlo import ledger_path, render as render_montecarlo, simulate
 from wolf.whatif import compare_stop_rules, render as render_whatif
 
 
@@ -44,21 +45,45 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
     )
     api.state.application = app_obj
 
-    def require_api_key(x_api_key: str = Header(default="")) -> None:
-        """Guard for state-mutating endpoints. No-op when no key is configured."""
+    def _authorised(x_api_key: str) -> bool:
         expected = app_obj.settings.api_key
-        if expected and x_api_key != expected:
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        if expected:
+            return x_api_key == expected
+        # No key: open only while nothing outside the container can reach it.
+        return not app_obj.settings.public_domain
+
+    def require_api_key(x_api_key: str = Header(default="")) -> None:
+        """Guard for every endpoint but a bare /health.
+
+        Reads are guarded as well as writes. The ledger and the paper account
+        are the owner's, and the /whatif replays cost one klines request per
+        signal, so an open GET is both a leak and a way to burn the bot's rate
+        limit. With a public domain and no key configured it refuses with a
+        503 that names the fix, rather than serving anyone who finds the URL.
+        """
+        if _authorised(x_api_key):
+            return
+        if not app_obj.settings.api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="Service has a public domain but API_KEY is not set — set it in Railway variables",
+            )
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     @api.get("/health")
-    def health(probe_ai: bool = False) -> dict:
+    def health(probe_ai: bool = False, x_api_key: str = Header(default="")) -> dict:
         # state_dir is reported absolute, and outcomes_stored alongside it, so a
         # wiped history after a redeploy is visible instead of being mistaken for
         # a quiet week. A relative path means the container filesystem, which
         # Railway discards on every deploy unless a volume is mounted there.
         store = app_obj.store
+        if not _authorised(x_api_key):
+            # Liveness stays public so a dashboard or uptime check can tell a
+            # dead bot from a locked one; nothing else is told to a stranger.
+            return {"status": "ok", "api_key_set": bool(app_obj.settings.api_key)}
         return {
             "status": "ok",
+            "api_key_set": bool(app_obj.settings.api_key),
             "state_dir": store.base_dir,
             "outcomes_stored": len(store.read("signal_outcomes", default=[]) or []),
             "telegram_enabled": app_obj.notifier.enabled,
@@ -70,28 +95,48 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             "config": app_obj.settings.describe(),
         }
 
-    @api.get("/signals/active")
+    @api.get("/signals/active", dependencies=[Depends(require_api_key)])
     def active_signals() -> dict:
         signals = app_obj.tracker.active_signals()
         return {"count": len(signals), "signals": [s.to_dict() for s in signals]}
 
-    @api.get("/signals/outcomes")
+    @api.get("/signals/outcomes", dependencies=[Depends(require_api_key)])
     def outcomes(limit: int = 50) -> dict:
         items = app_obj.tracker.outcomes()
         items = list(reversed(items))[: max(1, min(limit, 500))]
         return {"count": len(items), "outcomes": [s.to_dict() for s in items]}
 
-    @api.get("/stats")
+    @api.get("/stats", dependencies=[Depends(require_api_key)])
     def stats(window_hours: Optional[float] = None) -> dict:
         return app_obj.tracker.stats(window_hours=window_hours)
 
-    @api.get("/paper")
+    @api.get("/paper", dependencies=[Depends(require_api_key)])
     def paper() -> dict:
         if app_obj.account is None:
             return {"enabled": False}
-        return {"enabled": True, **app_obj.account.summary()}
+        # The ledger line rides along so a dashboard never shows the gross
+        # balance alone: it is the same pair /paper prints in Telegram.
+        ledger = ledger_path(
+            app_obj.tracker.outcomes(),
+            risk_pct=app_obj.settings.paper_risk_pct,
+            round_trip_bps=app_obj.settings.round_trip_cost_bps,
+        )
+        return {"enabled": True, **app_obj.account.summary(), "ledger": ledger}
 
-    @api.get("/learning")
+    @api.get("/montecarlo", dependencies=[Depends(require_api_key)])
+    def montecarlo(strategy: Optional[str] = None, format: str = "json"):
+        """Day-block bootstrap of the ledger, net of cost — see wolf.montecarlo."""
+        report = simulate(
+            app_obj.tracker.outcomes(),
+            risk_pct=app_obj.settings.paper_risk_pct,
+            round_trip_bps=app_obj.settings.round_trip_cost_bps,
+            strategy=strategy,
+        )
+        if format == "text":
+            return PlainTextResponse(render_montecarlo(report))
+        return report
+
+    @api.get("/learning", dependencies=[Depends(require_api_key)])
     def learning() -> dict:
         if app_obj.learning is None:
             return {"enabled": False}
@@ -159,7 +204,7 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         app_obj.notifier.notify_flow(text)
         return {"posted": app_obj.notifier.enabled, "text": text}
 
-    @api.get("/diagnostics")
+    @api.get("/diagnostics", dependencies=[Depends(require_api_key)])
     def diagnostics(window_hours: Optional[float] = None, format: str = "json"):
         """Derived statistics behind a performance verdict.
 
@@ -181,7 +226,7 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             return PlainTextResponse(render_digest(diag))
         return diag
 
-    @api.get("/whatif/stops")
+    @api.get("/whatif/stops", dependencies=[Depends(require_api_key)])
     def whatif_stops(limit: int = 200, format: str = "text"):
         """Re-grade resolved signals under each stop-advance rule.
 
@@ -199,7 +244,7 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             "results": [asdict(r) for r in report.get("results", [])],
         }
 
-    @api.get("/whatif/chase")
+    @api.get("/whatif/chase", dependencies=[Depends(require_api_key)])
     def whatif_chase(limit: int = 200, overlap: float = 0.0, format: str = "text"):
         """Replay the candidates the chase gate dropped before they were logged.
 
@@ -225,7 +270,7 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             return PlainTextResponse(render_chase(report))
         return report
 
-    @api.get("/whatif/contest")
+    @api.get("/whatif/contest", dependencies=[Depends(require_api_key)])
     def whatif_contest(limit: int = 300, overlap: float = 0.0, format: str = "text"):
         """Pair each displaced candidate against the winner that beat it.
 

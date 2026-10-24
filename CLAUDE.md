@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-24, pre-registered COMBO bucket
+## Status — 2026-10-24, API locked + Vercel dashboard
 
-1088 tests green. Working tree clean.
+1093 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -444,6 +444,24 @@ placeholder. Registry `combo-whale-liquid-primary` (OPEN) holds the success
 and kill criteria; **read with `/diag 720` around 2026-11-21, not before**,
 and do not touch the rule or date once readings start. No signal is
 filtered; nothing the bot emits changes.
+
+**Dashboard (2026-10-24, "gas repo lama").** `dashboard/` is a Next.js
+15 app for Vercel (Root Directory `dashboard`) that reads the bot's FastAPI
+on the server — the bot stays on Railway, since Vercel cannot run a 24/7
+worker. Pages: Overview (net paper, ledger line, `/montecarlo`, weekly
+table) and Sinyal aktif (open book, Lightweight Charts with entry/SL/TP
+lines, candles from Binance's public data host in the viewer's browser).
+Site-wide basic auth via `DASHBOARD_PASSWORD`; refuses (503) if unset.
+Deploy steps live in `dashboard/README.md`. It deliberately shows no COMBO
+badge on live signals — that would invite acting before the 11-21 read.
+**API now locked:** every endpoint but a bare `/health` needs `X-API-Key`
+(reads too — the ledger is private and `/whatif` replays burn rate limit);
+with `RAILWAY_PUBLIC_DOMAIN` set and no `API_KEY`, guarded endpoints
+refuse with 503 rather than serve everyone. `/health` tells a stranger
+only `{status, api_key_set}`. `api_port` falls back to Railway's `PORT`.
+New `/montecarlo` endpoint; `/paper` now carries the net `ledger`.
+TradingView *MCP* was discussed and not built: an MCP is for an AI reading
+charts, and on the signal path it would break rule 4.
 
 **Next read:** `/diag 600` again once the capped log has rolled over to a
 disjoint sample (~3–4 weeks) — the `liq:` replication — and `/diag 720`
@@ -966,7 +984,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1088 tests, ~12s
+python -m pytest            # 1093 tests, ~12s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

@@ -144,9 +144,42 @@ def test_mutating_endpoint_requires_key_when_configured(secured_client):
     assert ok.status_code == 200
 
 
-def test_read_endpoints_open_even_when_key_configured(secured_client):
+def test_reads_need_the_key_once_one_is_configured(secured_client):
+    """The ledger and paper account are the owner's, and the /whatif replays
+    cost one klines request per signal: an open GET is a leak and a way to
+    burn the bot's rate limit."""
     assert secured_client.get("/health").status_code == 200
-    assert secured_client.get("/stats").status_code == 200
+    for path in ("/stats", "/paper", "/signals/active", "/signals/outcomes",
+                 "/diagnostics", "/montecarlo"):
+        assert secured_client.get(path).status_code == 401, path
+        assert secured_client.get(path, headers={"X-API-Key": "secret123"}).status_code == 200, path
+
+
+def test_health_tells_a_stranger_only_that_the_bot_is_alive(secured_client):
+    body = secured_client.get("/health").json()
+    assert body == {"status": "ok", "api_key_set": True}
+    full = secured_client.get("/health", headers={"X-API-Key": "secret123"}).json()
+    assert "config" in full and "state_dir" in full
+
+
+def test_a_public_domain_with_no_key_refuses_instead_of_serving_everyone(settings):
+    app_obj = build_application(replace(settings, public_domain="wolf.up.railway.app"))
+    api = TestClient(create_app(app_obj))
+    resp = api.get("/paper")
+    assert resp.status_code == 503 and "API_KEY" in resp.json()["detail"]
+    assert api.post("/scan").status_code == 503
+    assert api.get("/health").json() == {"status": "ok", "api_key_set": False}
+
+
+def test_paper_carries_the_net_ledger_beside_the_gross_balance(secured_client):
+    body = secured_client.get("/paper", headers={"X-API-Key": "secret123"}).json()
+    assert "ledger" in body and "balance" in body
+
+
+def test_montecarlo_is_served_as_json_and_as_the_card(secured_client):
+    h = {"X-API-Key": "secret123"}
+    assert "trades" in secured_client.get("/montecarlo", headers=h).json()
+    assert secured_client.get("/montecarlo?format=text", headers=h).text.startswith("MONTE-CARLO")
 
 
 def test_open_when_no_key_configured(client):
@@ -220,3 +253,13 @@ def test_health_reports_ai_intent_versus_reality(client):
     ai = api.get("/health").json()["ai"]
     assert ai["enabled"] is False          # no AI configured in test settings
     assert ai["available"] is False
+
+
+def test_the_api_listens_where_railway_routes_a_generated_domain(monkeypatch):
+    from wolf.config import Settings
+
+    monkeypatch.delenv("API_PORT", raising=False)
+    monkeypatch.setenv("PORT", "8080")
+    assert Settings.from_env().api_port == 8080
+    monkeypatch.setenv("API_PORT", "9000")
+    assert Settings.from_env().api_port == 9000

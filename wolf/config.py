@@ -951,9 +951,16 @@ class Settings:
     # API server
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    # When set, state-mutating endpoints require this value in the X-API-Key
-    # header. Empty (default) leaves the API open — convenient for local dev.
+    # When set, every endpoint but a bare /health requires this value in the
+    # X-API-Key header. Empty leaves the API open for local dev only: once the
+    # service has a public domain (below) an unset key refuses instead.
     api_key: str = ""
+    # Railway injects RAILWAY_PUBLIC_DOMAIN once a domain is generated for the
+    # service. Its presence is the one reliable sign the API is reachable from
+    # the internet, which is exactly when "no key means open" stops being a
+    # convenience and becomes the ledger, the paper account and /scan published
+    # to anyone holding the URL.
+    public_domain: str = ""
 
     # Optional integrations (kept identical to the previous bot)
     gemini_api_key: str = ""
@@ -1206,8 +1213,11 @@ class Settings:
             max_cost_r=_env_float("MAX_COST_R", 0.5),
             max_chase_r=_env_float("MAX_CHASE_R", 0.5),
             api_host=_env_str("API_HOST", "0.0.0.0"),
-            api_port=_env_int("API_PORT", 8000),
+            # PORT is what Railway routes a generated domain to; API_PORT still
+            # wins when set, so an existing deployment keeps its port.
+            api_port=_env_int("API_PORT", _env_int("PORT", 8000)),
             api_key=_env_str("API_KEY"),
+            public_domain=_env_str("RAILWAY_PUBLIC_DOMAIN"),
             gemini_api_key=_env_str("GEMINI_API_KEY"),
             groq_api_key=_env_str("GROQ_API_KEY"),
             anthropic_api_key=_env_str("ANTHROPIC_API_KEY"),
