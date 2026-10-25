@@ -4,10 +4,12 @@ import "server-only";
 // the browser. no-store because a paper ledger that is a minute stale is the
 // wrong number to read a position against.
 export async function wolf(path) {
-  const base = process.env.WOLF_API_URL;
-  if (!base) return { error: "WOLF_API_URL is not set in Vercel" };
+  const raw = (process.env.WOLF_API_URL || "").trim();
+  if (!raw) return { error: "WOLF_API_URL is not set in Vercel" };
+  // Railway shows its domain without a scheme, and that is what gets pasted.
+  const base = (/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).replace(/\/+$/, "");
   try {
-    const res = await fetch(`${base.replace(/\/$/, "")}${path}`, {
+    const res = await fetch(`${base}${path}`, {
       headers: { "X-API-Key": process.env.WOLF_API_KEY || "" },
       cache: "no-store",
     });
