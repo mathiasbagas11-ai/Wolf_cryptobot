@@ -476,6 +476,27 @@ GitHub default branch was an old `claude/…` branch, which is what Vercel
 first imported; the owner was told to set Vercel's production branch and
 the repo default to `main`.
 
+**Dashboard live (2026-10-25)** at `wolf-cryptobot.vercel.app` after two
+setup faults, both absorbed: `WOLF_API_URL` pasted without a scheme (the
+fetch helper now adds `https://`), and Railway's Root Directory set to
+`dashboard` (the real cause of the crash loop above — the build log said
+`snapshot-target-unpack/dashboard`, `nodejs_18`). First live screen: net
+balance 1,709.25 (−10.78% since 10-23 over 41 trades, gross −8.15% on the
+same trades); ledger 10-01 → 10-25 net −45.6% / gross −16.6%, max DD 47.0%;
+Monte Carlo 100% of paths lose, p95 DD 70%, meanR −0.031 / −0.117 net.
+
+**Open, offered, not built:** (a) **stop width has no ceiling outside
+TRAP.** `IRYSUSDT` SWING 4h printed **1R = 65.74%** (entry 0.0467, SL
+0.0160). Read from the code, not yet checked against candles: SWING's stop
+is `min(last.low − 0.3·ATR, entry − 0.8·ATR)`, so a coin in a violent move
+inflates ATR and the stop with it. TRAP alone carries `max_risk_pct = 6.0`;
+SWING, MOMENTUM and PREPUMP have none (hence PREPUMP's 29%). R-normalised
+cards are not distorted by it, but such signals are untradeable by hand.
+Offered: a `/diag` count of signals with 1R > 10% and their outcome
+(measurement) before any ceiling (strategy change). (b) `NEARUSDT` held
+twice in one direction (MOMENTUM 1h + SWING 4h) — the contest is per symbol
+per scan, not per open book.
+
 **Next read:** `/diag 600` again once the capped log has rolled over to a
 disjoint sample (~3–4 weeks) — the `liq:` replication — and `/diag 720`
 around 11-21 for COMBO; meanwhile
