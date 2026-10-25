@@ -31,6 +31,8 @@ _HELP = (
     "<code>/calc BTC 500</code> — position size &amp; leverage for your balance\n"
     "<code>/stats</code> — win-rate &amp; PnL\n"
     "<code>/paper</code> — paper balance &amp; return\n"
+    "<code>/bbtest</code> — backtest the Bollinger dip rule from the video "
+    "(~1 min; add a coin, e.g. <code>/bbtest BTC</code>)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
     "<code>/learning</code> — strategy edge &amp; blacklist\n"
@@ -77,6 +79,8 @@ class CommandRouter:
             return self._stats()
         if cmd == "paper":
             return self._paper()
+        if cmd == "bbtest":
+            return self._bbtest(arg)
         if cmd in ("montecarlo", "mc"):
             return self._montecarlo(arg)
         if cmd == "learning":
@@ -467,6 +471,22 @@ class CommandRouter:
                 f"(max DD {led['net_max_dd']:.1f}%)"
             )
         return "\n".join(lines)
+
+    def _bbtest(self, arg: str) -> str:
+        """Backtest the Bollinger dip rule from the owner's video (see wolf.bbtest)."""
+        from wolf.bbtest import DEFAULT_SYMBOLS, backtest, render
+
+        symbols = DEFAULT_SYMBOLS
+        if arg:
+            sym = arg.split()[0].upper()
+            symbols = (sym if sym.endswith("USDT") else f"{sym}USDT",)
+        try:
+            report = backtest(symbols, client=getattr(self._app, "client", None),
+                              cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Bollinger backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(render(report))}</pre>"
 
     def _montecarlo(self, arg: str) -> str:
         """Deal the ledger's days again to show the bad run before it arrives."""

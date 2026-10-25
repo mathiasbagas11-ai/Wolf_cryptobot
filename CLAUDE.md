@@ -260,7 +260,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Twenty-nine entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-24, API locked + Vercel dashboard
+## Status — 2026-10-25, `/bbtest` (video strategy backtest)
 
-1093 tests green. Working tree clean.
+1104 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -496,6 +496,20 @@ Offered: a `/diag` count of signals with 1R > 10% and their outcome
 (measurement) before any ceiling (strategy change). (b) `NEARUSDT` held
 twice in one direction (MOMENTUM 1h + SWING 4h) — the contest is per symbol
 per scan, not per open book.
+
+**`/bbtest` (2026-10-25)** — the owner sent a video claiming a refined
+Bollinger dip rule turned −7.8R into +52R on BTC 4h over six years. Built as
+an offline backtest only (registry `bollinger-dip-rule-from-video`, OPEN,
+success criteria written before the read). It runs on Railway because this
+sandbox cannot reach any exchange; it pages Binance's public data host for
+~6 years of 4h bars and falls back to the bot's last 1000 bars with a
+warning on the card. The point of the card is the **shape-matched random
+baseline**: BTC's tenfold rise flatters any long rule. The first baseline
+drew from every bar and was itself biased (tiny stops → huge R; the rule
+"beat" 96% on a random walk); then a synthetic walk built from single jumps
+biased stops the other way. Both are now tested against continuous-path
+random walks, where the rule lands mid-distribution as it must. **First
+read due: `/bbtest`.**
 
 **Next read:** `/diag 600` again once the capped log has rolled over to a
 disjoint sample (~3–4 weeks) — the `liq:` replication — and `/diag 720`
@@ -1018,7 +1032,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1093 tests, ~12s
+python -m pytest            # 1104 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1032,6 +1046,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/chase_audit.py` | grades what the chase gate dropped (settled: not a lever) |
 | `wolf/contest_audit.py` | pairs each displaced candidate against the winner that beat it |
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
+| `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |
