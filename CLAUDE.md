@@ -283,7 +283,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-25, `/bbtest` (video strategy backtest)
+## Status — 2026-10-26, `/bbtest` read: video rule rejected
 
 1104 tests green. Working tree clean.
 
@@ -508,8 +508,12 @@ baseline**: BTC's tenfold rise flatters any long rule. The first baseline
 drew from every bar and was itself biased (tiny stops → huge R; the rule
 "beat" 96% on a random walk); then a synthetic walk built from single jumps
 biased stops the other way. Both are now tested against continuous-path
-random walks, where the rule lands mid-distribution as it must. **First
-read due: `/bbtest`.**
+random walks, where the rule lands mid-distribution as it must. **Read
+2026-10-26 → REJECTED:** 1,220 trades on 10 majors since 2020-10, +0.030R
+net, but the matched random baseline earned +0.148R (p95 +0.292) — the rule
+beats only 6% of random long-green-candle entries. 2020–21 alone made
++83R; 2022–26 lost −47R. The video's +52R is the bull market plus fitting to
+BTC. The baseline's own +0.148R was noticed and deliberately not chased.
 
 **Next read:** `/diag 600` again once the capped log has rolled over to a
 disjoint sample (~3–4 weeks) — the `liq:` replication — and `/diag 720`
