@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-26, `/bbtest` read: video rule rejected
+## Status — 2026-10-26, dashboard redesigned as a journal
 
-1104 tests green. Working tree clean.
+1109 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -484,6 +484,27 @@ fetch helper now adds `https://`), and Railway's Root Directory set to
 balance 1,709.25 (−10.78% since 10-23 over 41 trades, gross −8.15% on the
 same trades); ledger 10-01 → 10-25 net −45.6% / gross −16.6%, max DD 47.0%;
 Monte Carlo 100% of paths lose, p95 DD 70%, meanR −0.031 / −0.117 net.
+
+**Overview redesigned as a trading journal (2026-10-26).** The owner did
+not like the first screen and pointed at Edgewonk as the reference. A new
+`/journal` endpoint (`wolf/journal.py`) turns the capped log into
+journal-shaped numbers: stat tiles (net balance, R per trade gross/net,
+win rate against the breakeven rate, profit factor, max DD), a net-and-gross
+equity curve, a profit calendar by WIB day with weekly totals, and a
+per-strategy table. All net of the assumed round trip, in the same
+arithmetic as `/montecarlo`. Two Edgewonk features were deliberately left
+out: the "best setup" highlight and the hour/weekday breakdowns. Both are
+a max over many cells, which is what the card's FDR exists to discount, and
+a calendar of green days invites reading the best day rather than the
+total. The page says that in a note. Lightweight Charts needs an explicit
+`locale`: the default came from the environment, a malformed tag threw,
+and the chart rendered blank.
+
+Edgewonk ideas worth keeping as **measurement** and offered, not built:
+recording MAE/MFE per trade (how far against and for each position went
+before resolving), which would make exit geometry a paired question rather
+than a replay; and a manual-trade journal for the owner's own real-money
+trades, separate from the bot's ledger.
 
 **Open, offered, not built:** (a) **stop width has no ceiling outside
 TRAP.** `IRYSUSDT` SWING 4h printed **1R = 65.74%** (entry 0.0467, SL
@@ -1036,7 +1057,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1104 tests, ~15s
+python -m pytest            # 1109 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

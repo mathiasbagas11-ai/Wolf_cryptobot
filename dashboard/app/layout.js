@@ -9,7 +9,7 @@ export default function RootLayout({ children }) {
     <html lang="id">
       <body>
         <header className="top">
-          <span className="brand">🐺 Wolf</span>
+          <span className="brand">🐺 Wolf <span style={{ color: "var(--faint)", fontWeight: 500 }}>journal</span></span>
           <nav>
             <Link href="/">Overview</Link>
             <Link href="/signals">Sinyal aktif</Link>

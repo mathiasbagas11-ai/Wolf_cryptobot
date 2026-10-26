@@ -21,6 +21,7 @@ export default function Chart({ symbol, timeframe, entry, sl, tps }) {
       layout: { background: { color: "#171b21" }, textColor: "#8b939e" },
       grid: { vertLines: { color: "#20252d" }, horzLines: { color: "#20252d" } },
       timeScale: { timeVisible: true, secondsVisible: false },
+      localization: { locale: "id-ID" },
     });
     const series = chart.addSeries(CandlestickSeries, {
       upColor: "#26a269", downColor: "#e5484d", borderVisible: false,
