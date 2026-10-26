@@ -26,7 +26,11 @@ function Bar({ value, max }) {
 
 export default async function Overview() {
   const [paper, j, mc] = await Promise.all([wolf("/paper"), wolf("/journal"), wolf("/montecarlo")]);
-  if (j.error) return (<><h1>Overview</h1><p className="err">Bot: {j.error}</p></>);
+  if (j.error) return (<><h1>Overview</h1><p className="err">
+    {/404/.test(j.error)
+      ? "Bot di Railway masih versi lama (belum punya /journal). Deploy commit terbaru di Railway, lalu refresh."
+      : `Bot: ${j.error}`}
+  </p></>);
   if (j.empty) return (<><h1>Overview</h1><p className="sub">Belum ada trade yang selesai di log.</p></>);
 
   const o = j.overall;
