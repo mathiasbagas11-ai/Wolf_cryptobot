@@ -283,7 +283,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-26, dashboard redesigned as a journal
+## Status — 2026-10-27, signals page explains each entry
 
 1109 tests green. Working tree clean.
 
@@ -505,6 +505,24 @@ recording MAE/MFE per trade (how far against and for each position went
 before resolving), which would make exit geometry a paired question rather
 than a replay; and a manual-trade journal for the owner's own real-money
 trades, separate from the bot's ledger.
+
+**Sinyal aktif explains each entry (2026-10-27).** The owner asked to see
+the entry point and why the bot entered there. Each card now has a "Kenapa
+masuk di sini" panel: the strategy's idea, entry rule and stop rule in
+plain Indonesian (`dashboard/lib/explain.js`, translated by hand from
+`wolf/detectors/`, so **when a detector changes, change that file too**),
+the recorded `score_parts` as chips sorted by points, and the raw
+`reasons`. The chart marks the bar the signal was taken on and, for a
+retest entry, the bar it filled. Every panel ends with a line saying it is
+the rule's reason and not evidence of an edge. Nothing on the bot changed.
+
+From `rsalianto/tradoor` (reviewed 2026-10-27, AGPL, so ideas only and
+no code): its grader counts a bar that touches both a take-profit and the
+stop as the stop. Ours infers the order from the bar's colour
+(`intrabar_tp_first`, on by default), and **how much of the ledger rests on
+that inference has never been measured**. A paired `/whatif intrabar`
+(same trades regraded stop-first) was offered and not built. Tradoor also
+records best and worst excursion per signal, which is the MAE/MFE offer.
 
 **Open, offered, not built:** (a) **stop width has no ceiling outside
 TRAP.** `IRYSUSDT` SWING 4h printed **1R = 65.74%** (entry 0.0467, SL

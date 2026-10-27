@@ -80,3 +80,14 @@ details summary { cursor: pointer; color: var(--blue); margin-top: 8px; font-siz
   table { font-size: 12.5px; }
   th, td { padding-left: 4px; padding-right: 4px; }
 }
+
+.why { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,0.02); font-size: 14px; }
+.why p { margin: 4px 0 6px; }
+.why ul { margin: 0 0 6px; padding-left: 18px; }
+.why li { margin: 2px 0; }
+.why-title { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.why-sub { font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 12.5px; padding: 2px 8px; border-radius: 999px; background: rgba(76,141,255,0.12); border: 1px solid rgba(76,141,255,0.3); }
+.chip b { color: var(--blue); font-weight: 600; }
+.why .raw { font-size: 12px; color: var(--muted); margin-top: 8px; }
