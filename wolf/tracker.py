@@ -238,6 +238,8 @@ class EvalResult:
         "exit_time",
         "realized_pnl_pct",
         "timeout_price",
+        "mfe_r",
+        "mae_r",
     )
 
     def __init__(self) -> None:
@@ -251,6 +253,10 @@ class EvalResult:
         # Blended PnL% of a scaled exit; set only for a partial (TP1-banked) win
         # so _resolve books the realized number instead of the single-exit geom.
         self.realized_pnl_pct: Optional[float] = None
+        # Best and worst excursion in R across the live bars, through the
+        # bar that resolved the trade; None until the position is live.
+        self.mfe_r: Optional[float] = None
+        self.mae_r: Optional[float] = None
         # The real market price at a blended timeout, kept because exit_price is
         # then overwritten with a synthetic figure derived from the PnL. It is
         # the only input the blend reads, so a row that has lost it cannot be
@@ -478,6 +484,7 @@ class Tracker:
         res.activated_time = _activation_time(sig, created_at) if res.activated else None
         eff_sl = sig.sl
         first_lvl = ladder[0].level if ladder else None
+        risk_abs = abs(entry - sig.sl)
 
         for c in future:
             c_time = datetime.fromtimestamp(c.time / 1000, tz=timezone.utc)
@@ -491,6 +498,18 @@ class Tracker:
                     continue
             elif res.activated_time is not None and c_time < res.activated_time:
                 continue  # candle predates activation — no position existed yet
+
+            # The excursion is read before any exit rule on this bar, so the
+            # bar that closes the trade still counts: a stop-out bar reached
+            # at least -1R and says so. On that bar the far side may have
+            # traded after the exit, which the bar cannot tell apart; it is
+            # the same ambiguity the intrabar rule below resolves, and here
+            # it can only widen the figure, never invent a path.
+            if risk_abs > 0:
+                fav = (c.high - entry) if is_long else (entry - c.low)
+                adv = (entry - c.low) if is_long else (c.high - entry)
+                res.mfe_r = max(res.mfe_r if res.mfe_r is not None else 0.0, fav / risk_abs)
+                res.mae_r = max(res.mae_r if res.mae_r is not None else 0.0, adv / risk_abs)
 
             # A candle reports its high and its low but not the order they
             # traded in. On a bar wide enough to reach both a take-profit and
@@ -688,6 +707,9 @@ class Tracker:
                     price_t = res.tps_meta.get(lvl, (None, None))[0]
                     pending_notifications.append((sig, "TP_HIT", {"level": lvl, "price": price_t}))
                 sig.tps_hit = res.tps_hit
+                if res.mfe_r is not None:
+                    sig.mfe_r = round(res.mfe_r, 3)
+                    sig.mae_r = round(res.mae_r, 3)
 
                 if res.terminal is None:
                     sig.status = Status.ACTIVE.value if res.activated else Status.PENDING.value

@@ -260,7 +260,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty-one entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-27, signals page explains each entry
+## Status — 2026-10-28, intrabar and MAE/MFE measurements
 
-1109 tests green. Working tree clean.
+1118 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -523,6 +523,26 @@ stop as the stop. Ours infers the order from the bar's colour
 that inference has never been measured**. A paired `/whatif intrabar`
 (same trades regraded stop-first) was offered and not built. Tradoor also
 records best and worst excursion per signal, which is the MAE/MFE offer.
+
+**Intrabar and MAE/MFE built (2026-10-28, "gas intrabar dan MAE").** Both
+are measurements; nothing the bot emits or grades changed.
+- `/whatif intrabar` (`whatif.compare_intrabar`): the same resolved trades
+  replayed twice on 15m bars, bar order inferred (live) vs stop always
+  first, paired, with ties printed. Stop-first is a floor, not the truth.
+  Each replay is **cut at the signal's own timeout** and valued at the last
+  close if still open, because the live tracker never saw later bars.
+  Registry `intrabar-order-inference` (OPEN) carries the read criteria,
+  written before any read. **First read due now**; the capped log covers
+  ~25 days, but `_history` refuses anything over 1000 15m bars (~10 days)
+  back, so expect most of the log to be skipped. Read the scored count.
+- MFE/MAE: `Signal.mfe_r` / `mae_r`, best and worst excursion in R across
+  the live bars through the closing bar, recomputed on every tracker pass
+  (open signals show it so far). `None` on rows before 2026-10-28, which
+  `/mae` leaves out by name. `/mae [hours]` (`wolf/excursion.py`) prints
+  medians per strategy, winners that dipped ≥0.8R and losers that were ≥0.5R
+  green. It is descriptive. Exit geometry is already settled as not a lever;
+  this card is what a stop/target argument has to be checked against, not a
+  reason to reopen one. Useful from about a week of resolved trades.
 
 **Open, offered, not built:** (a) **stop width has no ceiling outside
 TRAP.** `IRYSUSDT` SWING 4h printed **1R = 65.74%** (entry 0.0467, SL
@@ -997,6 +1017,14 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    `record_signal`. Every day it runs, the evidence needed to judge it is
    discarded. The only queued item whose cost grows while it waits.
 3. **Windowing uses resolution time** where era hygiene wants creation time.
+   **Related, found 2026-10-28:** `compare_stop_rules` and
+   `compare_ladder_geometry` replay every bar from the entry to *now*, not to
+   the signal's timeout, so they grade stops and targets the live position
+   was closed before reaching. Both sides of each comparison see the same
+   bars, so the paired gaps stay internally consistent, but the trades they
+   grade are not the ledger's trades. The settled readings (exit geometry,
+   stop rules) were taken this way. `compare_intrabar` cuts at the timeout
+   (`whatif._within_timeout`); the other two do not yet.
 4. **High-Conviction room — now recorded, not yet measured.**
    `wolf/reports/conviction.py` arrived via PR #32 and could not be measured:
    the pick lived only in one overwritten key. Since 2026-09-24 picks are
@@ -1075,7 +1103,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1109 tests, ~15s
+python -m pytest            # 1118 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

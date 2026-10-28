@@ -35,6 +35,8 @@ _HELP = (
     "(~1 min; add a coin, e.g. <code>/bbtest BTC</code>)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
+    "<code>/mae</code> — how far trades went for and against them before closing "
+    "(add hours, e.g. <code>/mae 168</code>)\n"
     "<code>/learning</code> — strategy edge &amp; blacklist\n"
     "<code>/active</code> — open signals\n"
     "<code>/rank</code> — AI ranking of the live signals, best first\n"
@@ -45,6 +47,7 @@ _HELP = (
     "<code>/whatif whale</code> — what each whale-veto policy would have kept\n"
     "<code>/whatif chase</code> — what the chase gate threw away, replayed\n"
     "<code>/whatif contest</code> — did the winner beat the candidate it displaced\n"
+    "<code>/whatif intrabar</code> — how much of the ledger rests on guessing bar order\n"
     "<code>/ai</code> — is the debate layer actually answering?\n"
     "<code>/tested</code> — what has already been tried, and what settled it\n"
     "<code>/rebank</code> — re-book timeouts that forgot a banked rung "
@@ -81,6 +84,8 @@ class CommandRouter:
             return self._paper()
         if cmd == "bbtest":
             return self._bbtest(arg)
+        if cmd in ("mae", "mfe", "excursion"):
+            return self._excursion(arg)
         if cmd in ("montecarlo", "mc"):
             return self._montecarlo(arg)
         if cmd == "learning":
@@ -189,6 +194,13 @@ class CommandRouter:
                     self._app.tracker, ladder=self._app.settings.ladder, overlap=overlap
                 )
                 return "<pre>" + esc(render_chase(report)) + "</pre>"
+            if arg.lower().startswith("intrabar"):
+                # Paired: the same trades graded with the bar order inferred
+                # and with the stop always first, so the gap is exactly how
+                # much of the ledger rests on that guess.
+                from wolf.whatif import compare_intrabar, render_intrabar
+
+                return "<pre>" + esc(render_intrabar(compare_intrabar(self._app.tracker))) + "</pre>"
             if arg.lower().startswith("ladder"):
                 return (
                     "<pre>"
@@ -486,6 +498,21 @@ class CommandRouter:
         except Exception:
             log.exception("Bollinger backtest failed")
             return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(render(report))}</pre>"
+
+    def _excursion(self, arg: str) -> str:
+        """Best and worst point of each resolved trade's path, in R."""
+        from wolf.excursion import excursions, render
+
+        try:
+            hours = float(arg) if arg else 0.0
+        except ValueError:
+            return "⚠️ Usage: <code>/mae</code> or <code>/mae 168</code>"
+        try:
+            report = excursions(self._app.tracker.outcomes(), window_hours=hours)
+        except Exception:
+            log.exception("Excursion card failed")
+            return "⚠️ MAE card failed — see logs."
         return f"<pre>{esc(render(report))}</pre>"
 
     def _montecarlo(self, arg: str) -> str:
