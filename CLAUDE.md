@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-28, intrabar and MAE/MFE measurements
+## Status — 2026-10-29, a second copy of the bot found
 
-1118 tests green. Working tree clean.
+1120 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -543,6 +543,36 @@ are measurements; nothing the bot emits or grades changed.
   green. It is descriptive. Exit geometry is already settled as not a lever;
   this card is what a stop/target argument has to be checked against, not a
   reason to reopen one. Useful from about a week of resolved trades.
+
+**Two copies of the bot have been running since about 10-25 (found
+2026-10-29).** Seven 24h cards arrived in one paste and fell into two
+families that cannot be the same deployment:
+
+| | real (keep) | the copy |
+|---|---|---|
+| state | `/data/state_data [ok]` | `state_data [EPHEMERAL]`, no volume |
+| `max_cost_r` | 0.15 (env) | **0.5, the code default** — env unset |
+| AI | CONFIRM/NEUTRAL | ABSTAIN 100%, DeepSeek `HTTP 401: Missing Authentication header` |
+| whale / conv | present | whale collector never wrote; no `conv:` |
+| card stamp | ~06:55 / 07:30 UTC | 07:00 UTC |
+
+The copy has the Telegram token and almost nothing else, so it is a second
+service or project deployed from `main` during the 10-24/25 Railway
+troubleshooting without the env vars or the volume. It posts its signals
+and cards to the same chat, its ledger is wiped on every redeploy, and with
+the cost gate at 0.5 it admits stops the real bot rejects (SCALP 1R 0.64%,
+cost 0.31R). It also runs with no whale veto, because it has no whale data.
+**Never pool its cards with the real ledger.** Read them as noise, not as
+the natural experiment they look like: the state resets, and a whale-veto
+comparison needs its own pre-registration. The owner has been asked to find
+and delete the extra Railway service. Every card and the startup message
+now print an `instance` line (`config.instance_label`: Railway project,
+service, environment and commit) so a copy names itself on its first card.
+
+**Real-bot cards 10-26 → 10-28** (06:55, 07:30, 07:30; contiguous and
+disjoint; 10-29 not yet sent): 48 trades, **−0.068R gross, −0.163R net**.
+The same shape as before, flat gross and negative net. The copy's four
+cards (142 trades, +0.133 gross / −0.043 net) are excluded.
 
 **Open, offered, not built:** (a) **stop width has no ceiling outside
 TRAP.** `IRYSUSDT` SWING 4h printed **1R = 65.74%** (entry 0.0467, SL
@@ -1103,7 +1133,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1118 tests, ~15s
+python -m pytest            # 1120 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

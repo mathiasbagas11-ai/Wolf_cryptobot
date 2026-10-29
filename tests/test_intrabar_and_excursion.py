@@ -131,3 +131,27 @@ def test_both_commands_are_reachable_and_listed(store, fake_client):
     assert "EXCURSION" in router.handle("/mae")
     help_text = router.handle("/help")
     assert "/mae" in help_text and "/whatif intrabar" in help_text
+
+
+def test_the_card_names_the_deployment_that_wrote_it(monkeypatch, store, fake_client):
+    """Two copies of the bot once posted look-alike cards to one chat for days."""
+    from wolf.config import instance_label
+    from wolf.diagnose import diagnose, render_digest
+
+    monkeypatch.setenv("RAILWAY_PROJECT_NAME", "wolf")
+    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "worker-2")
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abcdef1234")
+    assert instance_label() == "railway wolf/worker-2/production @ abcdef1"
+    _run(store, fake_client, _BOTH_SIDES, LadderSettings())
+    card = render_digest(diagnose(Tracker(store, fake_client, TrackerSettings()),
+                                  window_hours=24, state_dir="state_data"))
+    assert "instance railway wolf/worker-2/production @ abcdef1" in card
+
+
+def test_off_railway_the_label_says_so(monkeypatch):
+    from wolf.config import instance_label
+
+    for k in ("RAILWAY_PROJECT_NAME", "RAILWAY_SERVICE_NAME", "RAILWAY_ENVIRONMENT_NAME"):
+        monkeypatch.delenv(k, raising=False)
+    assert instance_label().startswith("not on Railway")

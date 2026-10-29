@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Iterable, Optional
 
-from wolf.config import LadderSettings, state_is_persistent, volume_mount
+from wolf.config import LadderSettings, instance_label, state_is_persistent, volume_mount
 from wolf.market import age_minutes
 from wolf.models import Signal, Status
 from wolf.stats import DEFAULT_FDR, benjamini_hochberg, mean_gap, t_to_p
@@ -1052,6 +1052,7 @@ def diagnose(
         "state_dir": state_dir,
         "state_persistent": state_is_persistent(state_dir) if state_dir else None,
         "volume_mount": volume_mount(),
+        "instance": instance_label(),
         "thresholds": {
             "min_conclusive_trades": MIN_CONCLUSIVE_TRADES,
             "conclusive_t": CONCLUSIVE_T,
@@ -1289,6 +1290,8 @@ def render_digest(diag: dict) -> str:
         mark = "ok" if diag.get("state_persistent") else "EPHEMERAL"
         mount = diag.get("volume_mount") or "none detected"
         lines.append(f"state    {diag['state_dir']} [{mark}] volume_mount={mount}")
+    if diag.get("instance"):
+        lines.append(f"instance {diag['instance']}")
     lad = diag.get("ladder") or {}
     if lad.get("avg_win_r") or lad.get("avg_loss_r"):
         fill = lad.get("rung_fill_rate") or {}
