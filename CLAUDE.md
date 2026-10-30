@@ -283,7 +283,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-31, real bot on current code; the copy confirmed by 409s
+## Status — 2026-10-31, intrabar read: not material
 
 1122 tests green. Working tree clean.
 
@@ -620,6 +620,20 @@ project. The remedy left is the BotFather token revoke. MFE/MAE recording
 and `/whatif intrabar` are live from this deploy, so MAE's week runs to
 about 11-07. The 23:06 card overlaps the 22:21 card by ~23h, so it is the
 same window and is not pooled again.
+
+**`/whatif intrabar` read (10-30 23:42 UTC) → INCONCLUSIVE, not
+material.** 63 of 290 resolved signals scored (the rest beyond the 15m
+reach). Inferred and stop-first agreed on every trade: changed 0, tied 63,
+diff +0.0000R. That is under the pre-registered 0.02R line. Zero in 63
+bounds the straddle rate below ~4.8%, so the worst case is about 0.07R per
+trade. The ledger does not rest on the bar-order guess at any size worth
+acting on. **Correction:** the card and registry had called stop-first a
+floor. It is not. Taking the stop side first also skips the breakeven
+re-check on the bar that fills TP1, so either column can be higher. The
+wording is fixed. The same card showed `TELEGRAM_TOKEN_SHARED(x131)` with
+the last 409 at 23:18, about 24 minutes before a card issued after a
+redeploy, so the copy may have stopped. Read the flag again after 24h,
+when the record ages out of the window.
 
 **Real-bot card 10-30 22:21** (on demand; window 10-29 22:21 → 10-30 22:21;
 10-28 07:30 → 10-29 22:21 is missing): n=30, +0.173 gross / +0.071 net.

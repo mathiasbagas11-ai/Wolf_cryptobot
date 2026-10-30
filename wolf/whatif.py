@@ -352,10 +352,13 @@ def compare_intrabar(tracker: Tracker, limit: int = 300) -> dict:
 
     A 15m bar that reaches both a target and the stop does not say which
     traded first. The ledger infers it from the bar's colour
-    (``intrabar_tp_first``); the conservative convention — used by other
-    graders — books the stop. Neither is observed, so the gap between them is
-    how much of the ledger rests on the inference: the trades where the two
-    disagree are exactly the ones the bars cannot settle.
+    (``intrabar_tp_first``); the other convention — used by other graders —
+    always takes the stop side first. Neither is observed, so the gap between
+    them is how much of the ledger rests on the inference: the trades where
+    the two disagree are exactly the ones the bars cannot settle. Stop-first
+    is not a floor. Taking the low first also means a bar that fills TP1 is
+    never re-checked against the breakeven stop that fill creates, so on those
+    bars it books more than the inferred order does.
 
     Both columns are the replay, never one replay against the stored ledger:
     the replay reads its own fetch of the bars and its own timeout cut, and a
@@ -472,8 +475,8 @@ def render_intrabar(report: dict) -> str:
         lines.append(f"  {name:<9} n={s['n']:<4} changed {s['changed']:<3} diff {s['mean_diff']:+.4f}R")
     lines.append(
         "read: the diff is how much of the ledger rests on guessing bar order. "
-        "stop_first is the floor (no order makes those bars worse); "
-        "the true figure is at or above it."
+        "stop_first is the opposite guess, not a floor: it also skips the "
+        "breakeven re-check on a bar that fills TP1, so either column can be higher."
     )
     return "\n".join(lines)
 

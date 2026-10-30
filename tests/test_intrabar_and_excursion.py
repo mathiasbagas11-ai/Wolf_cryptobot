@@ -73,10 +73,10 @@ def test_bars_after_the_timeout_are_not_graded(store, fake_client):
     assert report["results"][0].mean_r == 0.0
 
 
-def test_the_card_calls_stop_first_a_floor_not_the_truth(store, fake_client):
+def test_the_card_does_not_call_stop_first_a_floor(store, fake_client):
     _run(store, fake_client, _BOTH_SIDES, LadderSettings())
     card = render_intrabar(compare_intrabar(Tracker(store, fake_client, TrackerSettings())))
-    assert "stop_first is the floor" in card
+    assert "not a floor" in card
 
 
 def test_a_resolved_trade_records_its_best_and_worst_point_in_r(store, fake_client):
