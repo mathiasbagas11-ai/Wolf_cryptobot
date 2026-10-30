@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-29, a second copy of the bot found
+## Status — 2026-10-30, hunting the second copy
 
-1120 tests green. Working tree clean.
+1122 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -568,6 +568,25 @@ comparison needs its own pre-registration. The owner has been asked to find
 and delete the extra Railway service. Every card and the startup message
 now print an `instance` line (`config.instance_label`: Railway project,
 service, environment and commit) so a copy names itself on its first card.
+
+**The owner sees only one Railway service (2026-10-30)**, so the copy is
+probably not on Railway at all, or not in that project or environment. The
+cards point the same way. The digest fires at boot and then every 24h
+(`scheduler._soon`), so a card's time stamp is its process's boot time. The
+copy's stamps are 07:00:01–02 UTC every day, so **it has not restarted
+since it first came up**, through four days of pushes to `main`. It does not
+redeploy from GitHub, so it will never pick up the new `instance` line. No
+Telegram token was ever committed (git history checked). Two responses:
+- **Detection that does not need the copy's co-operation:** Telegram
+  serves `getUpdates` to one poller per token and answers a second with
+  409. The poller now records those (`poller.CONFLICT_KEY`, throttled to
+  one store write a minute, a WARNING in the log), and the card raises
+  `TELEGRAM_TOKEN_SHARED(xN)` plus a plain line saying a second copy is
+  polling. A command typed in the chat is answered by whichever copy won
+  that poll, which is why the owner may get either card back from `/diag`.
+- **The fix offered to the owner:** revoke the token in BotFather and set
+  the new one only on the real Railway service. That silences the copy
+  wherever it runs, without having to find it first.
 
 **Real-bot cards 10-26 → 10-28** (06:55, 07:30, 07:30; contiguous and
 disjoint; 10-29 not yet sent): 48 trades, **−0.068R gross, −0.163R net**.
@@ -1133,7 +1152,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1120 tests, ~15s
+python -m pytest            # 1122 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

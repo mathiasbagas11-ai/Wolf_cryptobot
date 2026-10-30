@@ -155,3 +155,33 @@ def test_off_railway_the_label_says_so(monkeypatch):
     for k in ("RAILWAY_PROJECT_NAME", "RAILWAY_SERVICE_NAME", "RAILWAY_ENVIRONMENT_NAME"):
         monkeypatch.delenv(k, raising=False)
     assert instance_label().startswith("not on Railway")
+
+
+def test_a_second_poller_on_the_same_token_is_recorded_and_flagged(store, fake_client):
+    """Telegram answers a competing getUpdates with 409. That is the one place a
+    second copy of the bot shows itself to the real one."""
+    from types import SimpleNamespace
+    from wolf.config import Settings, TelegramSettings
+    from wolf.diagnose import diagnose, render_digest
+    from wolf.notify.poller import CONFLICT_KEY, TelegramPoller
+
+    from dataclasses import replace
+    settings = replace(Settings(), telegram=TelegramSettings(bot_token="t", chat_id="1"))
+    poller = TelegramPoller(SimpleNamespace(settings=settings, store=store,
+                                            notifier=None, analyze=None))
+    poller._record_conflict()
+    row = store.read(CONFLICT_KEY)
+    assert row["count"] == 1 and row["last_at"]
+
+    _run(store, fake_client, _BOTH_SIDES, LadderSettings())
+    diag = diagnose(Tracker(store, fake_client, TrackerSettings()), window_hours=24)
+    assert "TELEGRAM_TOKEN_SHARED(x1)" in diag["flags"]
+    assert "second copy of the bot" in render_digest(diag)
+
+
+def test_no_conflict_means_no_flag(store, fake_client):
+    from wolf.diagnose import diagnose
+
+    _run(store, fake_client, _BOTH_SIDES, LadderSettings())
+    diag = diagnose(Tracker(store, fake_client, TrackerSettings()), window_hours=24)
+    assert not any(f.startswith("TELEGRAM_TOKEN_SHARED") for f in diag["flags"])
