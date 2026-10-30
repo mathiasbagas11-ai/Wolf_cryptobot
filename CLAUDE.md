@@ -283,7 +283,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-31, neither copy is running current code
+## Status — 2026-10-31, real bot on current code; the copy confirmed by 409s
 
 1122 tests green. Working tree clean.
 
@@ -608,6 +608,18 @@ The owner was asked to check the active deployment's commit and the Source
 branch, and still to revoke the token. MFE/MAE has recorded nothing yet,
 because the code is not deployed; its "useful from a week" clock starts at
 the deploy.
+
+**Railway reconnected (10-30 ~23:00 UTC).** Auto-deploy had stopped
+because the service's GitHub source was disconnected. The owner kept
+clicking "Configure GitHub App" in the Connect Repo menu instead of the repo
+row underneath it. Once reconnected, the first card read `instance railway
+keen-presence/Wolf_cryptobot/production @ 263f170` and **`TELEGRAM_TOKEN_SHARED(x21)`**,
+so the second copy is confirmed from the real bot's side: Telegram refused
+its poll 21 times within minutes of boot. The copy is not in this Railway
+project. The remedy left is the BotFather token revoke. MFE/MAE recording
+and `/whatif intrabar` are live from this deploy, so MAE's week runs to
+about 11-07. The 23:06 card overlaps the 22:21 card by ~23h, so it is the
+same window and is not pooled again.
 
 **Real-bot card 10-30 22:21** (on demand; window 10-29 22:21 → 10-30 22:21;
 10-28 07:30 → 10-29 22:21 is missing): n=30, +0.173 gross / +0.071 net.
