@@ -283,7 +283,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-30, hunting the second copy
+## Status — 2026-10-31, neither copy is running current code
 
 1122 tests green. Working tree clean.
 
@@ -587,6 +587,34 @@ Telegram token was ever committed (git history checked). Two responses:
 - **The fix offered to the owner:** revoke the token in BotFather and set
   the new one only on the real Railway service. That silences the copy
   wherever it runs, without having to find it first.
+
+**Two replies to one `/diag`, a second apart (10-30 22:21:54/55 UTC).**
+Both copies answered the same command: an update stays on Telegram's side
+until a poll acknowledges it, so two pollers alternating can both receive
+it. **Neither reply carries the `instance` line**, which every build since
+`5fb7b2d` (10-29) prints unconditionally, so neither copy runs current code.
+Matching scheduled-card stamps to commit times dates both boots:
+- the real copy's 07:30:22 stamp is the deploy of `1264a9a` (pushed 10-26
+  07:28 UTC), which the owner deployed by hand. Nothing since has reached
+  it: not `/whatif intrabar`, not MAE/MFE, not the instance line, not the
+  409 flag. **Railway is not auto-deploying `main`.** Suspect the service's
+  source branch (an old `claude/…` branch was the repo default until
+  10-24) or auto-deploy being off.
+- the copy's 07:00:0x stamp is the build of `228f50e` (`/bbtest`, pushed
+  10-25 06:47 UTC), so it came up from that push and has not been touched
+  since. That points to something deployed from GitHub on 10-25 (another
+  Railway environment, project or workspace) rather than a laptop.
+The owner was asked to check the active deployment's commit and the Source
+branch, and still to revoke the token. MFE/MAE has recorded nothing yet,
+because the code is not deployed; its "useful from a week" clock starts at
+the deploy.
+
+**Real-bot card 10-30 22:21** (on demand; window 10-29 22:21 → 10-30 22:21;
+10-28 07:30 → 10-29 22:21 is missing): n=30, +0.173 gross / +0.071 net.
+COMBO 5 of 5 (+0.740) is the first COMBO block of any size: five trades,
+`padj` 1.000, read on 11-21 and not before. **Real-bot pool, four cards
+10-26 → 10-30:** 78 trades, **+0.025R gross, −0.073R net**. The same shape:
+flat gross, negative net.
 
 **Real-bot cards 10-26 → 10-28** (06:55, 07:30, 07:30; contiguous and
 disjoint; 10-29 not yet sent): 48 trades, **−0.068R gross, −0.163R net**.
