@@ -749,20 +749,23 @@ class Tracker:
         return info
 
     def _lesson(self, sig: Signal) -> str:
-        """One-line takeaway from the cumulative record for this strategy."""
+        """One-line record for this strategy, stated without a verdict.
+
+        This line used to end in advice: "edge holding — keep taking these"
+        above 55% and a positive average. Both inputs are gross of costs and
+        untested for chance, so the advice landed on the owner's phone with every
+        trade report while the diag card, which charges costs and FDR, said no
+        strategy had an edge. A report that tells a reader to act has to clear
+        the bar the card does; this one cannot, so it reports and stops.
+        """
         bucket = self.stats().get("by_strategy", {}).get(sig.strategy)
         if not bucket or not bucket.get("total"):
-            return f"{sig.strategy}: first graded trade — building a baseline."
+            return f"{sig.strategy}: first graded trade."
         wr = bucket["win_rate"]
         n = bucket["total"]
         avg = bucket["avg_pnl"]
-        if wr >= 55 and avg > 0:
-            verdict = "edge holding — keep taking these"
-        elif wr >= 45:
-            verdict = "roughly coin-flip — needs tighter filters"
-        else:
-            verdict = "underperforming — tighten or pause this setup"
-        return f"{sig.strategy}: {wr:.0f}% win over {n} ({avg:+.2f}% avg) — {verdict}."
+        return (f"{sig.strategy} so far: {wr:.0f}% win over {n} ({avg:+.2f}% avg), "
+                "before costs, not tested for luck — see /diag.")
 
     def _resolve(self, sig: Signal, res: EvalResult, created_at: datetime, now: datetime) -> None:
         exit_price = res.exit_price

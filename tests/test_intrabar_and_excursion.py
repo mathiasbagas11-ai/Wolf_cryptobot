@@ -185,3 +185,17 @@ def test_no_conflict_means_no_flag(store, fake_client):
     _run(store, fake_client, _BOTH_SIDES, LadderSettings())
     diag = diagnose(Tracker(store, fake_client, TrackerSettings()), window_hours=24)
     assert not any(f.startswith("TELEGRAM_TOKEN_SHARED") for f in diag["flags"])
+
+
+def test_a_trade_report_gives_no_advice_and_leads_with_the_net_balance(store, fake_client):
+    """The report used to say "edge holding — keep taking these" on gross,
+    untested numbers, and showed only the gross balance."""
+    from wolf.notify.telegram import TelegramNotifier
+    from wolf.config import TelegramSettings
+
+    sig = _run(store, fake_client, _TP2_THEN_FADE, LadderSettings())
+    lesson = Tracker(store, fake_client, TrackerSettings())._lesson(sig)
+    assert "keep taking" not in lesson and "before costs" in lesson
+    text = TelegramNotifier(TelegramSettings(bot_token="t", chat_id="1"))._resolved_text(
+        sig, {"balance": 2006.26, "net_balance": 1755.38, "lesson": lesson})
+    assert "1755.38 USD</b> after costs · 2006.26 before" in text

@@ -283,9 +283,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-31, intrabar read: not material
+## Status — 2026-10-31, notifications stop giving advice
 
-1122 tests green. Working tree clean.
+1123 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -634,6 +634,21 @@ wording is fixed. The same card showed `TELEGRAM_TOKEN_SHARED(x131)` with
 the last 409 at 23:18, about 24 minutes before a card issued after a
 redeploy, so the copy may have stopped. Read the flag again after 24h,
 when the record ages out of the window.
+
+**Notifications stop giving advice (10-31, "gas rapihin semua notif").**
+The owner asked why the Telegram balance (2,006.26) differed from the
+dashboard (1,755.38). One is gross and the other net, and the trade report
+only ever printed the gross one. The same report ended with "PREDUMP: 64% win
+over 63 — edge holding — keep taking these", which is gross, untested for
+chance, and contradicts the real-money advice. Changed, wording only:
+- the trade report leads with the net balance and puts gross beside it;
+- `Tracker._lesson` states the record with "before costs, not tested for
+  luck — see /diag" and gives no verdict;
+- the stats card's expectancy says "before costs", and its veto and
+  risk-gate lines lose their "consider veto mode" and "enable *_HARD_BLOCK"
+  hints, which asked for strategy changes on daily win-rate gaps;
+- `/analyze`'s memory line says "before costs".
+No signal, gate or grade changed.
 
 **Real-bot card 10-30 22:21** (on demand; window 10-29 22:21 → 10-30 22:21;
 10-28 07:30 → 10-29 22:21 is missing): n=30, +0.173 gross / +0.071 net.
@@ -1206,7 +1221,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1122 tests, ~15s
+python -m pytest            # 1123 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
