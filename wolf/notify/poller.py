@@ -19,6 +19,9 @@ from wolf.notify.commands import CommandRouter
 
 log = logging.getLogger("wolf.poller")
 
+#: Store key for evidence that another process is polling this bot token.
+CONFLICT_KEY = "telegram_poll_conflict"
+
 
 class TelegramPoller:
     def __init__(self, app, router: CommandRouter | None = None) -> None:
@@ -34,6 +37,8 @@ class TelegramPoller:
         if tg.chat_id:
             allowed.add(str(tg.chat_id))
         self._allowed = allowed
+        self._conflicts = 0
+        self._conflict_saved = 0.0
 
     def start(self) -> None:
         if not self._token:
@@ -54,6 +59,10 @@ class TelegramPoller:
                 if self._offset is not None:
                     params["offset"] = self._offset
                 resp = self._session.get(url, params=params, timeout=40)
+                if resp.status_code == 409:
+                    self._record_conflict()
+                    time.sleep(3)
+                    continue
                 resp.raise_for_status()
                 for update in resp.json().get("result", []):
                     self._offset = update["update_id"] + 1
@@ -64,6 +73,38 @@ class TelegramPoller:
             except (ValueError, KeyError, TypeError) as exc:
                 log.debug("getUpdates decode error: %s", exc)
                 time.sleep(3)
+
+    def _record_conflict(self) -> None:
+        """Note that Telegram refused this poll because another one is live.
+
+        Telegram serves ``getUpdates`` to one poller per token and answers any
+        other with 409. A second copy of the bot running on the same token
+        therefore shows up here, and nowhere else: it posts to the same chat,
+        and a command typed there is answered by whichever copy won that poll.
+        That copy was found once only because its daily cards disagreed about a
+        gate setting. The count goes to the store so the diag card can say so,
+        at most once a minute.
+        """
+        self._conflicts += 1
+        now = time.time()
+        if now - self._conflict_saved < 60:
+            return
+        self._conflict_saved = now
+        log.warning("Telegram getUpdates 409: another process is polling this bot token "
+                    "(%d conflicts since start)", self._conflicts)
+        store = getattr(self._app, "store", None)
+        if store is None:
+            return
+        from datetime import datetime, timezone
+
+        stamp = datetime.now(timezone.utc).isoformat()
+        prev = store.read(CONFLICT_KEY, default={}) or {}
+        store.write(CONFLICT_KEY, {
+            "first_at": prev.get("first_at") or stamp,
+            "last_at": stamp,
+            "count": int(prev.get("count") or 0) + self._conflicts,
+        })
+        self._conflicts = 0
 
     def _dispatch(self, message: dict) -> None:
         text = message.get("text", "")

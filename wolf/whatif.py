@@ -324,6 +324,163 @@ def render(report: dict) -> str:
     return "\n".join(lines)
 
 
+# ── intrabar order ──────────────────────────────────────────────────────────
+
+
+def _within_timeout(sig, candles: list) -> tuple[list, datetime]:
+    """The bars the live tracker could have graded, and the clock to grade at.
+
+    The live tracker sees a signal only until its timeout fires; the replay
+    fetches everything from the start to *now*. Grading those later bars books
+    stops and targets the live position was closed before reaching, so the
+    window is cut at ``created_at + timeout_hours``. The clock handed to the
+    evaluator stops a hair short of the timeout so its own timeout branch,
+    which asks the exchange for today's price, never runs; a trade still open
+    at the cut is valued at the last bar's close by ``_replay_one``.
+    """
+    created_at = _parse_iso(sig.created_at)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    end = created_at + timedelta(hours=float(sig.timeout_hours or 24))
+    end_ms = end.timestamp() * 1000
+    kept = [c for c in candles if c.time + _BAR_MS <= end_ms]
+    return kept, end - timedelta(seconds=1)
+
+
+def compare_intrabar(tracker: Tracker, limit: int = 300) -> dict:
+    """Grade the same trades twice: bar order inferred, and stop always first.
+
+    A 15m bar that reaches both a target and the stop does not say which
+    traded first. The ledger infers it from the bar's colour
+    (``intrabar_tp_first``); the other convention — used by other graders —
+    always takes the stop side first. Neither is observed, so the gap between
+    them is how much of the ledger rests on the inference: the trades where
+    the two disagree are exactly the ones the bars cannot settle. Stop-first
+    is not a floor. Taking the low first also means a bar that fills TP1 is
+    never re-checked against the breakeven stop that fill creates, so on those
+    bars it books more than the inferred order does.
+
+    Both columns are the replay, never one replay against the stored ledger:
+    the replay reads its own fetch of the bars and its own timeout cut, and a
+    pair is only paired if both sides go through the same steps.
+    """
+    from wolf.models import Signal
+
+    raw = tracker._store.read(OUTCOMES_KEY, default=[]) or []
+    signals = [Signal.from_dict(d) for d in raw if isinstance(d, dict)][-limit:]
+    signals = [s for s in signals if Status(s.status).is_graded and s.tp_ladder]
+    if not signals:
+        return {"error": "no graded signals with a ladder to replay"}
+
+    live = tracker._ladder.intrabar_tp_first
+    probes = {
+        "inferred": Tracker(tracker._store, tracker._client, tracker._settings,
+                            ladder=replace(tracker._ladder, intrabar_tp_first=True)),
+        "stop_first": Tracker(tracker._store, tracker._client, tracker._settings,
+                              ladder=replace(tracker._ladder, intrabar_tp_first=False)),
+    }
+    a: list[float] = []
+    b: list[float] = []
+    open_at_cut = 0
+    by_strategy: dict[str, list[float]] = {}
+    for sig in signals:
+        try:
+            candles = _history(tracker, sig)
+        except Exception:
+            log.exception("History fetch failed for %s", sig.symbol)
+            candles = None
+        if not candles:
+            continue
+        bars, clock = _within_timeout(sig, candles)
+        if not bars:
+            continue
+        pair = []
+        for probe in probes.values():
+            created_at = _parse_iso(sig.created_at)
+            try:
+                res = probe._evaluate(
+                    replace(sig, status=Status.PENDING.value, tps_hit=[], exit_price=None,
+                            exit_time=None, pnl_pct=None, r_multiple=None, resolved_at=None),
+                    bars, created_at, clock,
+                )
+            except Exception:
+                log.exception("Intrabar re-grade failed for %s", sig.symbol)
+                res = None
+            pair.append(_r_of(sig, res, bars))
+        if any(p is None for p in pair):
+            continue  # scored both ways, or not at all
+        (ra, settled), (rb, _) = pair
+        a.append(ra)
+        b.append(rb)
+        open_at_cut += 0 if settled else 1
+        by_strategy.setdefault((sig.strategy or "?").upper(), []).append(rb - ra)
+
+    if not a:
+        return {"error": "no signal had price history reaching back to its entry"}
+    row = _paired("inferred", "stop_first", a, b)
+    _adjust_paired([row])
+    return {
+        "error": "",
+        "live_rule": "inferred" if live else "stop_first",
+        "sample": len(signals),
+        "scored": len(a),
+        "open_at_cut": open_at_cut,
+        "results": [_summarise("inferred", a), _summarise("stop_first", b)],
+        "paired": row,
+        "by_strategy": {
+            k: {"n": len(v), "changed": sum(1 for d in v if abs(d) > 1e-9),
+                "mean_diff": round(statistics.fmean(v), 4)}
+            for k, v in sorted(by_strategy.items())
+        },
+    }
+
+
+def _r_of(sig, res, bars: list) -> Optional[tuple[float, bool]]:
+    """R of one evaluated replay, and whether the bars settled it."""
+    if res is None:
+        return None
+    risk = _risk_pct(sig)
+    if not risk:
+        return None
+    pnl, settled = res.realized_pnl_pct, True
+    if pnl is None and res.terminal is None:
+        settled = False
+        ladder = normalize_ladder(sig.tp_ladder, sig.tp, sig.sl, sig.entry_price, sig.is_long)
+        pnl = _partial_pnl(sig.entry_price, sig.is_long, ladder, res.tps_hit, bars[-1].close)
+    elif pnl is None and res.exit_price and sig.entry_price > 0:
+        move = res.exit_price - sig.entry_price
+        pnl = (move if sig.is_long else -move) / sig.entry_price * 100
+    if pnl is None:
+        return None
+    return pnl / risk, settled
+
+
+def render_intrabar(report: dict) -> str:
+    if report.get("error"):
+        return f"WHATIF intrabar: {report['error']}"
+    p = report["paired"]
+    inf, stop = report["results"]
+    lines = [
+        f"WHATIF intrabar | scored {report['scored']} of {report['sample']} resolved "
+        f"signals, replayed on 15m bars up to each timeout",
+        f"live rule: {report['live_rule']} (bar colour decides which side traded first)",
+        inf.line(),
+        stop.line(),
+        f"stop_first - inferred: {p['mean_diff']:+.4f}R/trade  t={p['t']:+.2f} {_padj(p)}",
+        f"changed {p['changed']} of {p['n']} trades (+{p['helped']}/-{p['hurt']}); "
+        f"tied {p['n'] - p['changed']}",
+        f"open at the cut: {report['open_at_cut']} (valued at the last close, same both ways)",
+    ]
+    for name, s in report["by_strategy"].items():
+        lines.append(f"  {name:<9} n={s['n']:<4} changed {s['changed']:<3} diff {s['mean_diff']:+.4f}R")
+    lines.append(
+        "read: the diff is how much of the ledger rests on guessing bar order. "
+        "stop_first is the opposite guess, not a floor: it also skips the "
+        "breakeven re-check on a bar that fills TP1, so either column can be higher."
+    )
+    return "\n".join(lines)
+
+
 # ── ladder geometry ─────────────────────────────────────────────────────────
 
 

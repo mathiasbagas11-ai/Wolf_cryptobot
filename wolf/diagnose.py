@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Iterable, Optional
 
-from wolf.config import LadderSettings, state_is_persistent, volume_mount
+from wolf.config import LadderSettings, instance_label, state_is_persistent, volume_mount
 from wolf.market import age_minutes
 from wolf.models import Signal, Status
 from wolf.stats import DEFAULT_FDR, benjamini_hochberg, mean_gap, t_to_p
@@ -631,6 +631,25 @@ def _apply_fdr(families: tuple[dict, ...], fdr: float = DEFAULT_FDR) -> None:
         bucket["fdr_survives"] = bool(keep)
 
 
+def _token_conflict(tracker, window_hours: float) -> Optional[dict]:
+    """The poller's record of Telegram 409s, if one landed in the window."""
+    try:
+        row = tracker._store.read("telegram_poll_conflict", default=None) or {}
+    except Exception:
+        return None
+    last = row.get("last_at")
+    if not last:
+        return None
+    try:
+        at = datetime.fromisoformat(last)
+    except (TypeError, ValueError):
+        return None
+    hours = window_hours if window_hours and window_hours > 0 else 24.0
+    if datetime.now(timezone.utc) - at > timedelta(hours=hours):
+        return None
+    return {"count": int(row.get("count") or 0), "last_at": last}
+
+
 def diagnose(
     tracker: Tracker,
     *,
@@ -954,6 +973,11 @@ def diagnose(
     # still inside the container, so it is wiped exactly like a relative path.
     if state_dir and not state_is_persistent(state_dir):
         flags.append("STATE_NOT_PERSISTED")
+    # Another process polling this bot's Telegram token: a second copy of the
+    # bot, wherever it runs. Counted by the poller from Telegram's 409s.
+    shared_token = _token_conflict(tracker, window_hours)
+    if shared_token:
+        flags.append(f"TELEGRAM_TOKEN_SHARED(x{shared_token['count']})")
     # Failures of the AI layer, counted over the signals it actually ran on.
     # NO_AI is excluded deliberately: a layer that is switched off never tried,
     # which is a configuration choice and not a fault, and folding it in here
@@ -1049,9 +1073,11 @@ def diagnose(
         "ai_failure_rate": round(ai_failure_rate, 3),
         "concurrency": conc,
         "flags": flags,
+        "token_conflict": shared_token,
         "state_dir": state_dir,
         "state_persistent": state_is_persistent(state_dir) if state_dir else None,
         "volume_mount": volume_mount(),
+        "instance": instance_label(),
         "thresholds": {
             "min_conclusive_trades": MIN_CONCLUSIVE_TRADES,
             "conclusive_t": CONCLUSIVE_T,
@@ -1289,6 +1315,8 @@ def render_digest(diag: dict) -> str:
         mark = "ok" if diag.get("state_persistent") else "EPHEMERAL"
         mount = diag.get("volume_mount") or "none detected"
         lines.append(f"state    {diag['state_dir']} [{mark}] volume_mount={mount}")
+    if diag.get("instance"):
+        lines.append(f"instance {diag['instance']}")
     lad = diag.get("ladder") or {}
     if lad.get("avg_win_r") or lad.get("avg_loss_r"):
         fill = lad.get("rung_fill_rate") or {}
@@ -1323,6 +1351,12 @@ def render_digest(diag: dict) -> str:
                 lines.append(f"           x{count} {reason}")
     if diag["flags"]:
         lines.append("flags    " + " ".join(diag["flags"]))
+    if diag.get("token_conflict"):
+        tc = diag["token_conflict"]
+        lines.append(
+            f"telegram another process is polling this bot token (last {tc['last_at'][:16]}Z): "
+            "a second copy of the bot is running and posting to this chat"
+        )
     n_family = sum(
         len(diag.get(k) or {})
         for k in ("by_strategy", "by_whale_stance", "by_onchain_bias",

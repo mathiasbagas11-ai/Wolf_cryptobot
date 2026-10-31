@@ -109,6 +109,31 @@ def volume_mount() -> str:
     return os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
 
 
+def instance_label() -> str:
+    """Which running copy of the bot this is, in words the owner can find.
+
+    Two copies once ran side by side for days, one on the volume with the
+    configured gates and one ephemeral on every default, both posting to the
+    same chat. Their cards looked alike and nothing on them said which
+    deployment wrote them, so the copy was found only because its cards
+    disagreed about ``max_cost_r``. Railway exports the project, service and
+    environment names and the commit to every deployment; printing them
+    makes a second copy visible on its first card.
+    """
+    env = os.environ
+    parts = [
+        env.get("RAILWAY_PROJECT_NAME", "").strip(),
+        env.get("RAILWAY_SERVICE_NAME", "").strip(),
+        env.get("RAILWAY_ENVIRONMENT_NAME", "").strip(),
+    ]
+    name = "/".join(p for p in parts if p)
+    commit = env.get("RAILWAY_GIT_COMMIT_SHA", "").strip()[:7]
+    if not name:
+        import socket
+        return f"not on Railway (host {socket.gethostname()})"
+    return f"railway {name}" + (f" @ {commit}" if commit else "")
+
+
 def state_is_persistent(state_dir: str) -> bool:
     """Whether ``state_dir`` looks like it survives a redeploy.
 

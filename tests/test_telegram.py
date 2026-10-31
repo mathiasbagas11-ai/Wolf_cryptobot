@@ -158,8 +158,11 @@ def test_stats_card_risk_gate_monitor():
     })
     text = sess.calls[0]["text"]
     assert "Risk-gate monitor" in text
-    assert "Against-regime" in text and "enable REGIME_HARD_BLOCK" in text
-    assert "Weak-strategy" in text and "not hurting" in text
+    assert "Against-regime" in text and "Weak-strategy" in text
+    # The monitor reports the gap and stops: a daily win-rate delta is not
+    # grounds to flip a hard block, so the card no longer suggests one.
+    assert "HARD_BLOCK" not in text and "not hurting" not in text
+    assert "read /diag before changing a gate" in text
 
 
 # ── disabled notifier is a no-op ───────────────────────────────────────────
@@ -274,8 +277,8 @@ def test_stats_card_ai_section():
     assert "AI verdict accuracy" in text
     assert "CONFIRM" in text and "70.0%" in text
     assert "REJECT" in text and "30.0%" in text
-    # -25pp vs 50% overall → "consider veto mode"
-    assert "consider veto mode" in text
+    # -25pp vs 50% overall is reported, not acted on.
+    assert "consider veto mode" not in text and "pattern, not a finding" in text
 
 
 # ── error handling: Telegram API failure is logged, returns False ──────────
