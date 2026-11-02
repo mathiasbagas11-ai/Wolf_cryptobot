@@ -285,9 +285,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-02, `/beta` built, not yet read
+## Status — 2026-11-02, `/beta` read on a 13-day window; reach fixed
 
-1132 tests green. Working tree clean.
+1134 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -666,6 +666,24 @@ path memory, so its 10,000 replays are a random-walk baseline and cannot
 contain a setup's edge — the `/bbtest` baseline lesson again — and its
 history check (~33 fires) prints no interval. Nothing taken; Wolf's
 simulations already carry fixed seeds.
+
+**First `/beta` (2026-11-02) — a 13-day window, not the read.** 231 of
+497 trades priced; 266 fell outside the bars because the client's first
+answering venue (OKX) serves 300 hourly bars, ~12.5 days — the shrinking-
+reach lesson again, caught by the `outside BTC history` line the card was
+built to print. Fixed: Binance's data host first (1000 bars, ~41 days),
+bar source and reach printed, and a line when the skip count makes the card
+a recent window. Window figures: slope +1.06 (t +9.2 clustered, df 12),
+R² 0.14; **meanR +0.002 = from BTC +0.047 + rest −0.045** (net rest
+−0.132); BTC WITH the trade 118 at **+0.245**, AGAINST 113 at **−0.251**;
+ETH agrees (+0.042 / −0.040). SHORT +0.177 is mostly BTC falling (from BTC
++0.115); PREDUMP +0.482 has the largest rest (+0.322) at padj 0.457 —
+pattern, not finding. Plain reading for the owner: the bot sits on BTC's
+side about half the time, a trade's result swings ~±0.25R with BTC, and
+once BTC is taken out what remains is slightly negative before costs.
+**Pre-registered read still due: `/beta` again after the deploy**, whole
+log, expect `outside BTC history` near 0. Criterion (1) sits at its line
+(0.047 vs 0.05) on the window, so do not pre-judge it.
 
 **Notifications stop giving advice (10-31, "gas rapihin semua notif").**
 The owner asked why the Telegram balance (2,006.26) differed from the
@@ -1253,7 +1271,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1132 tests, ~15s
+python -m pytest            # 1134 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

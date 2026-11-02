@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+
+import pytest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -11,6 +13,12 @@ from wolf.models import Candle, Signal, Status
 from wolf.notify.commands import CommandRouter
 
 from tests.test_whatif import _router_app
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """The direct Binance fetch is never reached from tests; the fake client is."""
+    monkeypatch.setattr("wolf.beta._DIRECT_HOSTS", ())
+
 
 NOW = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
 T0 = int((NOW - timedelta(days=30)).timestamp() * 1000)
@@ -119,3 +127,25 @@ def test_beta_is_reachable_as_a_telegram_command(store, fake_client):
     reply = CommandRouter(_router_app(store, fake_client)).handle("/beta")
     assert reply.startswith("<pre>BETA")
     assert "/beta" in CommandRouter(_router_app(store, fake_client)).handle("/help")
+
+
+def test_a_short_venue_history_is_named_on_the_card(fake_client):
+    """The first live read reached 12.5 days because the venue that answered
+    serves 300 bars; the card must say how far back its bars go and that a
+    large skipped count means a window, not the whole log."""
+    fake_client.klines["BTCUSDT"] = _btc(lambda i: 100.0 + i)[-300:]
+    first = 30 * 24 - 300
+    inside = [_trade(first + 24 * k, 3, r=0.1 * k) for k in range(5)]
+    outside = [_trade(24 * k, 3, r=0.0) for k in range(5)]
+    card = render(beta_report(inside + outside, fake_client, now=NOW))
+    assert "300 bars ≈ 12.5 days" in card
+    assert "most recent window, not the whole log" in card
+
+
+def test_the_direct_host_is_tried_before_the_bot_client(fake_client, monkeypatch):
+    calls = []
+    monkeypatch.setattr("wolf.beta._fetch_direct",
+                        lambda symbol: calls.append(symbol) or _btc(lambda i: 100.0 + i))
+    report = beta_report([_trade(24 * k, 3, r=0.1 * k) for k in range(5)], fake_client, now=NOW)
+    assert calls == ["BTCUSDT", "ETHUSDT"]
+    assert report["source"].startswith("binance")
