@@ -37,6 +37,8 @@ _HELP = (
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
     "<code>/mae</code> — how far trades went for and against them before closing "
     "(add hours, e.g. <code>/mae 168</code>)\n"
+    "<code>/beta</code> — how much of each trade's R was BTC moving under it "
+    "(add hours, e.g. <code>/beta 168</code>)\n"
     "<code>/learning</code> — strategy edge &amp; blacklist\n"
     "<code>/active</code> — open signals\n"
     "<code>/rank</code> — AI ranking of the live signals, best first\n"
@@ -86,6 +88,8 @@ class CommandRouter:
             return self._bbtest(arg)
         if cmd in ("mae", "mfe", "excursion"):
             return self._excursion(arg)
+        if cmd == "beta":
+            return self._beta(arg)
         if cmd in ("montecarlo", "mc"):
             return self._montecarlo(arg)
         if cmd == "learning":
@@ -513,6 +517,25 @@ class CommandRouter:
         except Exception:
             log.exception("Excursion card failed")
             return "⚠️ MAE card failed — see logs."
+        return f"<pre>{esc(render(report))}</pre>"
+
+    def _beta(self, arg: str) -> str:
+        """Split each trade's R into BTC's move under it and the rest."""
+        from wolf.beta import beta_report, render
+
+        try:
+            hours = float(arg) if arg else 0.0
+        except ValueError:
+            return "⚠️ Usage: <code>/beta</code> or <code>/beta 168</code>"
+        try:
+            report = beta_report(
+                self._app.tracker.outcomes(), self._app.tracker._client,
+                round_trip_bps=self._app.settings.round_trip_cost_bps,
+                window_hours=hours,
+            )
+        except Exception:
+            log.exception("Beta card failed")
+            return "⚠️ Beta card failed — see logs."
         return f"<pre>{esc(render(report))}</pre>"
 
     def _montecarlo(self, arg: str) -> str:
