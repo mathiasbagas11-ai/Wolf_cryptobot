@@ -659,7 +659,13 @@ the crypto regime score (unvalidated by its own account; as a filter it
 would be a strategy change), and the circuit breaker / pre-trade gate, which
 belong to the owner's manual journal if that offer is ever taken. The earlier
 `Jakeschincariol/trader-skill` (US stocks, order plumbing, no measurement)
-was reviewed the same day; nothing taken.
+was reviewed the same day; nothing taken. So was its sequel
+`Jakeschincariol/day-trader-skill` (US-equity opening-range day trading):
+its "Time Machine" resamples 5m bars independently, which erases any
+path memory, so its 10,000 replays are a random-walk baseline and cannot
+contain a setup's edge — the `/bbtest` baseline lesson again — and its
+history check (~33 fires) prints no interval. Nothing taken; Wolf's
+simulations already carry fixed seeds.
 
 **Notifications stop giving advice (10-31, "gas rapihin semua notif").**
 The owner asked why the Telegram balance (2,006.26) differed from the
