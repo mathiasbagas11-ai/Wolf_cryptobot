@@ -260,7 +260,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty-one entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty-two entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -277,15 +277,17 @@ Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
 INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
 **`contest-max-score-self-blinding` moved OPEN → INCONCLUSIVE on 2026-10-20 —
 max(score) is not a lever either; the floor-bias worry is closed.**
+One added 2026-11-02: `btc-beta-explains-the-ledger` (OPEN, criteria written
+before any read).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-31, notifications stop giving advice
+## Status — 2026-11-02, `/beta` built, not yet read
 
-1123 tests green. Working tree clean.
+1132 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -634,6 +636,30 @@ wording is fixed. The same card showed `TELEGRAM_TOKEN_SHARED(x131)` with
 the last 409 at 23:18, about 24 minutes before a card issued after a
 redeploy, so the copy may have stopped. Read the flag again after 24h,
 when the record ages out of the window.
+
+**`/beta` built (2026-11-02, "gas cek beta") — first read due now.**
+The owner asked to learn from `tradermonty/claude-trading-skills` (MIT;
+mostly US-equity swing workflows). Its `residual-edge-analyzer` asks the one
+question no Wolf card had: how much of the ledger is the market moving under
+the positions. `/beta` measures, per resolved trade, BTC's move from
+activation to exit (1h bars, interpolated inside the hour), signed toward the
+trade and divided by the trade's own stop, clipped at ±3R; regresses gross R
+on it with errors clustered by UTC exit day; and prints `meanR = from BTC +
+rest`, a WITH/AGAINST count, ETH as the one sensitivity check, and LONG/SHORT
+and per-strategy rows (pooled slope, rest tested, `padj`). **A positive slope
+is expected by construction** — read `x̄` (did the bot sit on BTC's side) and
+the size of `from BTC`, never `rest` as alpha. Criteria are in the registry
+(`btc-beta-explains-the-ledger`), written before any read: material if
+|from BTC| ≥ 0.05R/trade with the slope's clustered t ≥ 2; ETH must agree;
+no outcome changes a gate. Not checked against real candles from here (the
+sandbox cannot reach an exchange) — read the `outside BTC history` count on
+the first card. Also reviewed and not taken from the same repo: its
+backtest sample rule ("5% edge needs 100+ trades" is about t≈0.5 at sd 1R),
+the crypto regime score (unvalidated by its own account; as a filter it
+would be a strategy change), and the circuit breaker / pre-trade gate, which
+belong to the owner's manual journal if that offer is ever taken. The earlier
+`Jakeschincariol/trader-skill` (US stocks, order plumbing, no measurement)
+was reviewed the same day; nothing taken.
 
 **Notifications stop giving advice (10-31, "gas rapihin semua notif").**
 The owner asked why the Telegram balance (2,006.26) differed from the
@@ -1221,7 +1247,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1123 tests, ~15s
+python -m pytest            # 1132 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1234,6 +1260,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/whatif.py` | paired re-scoring: stop rules, ladder geometry, whale policies |
 | `wolf/chase_audit.py` | grades what the chase gate dropped (settled: not a lever) |
 | `wolf/contest_audit.py` | pairs each displaced candidate against the winner that beat it |
+| `wolf/beta.py` | each trade's R split into BTC's move under it and the rest, clustered by day (`/beta [hours]`) |
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
