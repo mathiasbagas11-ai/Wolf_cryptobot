@@ -277,15 +277,15 @@ Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
 INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
 **`contest-max-score-self-blinding` moved OPEN → INCONCLUSIVE on 2026-10-20 —
 max(score) is not a lever either; the floor-bias worry is closed.**
-One added 2026-11-02: `btc-beta-explains-the-ledger` (OPEN, criteria written
-before any read).
+One added 2026-11-02: `btc-beta-explains-the-ledger` — **ADOPTED the same
+day** on its pre-registered read (material; see Status).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-02, `/beta` read on a 13-day window; reach fixed
+## Status — 2026-11-02, `/beta` read: the flat gross is BTC tailwind
 
 1134 tests green. Working tree clean.
 
@@ -684,6 +684,21 @@ once BTC is taken out what remains is slightly negative before costs.
 **Pre-registered read still due: `/beta` again after the deploy**, whole
 log, expect `outside BTC history` near 0. Criterion (1) sits at its line
 (0.047 vs 0.05) on the window, so do not pre-judge it.
+
+**`/beta` read (2026-11-02, whole log, pre-registered) → MATERIAL.**
+497 of 497 trades, 26 days, Binance bars 41.6 days, 0 skipped. Slope +1.29
+(t +8.5 clustered, df 25), R² 0.17. **meanR −0.000 = from BTC +0.055 + rest
+−0.055; rest net −0.142.** WITH 251 at +0.337 vs AGAINST 246 at −0.344.
+ETH agrees (+0.061 / −0.061). Nothing per group at `padj` < 0.05 (LONG
+rest −0.180 and PREPUMP −0.463 lowest at 0.106; PREDUMP +0.183 at 0.308).
+**What it means:** the bot's flat gross was BTC's drift paying +0.055R a
+trade over a remainder that loses; strip the market out and it is worse
+(−0.142 net), not better. **The caveat that keeps it from being a lever:**
+the WITH rate is 50.5% — the bot does not pick BTC's side, BTC happened to
+drift with its book (shorts while BTC fell). That tailwind need not recur.
+Owner-facing rule from here: quote the rest beside every pooled meanR, and
+read any strategy's sign flip beside its `from BTC` column. Re-read once on
+a disjoint log (~4 weeks).
 
 **Notifications stop giving advice (10-31, "gas rapihin semua notif").**
 The owner asked why the Telegram balance (2,006.26) differed from the
