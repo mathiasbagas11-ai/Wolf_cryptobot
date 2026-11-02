@@ -43,7 +43,7 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
-from wolf.models import Signal, Status
+from wolf.models import Candle, Signal, Status
 from wolf.stats import DEFAULT_FDR, benjamini_hochberg, t_to_p
 from wolf.tracker import _activation_time, _parse_iso, _risk_pct, r_multiple_of
 
@@ -226,13 +226,48 @@ def _baseline(rows: list[dict]) -> Optional[dict]:
     return fit
 
 
-def _fetch(client, symbol: str) -> list:
-    try:
-        bars = client.get_klines(symbol, interval=INTERVAL, limit=MAX_BARS) or []
-    except Exception:
-        log.exception("Baseline fetch failed for %s", symbol)
-        return []
-    return sorted(bars, key=lambda c: c.time)
+#: Binance's public data host first. The bot's own client tries venues in
+#: order and the first that answers wins — on Railway that has been OKX, which
+#: serves at most 300 bars, so the card reached back 12.5 days and dropped
+#: 266 of 497 trades as "outside BTC history" on its first read (2026-11-02).
+#: A loss that falls on the oldest trades is a window, not a random sample.
+_DIRECT_HOSTS = (
+    "https://data-api.binance.vision/api/v3/klines",
+    "https://api.binance.com/api/v3/klines",
+)
+
+
+def _fetch_direct(symbol: str, timeout: float = 10.0) -> list:
+    import requests
+
+    for url in _DIRECT_HOSTS:
+        try:
+            resp = requests.get(url, params={"symbol": symbol, "interval": INTERVAL,
+                                             "limit": MAX_BARS}, timeout=timeout)
+            rows = resp.json() if resp.status_code == 200 else None
+            if isinstance(rows, list) and rows:
+                return [Candle.from_binance(r) for r in rows]
+        except Exception as exc:  # network, JSON, malformed row: try the next host
+            log.debug("Direct %s fetch via %s failed: %s", symbol, url, exc)
+    return []
+
+
+def _fetch(client, symbol: str) -> tuple[list, str]:
+    """The baseline's hourly bars, and where they came from."""
+    bars = _fetch_direct(symbol)
+    source = "binance"
+    if not bars:
+        try:
+            bars = client.get_klines(symbol, interval=INTERVAL, limit=MAX_BARS) or []
+        except Exception:
+            log.exception("Baseline fetch failed for %s", symbol)
+            bars = []
+        source = "bot client (venue may serve fewer than 1000 bars)"
+    bars = sorted(bars, key=lambda c: c.time)
+    if bars:
+        days = (bars[-1].time - bars[0].time) / 86_400_000
+        source = f"{source}, {len(bars)} bars ≈ {days:.1f} days"
+    return bars, source
 
 
 def beta_report(outcomes: Iterable[Signal], client, *, round_trip_bps: float = 20.0,
@@ -241,7 +276,7 @@ def beta_report(outcomes: Iterable[Signal], client, *, round_trip_bps: float = 2
     outcomes = list(outcomes)
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(hours=window_hours) if window_hours > 0 else None
-    btc = _fetch(client, BASELINE)
+    btc, source = _fetch(client, BASELINE)
     if not btc:
         return {"error": f"no {INTERVAL} history served for {BASELINE}"}
     rows, unpriced = _rows(outcomes, btc, round_trip_bps, since)
@@ -263,14 +298,14 @@ def beta_report(outcomes: Iterable[Signal], client, *, round_trip_bps: float = 2
     order = {"LONG": 0, "SHORT": 1}
     table.sort(key=lambda g: (order.get(g["name"], 2), g["name"]))
 
-    eth = _fetch(client, SENSITIVITY)
+    eth, _ = _fetch(client, SENSITIVITY)
     eth_fit = None
     if eth:
         eth_rows, _ = _rows(outcomes, eth, round_trip_bps, since)
         eth_fit = _baseline(eth_rows) if eth_rows else None
 
     return {
-        "error": "", "window_hours": window_hours, "unpriced": unpriced,
+        "error": "", "window_hours": window_hours, "unpriced": unpriced, "source": source,
         "btc": fit, "eth": eth_fit, "groups": table,
         "thin": fit["days"] < MIN_CLUSTERS,
     }
@@ -297,8 +332,12 @@ def render(report: dict) -> str:
         f"BTC moved WITH the trade: {f['with_n']} trades, meanR {_r(f['with_r'])} | "
         f"AGAINST: {f['against_n']}, meanR {_r(f['against_r'])}",
     ]
+    lines.append(f"BTC bars: {report['source']}")
     if f["clipped"] or report["unpriced"]:
         lines.append(f"clipped at ±{X_CLIP:g}R: {f['clipped']}   outside BTC history: {report['unpriced']}")
+    if report["unpriced"] > f["n"] * 0.1:
+        lines.append("many trades fell outside the bars: this reads only the most recent window, "
+                     "not the whole log")
     if report["thin"]:
         lines.append(f"only {f['days']} days — the clustered error needs {MIN_CLUSTERS}+ to mean anything")
     e = report.get("eth")
