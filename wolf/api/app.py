@@ -29,6 +29,7 @@ from wolf.diagnose import diagnose, render_digest
 from wolf.logging_setup import setup_logging
 from wolf.chase_audit import grade_chase_drops, render as render_chase
 from wolf.contest_audit import audit_contests, render as render_contest
+from wolf.journal import journal
 from wolf.montecarlo import ledger_path, render as render_montecarlo, simulate
 from wolf.whatif import compare_stop_rules, render as render_whatif
 
@@ -122,6 +123,17 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             round_trip_bps=app_obj.settings.round_trip_cost_bps,
         )
         return {"enabled": True, **app_obj.account.summary(), "ledger": ledger}
+
+    @api.get("/journal", dependencies=[Depends(require_api_key)])
+    def journal_view() -> dict:
+        """The ledger as a journal: headline numbers, curve, calendar, setups."""
+        data = journal(
+            app_obj.tracker.outcomes(),
+            risk_pct=app_obj.settings.paper_risk_pct,
+            round_trip_bps=app_obj.settings.round_trip_cost_bps,
+            tz=app_obj.settings.timezone,
+        )
+        return data or {"empty": True}
 
     @api.get("/montecarlo", dependencies=[Depends(require_api_key)])
     def montecarlo(strategy: Optional[str] = None, format: str = "json"):

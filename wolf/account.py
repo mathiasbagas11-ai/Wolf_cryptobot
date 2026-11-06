@@ -162,9 +162,12 @@ class PaperAccount:
         st["realized"] = round(float(st.get("realized", 0.0)) + pnl_amount, 2)
         self._store.write(ACCOUNT_KEY, st)
 
-        return {
+        report = {
             "balance": st["balance"],
             "pnl_amount": round(pnl_amount, 2),
             "risk_amount": round(risk_amount, 2),
             "r_multiple": round(r_multiple, 2),
         }
+        if "net_balance" in st:
+            report["net_balance"] = st["net_balance"]
+        return report

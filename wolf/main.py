@@ -13,7 +13,7 @@ import uvicorn
 
 from wolf.api import create_app
 from wolf.app import ai_status, build_application
-from wolf.config import Settings, state_is_persistent
+from wolf.config import Settings, instance_label, state_is_persistent
 from wolf.logging_setup import setup_logging
 from wolf.notify.poller import TelegramPoller
 from wolf.scheduler import build_scheduler
@@ -81,11 +81,12 @@ def _state_label(application) -> str:
     """Where history lives and whether it survives the next redeploy."""
     store = application.store
     outcomes = len(store.read("signal_outcomes", default=[]) or [])
+    where = instance_label()
     if state_is_persistent(application.settings.state_dir):
-        return f"{store.base_dir} · {outcomes} outcomes (volume)"
+        return f"{store.base_dir} · {outcomes} outcomes (volume) · {where}"
     return (
         f"⚠️ {store.base_dir} · {outcomes} outcomes — EPHEMERAL, "
-        "wiped on every redeploy. Attach a volume."
+        f"wiped on every redeploy. Attach a volume. · {where}"
     )
 
 
