@@ -260,7 +260,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty-two entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty-three entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -278,16 +278,18 @@ INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
 **`contest-max-score-self-blinding` moved OPEN → INCONCLUSIVE on 2026-10-20 —
 max(score) is not a lever either; the floor-bias worry is closed.**
 One added 2026-11-02: `btc-beta-explains-the-ledger` — **ADOPTED the same
-day** on its pre-registered read (material; see Status).
+day** on its pre-registered read (material; see Status). One added
+2026-11-06: `elliott-wave2-entry` (OPEN, offline `/ewtest`, criteria written
+before any read).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-02, `/beta` read: the flat gross is BTC tailwind
+## Status — 2026-11-06, `/ewtest` built, not yet read
 
-1134 tests green. Working tree clean.
+1144 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -699,6 +701,26 @@ drift with its book (shorts while BTC fell). That tailwind need not recur.
 Owner-facing rule from here: quote the rest beside every pooled meanR, and
 read any strategy's sign flip beside its `from BTC` column. Re-read once on
 a disjoint log (~4 weeks).
+
+**`/ewtest` built (2026-11-06, "1" = "gas tes EW") — first read due now.**
+The owner counts Elliott Waves by hand and asked to add EW to the bot. They
+were told a count is subjective and always right in hindsight, so it went in
+as an **offline backtest only** (`wolf/ewtest.py`), modelled on `/bbtest` and
+reusing its 4h basket and data path. Rules fixed before any read: causal
+zigzag at 3×ATR (a pivot usable only from the bar that confirmed it), wave 2
+in the 50–61.8% zone, entry on the next open after a close beyond the prior
+bar, stop at the wave-2 extreme, target 1.618×W1, 60-bar cap, stop-first on
+a straddling bar. Long and short read separately. The baseline keeps each
+trade's own stop %, target multiple and time cap and randomises only the
+entry moment, so drift and geometry cancel and what is left is timing — the
+one thing a count claims. Calibrated on random walks before any real read:
+3 of 80 null runs cleared the 97.5% bar (nominal 2.5%). Criteria in the
+registry (`elliott-wave2-entry`). Even a pass earns a forward paper read,
+never the live path (rule 1). Also reviewed the same week and not built:
+a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
+0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
+commodities room (too few symbols for a sample; PAXG offered as an offline
+gold test, declined), `learnharness` (a human tutoring app, not trading).
 
 **Notifications stop giving advice (10-31, "gas rapihin semua notif").**
 The owner asked why the Telegram balance (2,006.26) differed from the
@@ -1286,7 +1308,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1134 tests, ~15s
+python -m pytest            # 1144 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1302,6 +1324,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/beta.py` | each trade's R split into BTC's move under it and the rest, clustered by day (`/beta [hours]`) |
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
+| `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |
