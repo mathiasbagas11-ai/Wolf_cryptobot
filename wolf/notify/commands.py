@@ -33,6 +33,8 @@ _HELP = (
     "<code>/paper</code> — paper balance &amp; return\n"
     "<code>/bbtest</code> — backtest the Bollinger dip rule from the video "
     "(~1 min; add a coin, e.g. <code>/bbtest BTC</code>)\n"
+    "<code>/ewtest</code> — backtest an Elliott Wave 2→3 entry against random entries "
+    "(~1 min; add a coin, e.g. <code>/ewtest ETH</code>)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
     "<code>/mae</code> — how far trades went for and against them before closing "
@@ -86,6 +88,8 @@ class CommandRouter:
             return self._paper()
         if cmd == "bbtest":
             return self._bbtest(arg)
+        if cmd == "ewtest":
+            return self._ewtest(arg)
         if cmd in ("mae", "mfe", "excursion"):
             return self._excursion(arg)
         if cmd == "beta":
@@ -503,6 +507,22 @@ class CommandRouter:
             log.exception("Bollinger backtest failed")
             return "⚠️ Backtest failed — see logs."
         return f"<pre>{esc(render(report))}</pre>"
+
+    def _ewtest(self, arg: str) -> str:
+        """Backtest the Elliott Wave 2→3 entry offline (see wolf.ewtest)."""
+        from wolf import ewtest
+
+        symbols = ewtest.DEFAULT_SYMBOLS
+        if arg:
+            sym = arg.split()[0].upper()
+            symbols = (sym if sym.endswith("USDT") else f"{sym}USDT",)
+        try:
+            report = ewtest.backtest(symbols, client=getattr(self._app, "client", None),
+                                     cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Elliott Wave backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(ewtest.render(report))}</pre>"
 
     def _excursion(self, arg: str) -> str:
         """Best and worst point of each resolved trade's path, in R."""
