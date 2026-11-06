@@ -279,15 +279,15 @@ INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
 max(score) is not a lever either; the floor-bias worry is closed.**
 One added 2026-11-02: `btc-beta-explains-the-ledger` — **ADOPTED the same
 day** on its pre-registered read (material; see Status). One added
-2026-11-06: `elliott-wave2-entry` (OPEN, offline `/ewtest`, criteria written
-before any read).
+2026-11-06: `elliott-wave2-entry` — **REJECTED the same day** on its
+pre-registered ten-coin read (see Status).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-06, `/ewtest` BTC-only read; basket read due
+## Status — 2026-11-06, `/ewtest` read: REJECTED both sides
 
 1144 tests green. Working tree clean.
 
@@ -721,6 +721,16 @@ a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
 0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
 commodities room (too few symbols for a sample; PAXG offered as an offline
 gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**`/ewtest` read (2026-11-06, ten coins, pre-registered) → REJECTED both
+sides.** LONG n=543 net −0.037 (random same geometry +0.024), beats 24%;
+SHORT n=490 net −0.115 (random −0.066), beats 28%. The wave-2 entry times
+the market no better than random with identical stop, target and cap —
+slightly worse. LINK +0.295 and LTC +0.217 are the best of ten under a
+null, not a lead; years swing 2023 +41.9R / 2024 −56.6R. The rejection
+covers this rigid rule set only; the owner was told the wave-2 setup alone
+is not an entry signal and EW is context at most. **Do not re-open by
+retuning zone, target or timeframe on this data.**
 
 **`/ewtest BTC` (2026-11-06) — one coin, not the read.** LONG n=49 net
 +0.127, beats 73% of same-geometry random entries; SHORT n=44 net −0.459,
