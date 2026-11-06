@@ -287,7 +287,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-06, `/ewtest` built, not yet read
+## Status — 2026-11-06, `/ewtest` BTC-only read; basket read due
 
 1144 tests green. Working tree clean.
 
@@ -721,6 +721,13 @@ a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
 0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
 commodities room (too few symbols for a sample; PAXG offered as an offline
 gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**`/ewtest BTC` (2026-11-06) — one coin, not the read.** LONG n=49 net
++0.127, beats 73% of same-geometry random entries; SHORT n=44 net −0.459,
+beats 22%. Both under the 100-trade minimum → INCONCLUSIVE. Win rates of
+16–20% are what a 1.618×W1 target implies, so years swing ±15R and the
+random p97.5 sits far above the median. **The pre-registered read is the
+plain `/ewtest` (ten coins); still due.**
 
 **Notifications stop giving advice (10-31, "gas rapihin semua notif").**
 The owner asked why the Telegram balance (2,006.26) differed from the
