@@ -287,7 +287,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-06, `/ewtest` read: REJECTED both sides
+## Status — 2026-11-07, first `/mae` read; `/ewtest` REJECTED both sides
 
 1144 tests green. Working tree clean.
 
@@ -721,6 +721,20 @@ a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
 0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
 commodities room (too few symbols for a sample; PAXG offered as an offline
 gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**First `/mae` (2026-11-07, whole log) — descriptive, nothing to act on.**
+136 resolved trades with a recorded path (361 earlier rows left out by
+name). Medians: MFE 0.96R, MAE 0.74R. Winners (72) dipped a median 0.28R;
+only 7 went ≥0.8R against before winning. **Losers (64): 23 (36%) were
+≥0.5R green before stopping out**, median MFE 0.29R. By strategy MFE:
+SCALP 1.31, PREDUMP 1.11, TRAP 0.99, **MOMENTUM 0.66** (consistent with
+late breakout entries; pattern only), SWING 0.48 and PREPUMP 0.58 on n=5.
+The owner was told the obvious move (breakeven at +0.5R) also closes
+winners that dip, that exit geometry and stop rules are settled as not a
+lever, and that this card checks a stop/target argument rather than
+starting one. Note for anyone tempted: the settled stop-rule replays did not
+cut at the timeout (Broken #3), so a re-test would have to fix that first
+and be pre-registered — it is not queued.
 
 **`/ewtest` read (2026-11-06, ten coins, pre-registered) → REJECTED both
 sides.** LONG n=543 net −0.037 (random same geometry +0.024), beats 24%;
