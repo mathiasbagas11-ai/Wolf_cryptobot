@@ -260,7 +260,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty-three entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty-four entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -280,16 +280,18 @@ max(score) is not a lever either; the floor-bias worry is closed.**
 One added 2026-11-02: `btc-beta-explains-the-ledger` — **ADOPTED the same
 day** on its pre-registered read (material; see Status). One added
 2026-11-06: `elliott-wave2-entry` — **REJECTED the same day** on its
-pre-registered ten-coin read (see Status).
+pre-registered ten-coin read (see Status). One added 2026-11-08:
+`sweep-session-context` (OPEN, `sess:` rows on `/diag`, criteria written
+before any read).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-08, 24h card logged; COMBO read still 11-21
+## Status — 2026-11-08, `sess:` split built, first read due; COMBO 11-21
 
-1144 tests green. Working tree clean.
+1147 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -721,6 +723,25 @@ a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
 0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
 commodities room (too few symbols for a sample; PAXG offered as an offline
 gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**`sess:` split built (2026-11-08, "gas tambahin label sesi").** The owner
+sent a manual SMC trader's 5m charts and journal (session AMD boxes, sweep →
+CHoCH/MSS → OB/IDM retest entry, fixed 2R, 5–10x at ~$10 risk; 5 of 5 wins,
+all on 11-07). Told: 5 trades on one day is ~1–2 observations; their own
+journal shows cost eating up to 0.36R on a 0.31% stop (ETHFI 1.64R booked
+against 2R planned); session labels may be drawn after the fact. Asked
+whether the bot already does it: **partly** — TRAP and SCALP are the same
+sweep-and-reclaim on 15m, but take it at any hour, without a retest, with a
+ladder instead of a single 2R. The session part is testable on existing
+data, so `/diag` now splits TRAP+SCALP by the UTC hour of creation (ASIA
+00–07, LONDON 07–13, NEWYORK 13–21, LATE 21–24, fixed before any read) and
+prints one named contrast, `sess:LDN+NY-ASIA+LATE`, in the FDR family; each
+session row carries its measured fee+spread. Registry
+`sweep-session-context` (OPEN) holds the criteria: read 1 is `/diag 600`
+on the whole capped log now, read 2 on a disjoint log ~4 weeks later, both
+needed. **Nothing filters on a session.** Offered for the trader's journal:
+planned-vs-booked R, a session column, skipped setups, and analysing its
+CSV once it holds 50+ trades.
 
 **Real-bot card 11-08 02:55 (24h, `@ e899519`).** n=8 `eff=4`, +0.338
 gross / +0.271 net, ci95 [−0.687, +1.363]; MOMENTUM 4/5 (+0.680). No
@@ -1349,7 +1370,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1144 tests, ~15s
+python -m pytest            # 1147 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1358,6 +1379,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | Path | What it holds |
 |---|---|
 | `wolf/diagnose.py` | the diagnostic card — the project's centre of gravity |
+| `wolf/diagnose.py` `sess:` | TRAP+SCALP split by UTC session of creation; one pre-registered London/NY vs Asia/late contrast |
 | `wolf/stats.py` | BH-FDR, Student-t, Welch gap with the overlap discount |
 | `wolf/whatif.py` | paired re-scoring: stop rules, ladder geometry, whale policies |
 | `wolf/chase_audit.py` | grades what the chase gate dropped (settled: not a lever) |
