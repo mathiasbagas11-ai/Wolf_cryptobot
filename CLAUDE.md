@@ -287,7 +287,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-07, first `/mae` read; `/ewtest` REJECTED both sides
+## Status — 2026-11-08, 24h card logged; COMBO read still 11-21
 
 1144 tests green. Working tree clean.
 
@@ -721,6 +721,16 @@ a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
 0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
 commodities room (too few symbols for a sample; PAXG offered as an offline
 gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**Real-bot card 11-08 02:55 (24h, `@ e899519`).** n=8 `eff=4`, +0.338
+gross / +0.271 net, ci95 [−0.687, +1.363]; MOMENTUM 4/5 (+0.680). No
+`TELEGRAM_TOKEN_SHARED` flag on a current build, so the copy has likely
+stopped. `combo:COMBO-OTHER` printed +1.816R at t +4.27 on **two** COMBO
+trades — the same two rows as `whale:WITH` and `liq:TIGHT` (identical
++1.700), one event through three labels, `padj` 1.000; the owner was told it
+is read on 11-21 and not before. 9 chase drops (MOMENTUM 7) outnumbered the
+8 traded — noted, settled, not re-argued. 5 of 8 traded rows `whale:NO_DATA`.
+Cards 10-31 → 11-07 not sent; `/diag 720` on 11-21 covers them.
 
 **First `/mae` (2026-11-07, whole log) — descriptive, nothing to act on.**
 136 resolved trades with a recorded path (361 earlier rows left out by
