@@ -281,15 +281,15 @@ One added 2026-11-02: `btc-beta-explains-the-ledger` — **ADOPTED the same
 day** on its pre-registered read (material; see Status). One added
 2026-11-06: `elliott-wave2-entry` — **REJECTED the same day** on its
 pre-registered ten-coin read (see Status). One added 2026-11-08:
-`sweep-session-context` (OPEN, `sess:` rows on `/diag`, criteria written
-before any read).
+`sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
+−0.018R; see Status).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-08, `sess:` split built, first read due; COMBO 11-21
+## Status — 2026-11-10, `/diag 600` read: session REJECTED, liq holds; COMBO 11-21
 
 1147 tests green. Working tree clean.
 
@@ -723,6 +723,31 @@ a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
 0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
 commodities room (too few symbols for a sample; PAXG offered as an offline
 gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**Second `/diag 600` (2026-11-10 13:28, window 10-16 → 11-10, `@ 1230684`).**
+447 traded, `eff=69`, `mean_open` 6.44: **+0.013 gross / −0.074 net**
+(measured fee+spread 0.064R → about −0.051). Same shape as every pool:
+flat gross, negative net. Strategies, all `padj` 1.000: PREDUMP n=50
+**+0.436** (net +0.370; was +0.071 on the first `/diag 600`), TRAP +0.113,
+SCALP −0.011, SWING −0.219, PREPUMP −0.294, **MOMENTUM n=118 −0.152** (net
+−0.233) — the one strategy the old real-money advice leaned on is now the
+worst large row, so the pause stands. Ladder needs WR 50.5%. Results:
+- **`sess:` → REJECTED** (pre-registered rule: read 1 gap ≤ 0).
+  `LDN+NY-ASIA+LATE` −0.018R, padj 1.000; ASIA +0.104, LONDON +0.089,
+  NEWYORK +0.014, LATE −0.076. The session part of the SMC method does not
+  improve the bot's sweeps. Do not read ASIA's top row as a lead.
+- **`liq:` shape holds, but this is not the clean replication** — the
+  window overlaps the first read by ~7 days. TIGHT +0.103 / +0.046 net,
+  MID +0.004 / −0.059, WIDE −0.121 / −0.196; monotone again, TIGHT
+  net-positive this time. **Clean disjoint read: `/diag 600` from ~11-18.**
+- **COMBO shown, not read** (rule: 11-21): 59 vs 237, gap +0.146,
+  padj 1.000.
+- `whale:` WITH +0.189 vs AGAINST −0.067 again (first read +0.185 /
+  −0.111); `wxs` WITH positive for SCALP, TRAP, PREDUMP. Pattern only.
+- `conv:UNRANKED` −0.739 (padj 0.320, lowest) is the known first-look
+  artifact. `TELEGRAM_TOKEN_SHARED(x131)` is the 10-30 record still inside
+  a 600h window (last 409 at 10-30 23:18); the copy has not polled since.
+- 261 chase drops (SCALP 131) over 447 traded — settled, not re-argued.
 
 **`sess:` split built (2026-11-08, "gas tambahin label sesi").** The owner
 sent a manual SMC trader's 5m charts and journal (session AMD boxes, sweep →
