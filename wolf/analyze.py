@@ -142,7 +142,7 @@ class AnalyzeService:
                 lines.append(DIVIDER)
                 lines.append(
                     f"🧠 Memory: {edge['win_rate']:.0f}% win over {edge['trades']} "
-                    f"({edge['avg_pnl']:+.2f}% avg, {edge['avg_r']:+.2f}R)"
+                    f"({edge['avg_pnl']:+.2f}% avg, {edge['avg_r']:+.2f}R, before costs)"
                 )
                 if symbol in self._learning.snapshot().get("blacklist", []):
                     lines.append("⛔ Currently blacklisted (poor track record)")
