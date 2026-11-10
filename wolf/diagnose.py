@@ -394,6 +394,43 @@ def _combo_label(outcome) -> str:
     return "OTHER"
 
 
+#: Trading sessions for the sweep-context split, by the UTC hour the signal was
+#: created. Fixed on 2026-11-08 before any reading, as four non-overlapping
+#: blocks covering the day: Tokyo until London opens, London until New York
+#: opens, New York until its close, and the quiet hours after. A cut drawn
+#: after looking at the hours would be the "best hour" search the journal page
+#: refuses to show, so these edges do not move.
+SESSION_EDGES_UTC = (("ASIA", 0, 7), ("LONDON", 7, 13), ("NEWYORK", 13, 21), ("LATE", 21, 24))
+#: The detectors that trade a liquidity sweep and reclaim — the bot's version
+#: of the SMC method the owner brought in. Only these are split by session.
+SWEEP_STRATEGIES = frozenset({"TRAP", "SCALP"})
+#: The one contrast the split was built to test, named before any read: the
+#: AMD reading says a sweep in the London/New York "manipulation" hours is the
+#: real one and an Asian-hours sweep is noise.
+SESSION_ACTIVE = frozenset({"LONDON", "NEWYORK"})
+
+
+def _session_label(outcome) -> str:
+    """The session a sweep signal was created in; ``NOT_SWEEP`` for the rest.
+
+    ``NOT_SWEEP`` and ``NO_TIME`` are dropped from the bucket rather than
+    reported: other strategies are not what the question is about, and a row
+    with no parseable creation time has no session.
+    """
+    if (getattr(outcome, "strategy", "") or "").upper() not in SWEEP_STRATEGIES:
+        return "NOT_SWEEP"
+    created = _safe_dt(getattr(outcome, "created_at", None))
+    if created is None:
+        return "NO_TIME"
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    hour = created.astimezone(timezone.utc).hour
+    for name, start, end in SESSION_EDGES_UTC:
+        if start <= hour < end:
+            return name
+    return "NO_TIME"
+
+
 def _evidence_label(outcome) -> str:
     """PRIMARY when the signal carried its detector's own evidence, else THIN.
 
@@ -487,7 +524,7 @@ _COLLECTOR_KEYS = {
 #: — an all-NONE column means the engine simply had nothing to say, which is a
 #: finding rather than an outage, and quoting a collector status for it would
 #: name a fault that does not exist.
-_NO_COLLECTOR = ("learn", "conv", "liq", "combo")
+_NO_COLLECTOR = ("learn", "conv", "liq", "combo", "sess")
 
 
 def _collector_status(tracker, key: str) -> str:
@@ -883,6 +920,25 @@ def diagnose(
         overlap,
     )
 
+    # Does session context make a sweep better? Asked because the SMC method
+    # the owner brought in waits for a sweep in the London/New York hours and the bot's
+    # sweep detectors take one at any hour. Only TRAP and SCALP are split, by
+    # the UTC hour of creation, at edges fixed before any read; the one gap the
+    # question names joins the FDR family. A level question across hours, so
+    # it needs far more than one card, and nothing about a session filters a
+    # signal.
+    by_session = _with_measured_cost(
+        {k: v for k, v in _buckets_by(_session_label).items()
+         if k not in ("NOT_SWEEP", "NO_TIME")},
+        _session_label,
+    )
+    session_edge = mean_gap(
+        [r_multiple_of(o) for o in traded if _session_label(o) in SESSION_ACTIVE],
+        [r_multiple_of(o) for o in traded
+         if _session_label(o) not in SESSION_ACTIVE | {"NOT_SWEEP", "NO_TIME"}],
+        overlap,
+    )
+
     # Each bucket above is measured against zero, which on a system whose
     # overall mean is negative answers a question nobody asked: every bucket
     # will read negative because every bucket pays the same costs. What decides
@@ -958,11 +1014,14 @@ def diagnose(
     # point: the reader who scans the strategy rows is now scanning the AI rows
     # too, and the correction has to know that.
     families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict,
-                by_learning_action, by_evidence, by_conviction, by_liquidity, by_combo]
+                by_learning_action, by_evidence, by_conviction, by_liquidity, by_combo,
+                by_session]
     if ai_edge is not None:
         families.append({"ai_edge": ai_edge})
     if combo_edge is not None:
         families.append({"combo_edge": combo_edge})
+    if session_edge is not None:
+        families.append({"session_edge": session_edge})
     _apply_fdr(tuple(families))
 
     ladder = _ladder_economics(traded)
@@ -1062,6 +1121,8 @@ def diagnose(
         "by_liquidity": by_liquidity,
         "by_combo": by_combo,
         "combo_edge": combo_edge,
+        "by_session": by_session,
+        "session_edge": session_edge,
         "ai_edge": ai_edge,
         "collector_status": {
             label: _collector_status(tracker, key)
@@ -1246,6 +1307,7 @@ def render_digest(diag: dict) -> str:
         ("conv", "UNRANKED", diag.get("by_conviction") or {}),
         ("liq", "NO_SPREAD", diag.get("by_liquidity") or {}),
         ("combo", "", diag.get("by_combo") or {}),
+        ("sess", "", diag.get("by_session") or {}),
     ):
         real = {k: v for k, v in buckets.items() if k != sentinel}
         if not real:
@@ -1284,6 +1346,15 @@ def render_digest(diag: dict) -> str:
         lines.append(
             f"{'combo:':<9} rule fixed {COMBO_SINCE:%Y-%m-%d} "
             "— no signal created since then has resolved in this window"
+        )
+
+    sess_gap = diag.get("session_edge")
+    if sess_gap:
+        lines.append(
+            f"{'sess:LDN+NY-ASIA+LATE':<22} gap={sess_gap['gap_r']:+.3f}R "
+            f"se={sess_gap['se_r']:.3f} t={sess_gap['t']:+.2f} df={sess_gap['df']} "
+            f"{_fdr_col(sess_gap)}(TRAP+SCALP only, n={sess_gap['n_a']}v{sess_gap['n_b']} "
+            f"eff={sess_gap['eff_n']} nom_t={sess_gap['t_nominal']:+.2f})"
         )
 
     gap = diag.get("ai_edge")
@@ -1361,8 +1432,9 @@ def render_digest(diag: dict) -> str:
         len(diag.get(k) or {})
         for k in ("by_strategy", "by_whale_stance", "by_onchain_bias",
                   "by_ai_verdict", "by_learning_action", "by_evidence",
-                  "by_conviction", "by_liquidity", "by_combo")
-    ) + (1 if diag.get("ai_edge") else 0) + (1 if diag.get("combo_edge") else 0)
+                  "by_conviction", "by_liquidity", "by_combo", "by_session")
+    ) + (1 if diag.get("ai_edge") else 0) + (1 if diag.get("combo_edge") else 0) \
+        + (1 if diag.get("session_edge") else 0)
     if n_family:
         lines.append(
             f"fdr      padj = p across all {n_family} buckets at FDR "

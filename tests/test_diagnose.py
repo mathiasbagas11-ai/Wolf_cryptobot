@@ -1267,3 +1267,61 @@ def test_the_combo_gap_is_printed_and_corrected_with_every_other_bucket(
         assert cell.get("p_adj") is not None
     card = render_digest(diag)
     assert "combo:COMBO-OTHER" in card and "combo:COMBO" in card
+
+
+# ── Session split for sweep detectors ──────────────────────────────────────
+# Asked when the owner brought in an SMC method that waits for a sweep in the
+# London/New York hours. Only the sweep detectors are split, at UTC edges
+# fixed before any read.
+
+def _at_hour(row, hour):
+    day = datetime.now(timezone.utc).replace(hour=hour, minute=5, second=0, microsecond=0)
+    row["created_at"] = (day - timedelta(days=1)).isoformat()
+    return row
+
+
+def test_sweep_trades_are_split_by_the_utc_hour_they_were_created(
+    store, fake_client, tracker_settings
+):
+    rows = []
+    for i, (hour, strat) in enumerate([(0, "TRAP"), (6, "SCALP"), (7, "SCALP"), (12, "TRAP"),
+                                       (13, "SCALP"), (20, "TRAP"), (21, "SCALP"), (23, "TRAP")]):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, strategy=strat, n=i)
+        _at_hour(rows[-1], hour)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert {k: v["n"] for k, v in diag["by_session"].items()} == {
+        "ASIA": 2, "LONDON": 2, "NEWYORK": 2, "LATE": 2}
+
+
+def test_strategies_that_do_not_trade_a_sweep_are_left_out_of_the_session_split(
+    store, fake_client, tracker_settings
+):
+    rows = []
+    for i in range(6):
+        _outcome(rows, r=1.0, status=Status.TP_HIT.value, strategy="MOMENTUM", n=i)
+        _at_hour(rows[-1], 9)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    assert diag["by_session"] == {}
+    assert diag["session_edge"] is None
+    assert "sess:" not in render_digest(diag)
+
+
+def test_the_named_session_contrast_is_printed_and_enters_the_fdr_family(
+    store, fake_client, tracker_settings
+):
+    rows = []
+    for i in range(12):
+        active = i % 2 == 0
+        wiggle = 0.2 if i % 4 < 2 else -0.2   # a gap needs spread on each side
+        _outcome(rows, r=(1.0 if active else -1.0) + wiggle,
+                 status=Status.TP_HIT.value if active else Status.SL_HIT.value,
+                 strategy="TRAP" if i % 3 else "SCALP", n=i)
+        _at_hour(rows[-1], 9 if active else 3)
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    edge = diag["session_edge"]
+    assert edge["n_a"] == 6 and edge["n_b"] == 6 and abs(edge["gap_r"] - 2.0) < 0.15
+    assert edge.get("p_adj") is not None
+    assert all(cell.get("p_adj") is not None for cell in diag["by_session"].values())
+    card = render_digest(diag)
+    assert "sess:LDN+NY-ASIA+LATE" in card and "TRAP+SCALP only" in card
+    assert "sess:LONDON" in card and "sess:ASIA" in card
