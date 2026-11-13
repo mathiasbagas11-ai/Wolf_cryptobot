@@ -282,16 +282,17 @@ day** on its pre-registered read (material; see Status). One added
 2026-11-06: `elliott-wave2-entry` — **REJECTED the same day** on its
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
-−0.018R; see Status).
+−0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
+(OPEN, read due after deploy).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-13, outcome archive built (merge before ~11-18); COMBO 11-21
+## Status — 2026-11-13, outcome archive + /ichitest built (merge before ~11-18); COMBO 11-21
 
-1153 tests green. Working tree clean.
+1161 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -723,6 +724,22 @@ a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
 0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
 commodities room (too few symbols for a sample; PAXG offered as an offline
 gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**`/ichitest` built (2026-11-13, "Learn this and do backtest") — first
+read due after deploy.** The owner sent a @thequantbuilder video: Ichimoku
+9/26/52 on Nasdaq and gold M15, cloud breakout −289.6R, TK cross −549.9R,
+1,000 random versions (same direction, same hour) all lost; one variant beat
+97.1% of random with a 50.2R drawdown, and the version that looked best
+before 2024 made −6R after it. The video is our max-under-null lesson told
+by someone else. Built as an offline backtest in the `/ewtest` pattern on the
+same 4h basket: both textbook entries, next-open fill, stop 2×ATR, target
+2R, 60-bar cap (the video gives no exits, so these are a stated choice);
+baseline matches coin, side, stop, target, cap **and UTC hour**. Four tests,
+so the bar is 98.75%, plus net > 0 both before 2024 and from 2024 — the
+video's own cut, fixed in advance. Calibrated on random walks: 60 null runs,
+mean beats 45.9%, 1 over the bar. Criteria in the registry
+(`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
+one-coin run. Even a pass earns a forward paper read, never the live path.
 
 **Outcome archive (2026-11-13, "gas arsip").** The owner asked whether the
 bot is "learning and collecting data" so the best rule can be picked later.
@@ -1416,7 +1433,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1153 tests, ~15s
+python -m pytest            # 1161 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1433,6 +1450,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/beta.py` | each trade's R split into BTC's move under it and the rest, clustered by day (`/beta [hours]`) |
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
+| `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest vs random entries matched on stop/target/cap/hour, with a fixed 2024 cut (`/ichitest [COIN]`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
