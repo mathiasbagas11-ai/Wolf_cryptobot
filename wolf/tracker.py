@@ -41,6 +41,11 @@ MIN_GRADED_FOR_VERDICT = 20
 
 PENDING_KEY = "pending_signals"
 OUTCOMES_KEY = "signal_outcomes"
+#: Every resolved outcome, kept for good. The outcome log above is capped
+#: (``max_outcomes``) and drops its oldest rows, so a window longer than the
+#: log silently read only what was left — ~25 days on the live deployment.
+#: This append-only copy is what long windows read instead.
+ARCHIVE_KEY = "signal_outcomes_archive"
 
 # Notify callback: (signal, event, info) -> None. ``event`` is one of
 # ACTIVATED | TP_HIT | RESOLVED.
@@ -298,11 +303,36 @@ class Tracker:
     def _save_pending(self, signals: list[Signal]) -> None:
         self._store.write(PENDING_KEY, [s.to_dict() for s in signals])
 
+    def _seed_archive(self) -> None:
+        """Start the archive from whatever the capped log still holds.
+
+        Rows already trimmed from the log are gone and cannot be recovered;
+        everything still in it is copied once, the first time this runs.
+        """
+        try:
+            if self._store.lines_exist(ARCHIVE_KEY):
+                return
+            rows = [d for d in (self._store.read(OUTCOMES_KEY, default=[]) or [])
+                    if isinstance(d, dict)]
+            self._store.append_lines(ARCHIVE_KEY, rows)
+            if rows:
+                log.info("Outcome archive started with %d rows from the capped log", len(rows))
+        except Exception:
+            log.exception("Could not seed the outcome archive")
+
     def _append_outcome(self, signal: Signal) -> None:
         cap = self._settings.max_outcomes
+        row = signal.to_dict()
+        self._seed_archive()
+        try:
+            self._store.append_lines(ARCHIVE_KEY, [row])
+        except Exception:
+            # The archive is a measurement aid; a failure to write it must
+            # never stop the ledger itself from booking the outcome.
+            log.exception("Could not archive outcome %s", signal.id)
         self._store.update(
             OUTCOMES_KEY,
-            lambda cur: ((cur or []) + [signal.to_dict()])[-cap:],
+            lambda cur: ((cur or []) + [row])[-cap:],
             default=[],
         )
 
@@ -866,6 +896,35 @@ class Tracker:
     def outcomes(self) -> list[Signal]:
         raw = self._store.read(OUTCOMES_KEY, default=[])
         return [Signal.from_dict(d) for d in raw if isinstance(d, dict)]
+
+    def history(self) -> list[Signal]:
+        """Every outcome ever archived, merged with the capped log.
+
+        The log wins where both hold a row (it is the copy later corrections,
+        such as a re-booking, were written to). Oldest first, by resolution
+        time, the same order the log keeps.
+        """
+        self._seed_archive()
+        # The log is taken whole; the archive only adds what the log no longer
+        # holds, matched by id. A row with no id cannot be matched, so the
+        # archive's copy of one is left out rather than risked twice.
+        log_rows = [d for d in (self._store.read(OUTCOMES_KEY, default=[]) or [])
+                    if isinstance(d, dict)]
+        in_log = {d.get("id") for d in log_rows if d.get("id")}
+        older: dict[str, dict] = {}
+        for d in self._store.read_lines(ARCHIVE_KEY):
+            if isinstance(d, dict) and d.get("id") and d["id"] not in in_log:
+                older[d["id"]] = d  # a later copy of the same row wins
+        rows = [Signal.from_dict(d) for d in list(older.values()) + log_rows]
+
+        def _when(sig: Signal) -> datetime:
+            t = _resolved_at(sig)
+            if t is None:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+        rows.sort(key=_when)
+        return rows
 
     def stats(self, window_hours: Optional[float] = None) -> dict:
         """Aggregate win-rate / PnL stats over resolved outcomes.

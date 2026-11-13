@@ -289,9 +289,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-10, `/diag 600` read: session REJECTED, liq holds; COMBO 11-21
+## Status — 2026-11-13, outcome archive built (merge before ~11-18); COMBO 11-21
 
-1147 tests green. Working tree clean.
+1153 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -723,6 +723,27 @@ a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
 0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
 commodities room (too few symbols for a sample; PAXG offered as an offline
 gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**Outcome archive (2026-11-13, "gas arsip").** The owner asked whether the
+bot is "learning and collecting data" so the best rule can be picked later.
+They were told picking the best of many after the fact is the max-under-null
+trap, that the process is pre-register → test → replicate, and that the
+data was not actually accumulating: the outcome log is capped
+(`max_outcomes`; the live deployment holds ~500 rows, ~25 days) and drops
+its oldest rows, so **any window longer than the log silently read only the
+survivors** — the 11-21 `/diag 720` COMBO read would have lost its first
+days (rule date 10-24). Fixed as a measurement fault: every resolved
+outcome is also appended to `signal_outcomes_archive.jsonl` on the same
+volume (append-only, one JSON per line, never trimmed; a failed archive
+write never blocks the ledger), seeded once from whatever the log still
+holds. `Tracker.history()` merges archive + log (log wins on a shared id;
+id-less archive rows are dropped rather than risked twice). **Only `/diag`
+reads the history**; `/beta`, `/montecarlo`, `/mae`, the journal and the
+whatif replays still read the capped log, so their "whole log" readings
+stay comparable with earlier ones. The card prints a `history` line with
+the row count, earliest date and log size. Rows trimmed before the deploy
+are gone for good. **Deploy before ~11-18**, when the 10-24 rows start to
+leave the log.
 
 **Second `/diag 600` (2026-11-10 13:28, window 10-16 → 11-10, `@ 1230684`).**
 447 traded, `eff=69`, `mean_open` 6.44: **+0.013 gross / −0.074 net**
@@ -1395,7 +1416,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1147 tests, ~15s
+python -m pytest            # 1153 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1413,6 +1434,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
+| `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |

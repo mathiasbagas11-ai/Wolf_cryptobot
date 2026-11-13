@@ -431,6 +431,28 @@ def _session_label(outcome) -> str:
     return "NO_TIME"
 
 
+def _archive_span(rows, tracker) -> dict:
+    """How far back the outcomes behind this card reach, and from where.
+
+    Printed because the card used to read a capped log without saying so: a
+    window longer than the log was silently a shorter window.
+    """
+    earliest = None
+    for o in rows:
+        t = _safe_dt(getattr(o, "resolved_at", None) or getattr(o, "exit_time", None))
+        if t is None:
+            continue
+        t = t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+        if earliest is None or t < earliest:
+            earliest = t
+    try:
+        log_rows = len(tracker.outcomes())
+    except Exception:
+        log_rows = None
+    return {"rows": len(rows), "log_rows": log_rows,
+            "from": earliest.strftime("%Y-%m-%d") if earliest else None}
+
+
 def _evidence_label(outcome) -> str:
     """PRIMARY when the signal carried its detector's own evidence, else THIN.
 
@@ -708,7 +730,12 @@ def diagnose(
     which is fees plus the recorded spread and carries no slippage term. The two
     are different sums and the digest says so; see :func:`_measured_cost`.
     """
-    outcomes = tracker.outcomes()
+    # The archive, not the capped log: a window longer than the log used to
+    # read only the rows that had survived the trim, with nothing on the card
+    # to say so.
+    history = getattr(tracker, "history", None)
+    outcomes = history() if callable(history) else tracker.outcomes()
+    archive_span = _archive_span(outcomes, tracker)
     if window_hours and window_hours > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
         outcomes = [
@@ -1139,6 +1166,7 @@ def diagnose(
         "state_persistent": state_is_persistent(state_dir) if state_dir else None,
         "volume_mount": volume_mount(),
         "instance": instance_label(),
+        "history": archive_span,
         "thresholds": {
             "min_conclusive_trades": MIN_CONCLUSIVE_TRADES,
             "conclusive_t": CONCLUSIVE_T,
@@ -1388,6 +1416,12 @@ def render_digest(diag: dict) -> str:
         lines.append(f"state    {diag['state_dir']} [{mark}] volume_mount={mount}")
     if diag.get("instance"):
         lines.append(f"instance {diag['instance']}")
+    hist = diag.get("history") or {}
+    if hist.get("rows"):
+        lines.append(
+            f"history  {hist['rows']} resolved rows on record from {hist['from']} "
+            f"(archive + capped log of {hist['log_rows']})"
+        )
     lad = diag.get("ladder") or {}
     if lad.get("avg_win_r") or lad.get("avg_loss_r"):
         fill = lad.get("rung_fill_rate") or {}
