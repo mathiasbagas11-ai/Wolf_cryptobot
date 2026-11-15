@@ -290,7 +290,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-13, outcome archive + /ichitest built (merge before ~11-18); COMBO 11-21
+## Status — 2026-11-15, outcome archive + /ichitest merged to main (PR #39); COMBO 11-21
 
 1161 tests green. Working tree clean.
 
@@ -759,8 +759,9 @@ reads the history**; `/beta`, `/montecarlo`, `/mae`, the journal and the
 whatif replays still read the capped log, so their "whole log" readings
 stay comparable with earlier ones. The card prints a `history` line with
 the row count, earliest date and log size. Rows trimmed before the deploy
-are gone for good. **Deploy before ~11-18**, when the 10-24 rows start to
-leave the log.
+are gone for good. **Merged 2026-11-15 (PR #39), ahead of ~11-18** when the
+10-24 rows start to leave the log; the first card after the deploy should
+print the `history` line.
 
 **Second `/diag 600` (2026-11-10 13:28, window 10-16 → 11-10, `@ 1230684`).**
 447 traded, `eff=69`, `mean_open` 6.44: **+0.013 gross / −0.074 net**
