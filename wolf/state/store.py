@@ -108,3 +108,45 @@ class StateStore:
 
     def exists(self, key: str) -> bool:
         return os.path.exists(self._path(key))
+
+    # ── append-only logs ───────────────────────────────────────────────
+    # A JSON document is rewritten whole on every change, which is right for
+    # small state and wrong for a history that only ever grows: rewriting it
+    # costs time in its size and puts every past row at risk on every write.
+    # These keep one JSON object per line and only ever append.
+
+    def _lines_path(self, key: str) -> str:
+        return self._path(key)[: -len(".json")] + ".jsonl"
+
+    def lines_exist(self, key: str) -> bool:
+        return os.path.exists(self._lines_path(key))
+
+    def append_lines(self, key: str, records: list) -> None:
+        """Append ``records`` to ``key``'s line log, one JSON object per line."""
+        if not records:
+            return
+        path = self._lines_path(key)
+        with self._lock_for(key):
+            with open(path, "a", encoding="utf-8") as fh:
+                for rec in records:
+                    fh.write(json.dumps(rec, default=str) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+
+    def read_lines(self, key: str) -> list:
+        """Every record in ``key``'s line log; a torn or corrupt line is skipped."""
+        path = self._lines_path(key)
+        out: list = []
+        with self._lock_for(key):
+            if not os.path.exists(path):
+                return out
+            with open(path, "r", encoding="utf-8") as fh:
+                for n, line in enumerate(fh, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        out.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        log.warning("Line %d of '%s' unreadable; skipped", n, key)
+        return out

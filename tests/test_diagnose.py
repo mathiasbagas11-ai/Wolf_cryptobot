@@ -9,7 +9,7 @@ from wolf.diagnose import (
     MIN_CONCLUSIVE_TRADES, NET_NEGATIVE_AFTER_COST, diagnose, render_digest,
 )
 from wolf.models import Signal, Status
-from wolf.tracker import OUTCOMES_KEY, Tracker
+from wolf.tracker import ARCHIVE_KEY, OUTCOMES_KEY, Tracker
 
 
 def _outcome(store_list, *, r: float, status: str, strategy: str = "SCALP",
@@ -38,6 +38,15 @@ def _outcome(store_list, *, r: float, status: str, strategy: str = "SCALP",
 
 
 def _tracker_with(store, fake_client, tracker_settings, rows) -> Tracker:
+    """A tracker whose whole history is ``rows``.
+
+    Some tests build several scenarios on one store; the archive would
+    otherwise remember the earlier scenario's rows, as it is meant to.
+    """
+    import os
+    path = store._lines_path(ARCHIVE_KEY)
+    if os.path.exists(path):
+        os.remove(path)
     store.write(OUTCOMES_KEY, rows)
     return Tracker(store, fake_client, tracker_settings)
 

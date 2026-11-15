@@ -281,17 +281,18 @@ One added 2026-11-02: `btc-beta-explains-the-ledger` — **ADOPTED the same
 day** on its pre-registered read (material; see Status). One added
 2026-11-06: `elliott-wave2-entry` — **REJECTED the same day** on its
 pre-registered ten-coin read (see Status). One added 2026-11-08:
-`sweep-session-context` (OPEN, `sess:` rows on `/diag`, criteria written
-before any read).
+`sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
+−0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
+(OPEN, read due after deploy).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-08, `sess:` split built, first read due; COMBO 11-21
+## Status — 2026-11-13, outcome archive + /ichitest built (merge before ~11-18); COMBO 11-21
 
-1147 tests green. Working tree clean.
+1161 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -723,6 +724,68 @@ a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
 0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
 commodities room (too few symbols for a sample; PAXG offered as an offline
 gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**`/ichitest` built (2026-11-13, "Learn this and do backtest") — first
+read due after deploy.** The owner sent a @thequantbuilder video: Ichimoku
+9/26/52 on Nasdaq and gold M15, cloud breakout −289.6R, TK cross −549.9R,
+1,000 random versions (same direction, same hour) all lost; one variant beat
+97.1% of random with a 50.2R drawdown, and the version that looked best
+before 2024 made −6R after it. The video is our max-under-null lesson told
+by someone else. Built as an offline backtest in the `/ewtest` pattern on the
+same 4h basket: both textbook entries, next-open fill, stop 2×ATR, target
+2R, 60-bar cap (the video gives no exits, so these are a stated choice);
+baseline matches coin, side, stop, target, cap **and UTC hour**. Four tests,
+so the bar is 98.75%, plus net > 0 both before 2024 and from 2024 — the
+video's own cut, fixed in advance. Calibrated on random walks: 60 null runs,
+mean beats 45.9%, 1 over the bar. Criteria in the registry
+(`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
+one-coin run. Even a pass earns a forward paper read, never the live path.
+
+**Outcome archive (2026-11-13, "gas arsip").** The owner asked whether the
+bot is "learning and collecting data" so the best rule can be picked later.
+They were told picking the best of many after the fact is the max-under-null
+trap, that the process is pre-register → test → replicate, and that the
+data was not actually accumulating: the outcome log is capped
+(`max_outcomes`; the live deployment holds ~500 rows, ~25 days) and drops
+its oldest rows, so **any window longer than the log silently read only the
+survivors** — the 11-21 `/diag 720` COMBO read would have lost its first
+days (rule date 10-24). Fixed as a measurement fault: every resolved
+outcome is also appended to `signal_outcomes_archive.jsonl` on the same
+volume (append-only, one JSON per line, never trimmed; a failed archive
+write never blocks the ledger), seeded once from whatever the log still
+holds. `Tracker.history()` merges archive + log (log wins on a shared id;
+id-less archive rows are dropped rather than risked twice). **Only `/diag`
+reads the history**; `/beta`, `/montecarlo`, `/mae`, the journal and the
+whatif replays still read the capped log, so their "whole log" readings
+stay comparable with earlier ones. The card prints a `history` line with
+the row count, earliest date and log size. Rows trimmed before the deploy
+are gone for good. **Deploy before ~11-18**, when the 10-24 rows start to
+leave the log.
+
+**Second `/diag 600` (2026-11-10 13:28, window 10-16 → 11-10, `@ 1230684`).**
+447 traded, `eff=69`, `mean_open` 6.44: **+0.013 gross / −0.074 net**
+(measured fee+spread 0.064R → about −0.051). Same shape as every pool:
+flat gross, negative net. Strategies, all `padj` 1.000: PREDUMP n=50
+**+0.436** (net +0.370; was +0.071 on the first `/diag 600`), TRAP +0.113,
+SCALP −0.011, SWING −0.219, PREPUMP −0.294, **MOMENTUM n=118 −0.152** (net
+−0.233) — the one strategy the old real-money advice leaned on is now the
+worst large row, so the pause stands. Ladder needs WR 50.5%. Results:
+- **`sess:` → REJECTED** (pre-registered rule: read 1 gap ≤ 0).
+  `LDN+NY-ASIA+LATE` −0.018R, padj 1.000; ASIA +0.104, LONDON +0.089,
+  NEWYORK +0.014, LATE −0.076. The session part of the SMC method does not
+  improve the bot's sweeps. Do not read ASIA's top row as a lead.
+- **`liq:` shape holds, but this is not the clean replication** — the
+  window overlaps the first read by ~7 days. TIGHT +0.103 / +0.046 net,
+  MID +0.004 / −0.059, WIDE −0.121 / −0.196; monotone again, TIGHT
+  net-positive this time. **Clean disjoint read: `/diag 600` from ~11-18.**
+- **COMBO shown, not read** (rule: 11-21): 59 vs 237, gap +0.146,
+  padj 1.000.
+- `whale:` WITH +0.189 vs AGAINST −0.067 again (first read +0.185 /
+  −0.111); `wxs` WITH positive for SCALP, TRAP, PREDUMP. Pattern only.
+- `conv:UNRANKED` −0.739 (padj 0.320, lowest) is the known first-look
+  artifact. `TELEGRAM_TOKEN_SHARED(x131)` is the 10-30 record still inside
+  a 600h window (last 409 at 10-30 23:18); the copy has not polled since.
+- 261 chase drops (SCALP 131) over 447 traded — settled, not re-argued.
 
 **`sess:` split built (2026-11-08, "gas tambahin label sesi").** The owner
 sent a manual SMC trader's 5m charts and journal (session AMD boxes, sweep →
@@ -1370,7 +1433,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1147 tests, ~15s
+python -m pytest            # 1161 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1387,7 +1450,9 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/beta.py` | each trade's R split into BTC's move under it and the rest, clustered by day (`/beta [hours]`) |
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
+| `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest vs random entries matched on stop/target/cap/hour, with a fixed 2024 cut (`/ichitest [COIN]`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
+| `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |

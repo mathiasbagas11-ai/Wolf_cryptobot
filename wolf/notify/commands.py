@@ -35,6 +35,8 @@ _HELP = (
     "(~1 min; add a coin, e.g. <code>/bbtest BTC</code>)\n"
     "<code>/ewtest</code> — backtest an Elliott Wave 2→3 entry against random entries "
     "(~1 min; add a coin, e.g. <code>/ewtest ETH</code>)\n"
+    "<code>/ichitest</code> — backtest Ichimoku TK cross &amp; cloud breakout against random entries "
+    "(~1 min; add a coin, e.g. <code>/ichitest BTC</code>)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
     "<code>/mae</code> — how far trades went for and against them before closing "
@@ -90,6 +92,8 @@ class CommandRouter:
             return self._bbtest(arg)
         if cmd == "ewtest":
             return self._ewtest(arg)
+        if cmd == "ichitest":
+            return self._ichitest(arg)
         if cmd in ("mae", "mfe", "excursion"):
             return self._excursion(arg)
         if cmd == "beta":
@@ -523,6 +527,22 @@ class CommandRouter:
             log.exception("Elliott Wave backtest failed")
             return "⚠️ Backtest failed — see logs."
         return f"<pre>{esc(ewtest.render(report))}</pre>"
+
+    def _ichitest(self, arg: str) -> str:
+        """Backtest the two textbook Ichimoku entries offline (see wolf.ichitest)."""
+        from wolf import ichitest
+
+        symbols = ichitest.DEFAULT_SYMBOLS
+        if arg:
+            sym = arg.split()[0].upper()
+            symbols = (sym if sym.endswith("USDT") else f"{sym}USDT",)
+        try:
+            report = ichitest.backtest(symbols, client=getattr(self._app, "client", None),
+                                       cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Ichimoku backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(ichitest.render(report))}</pre>"
 
     def _excursion(self, arg: str) -> str:
         """Best and worst point of each resolved trade's path, in R."""
