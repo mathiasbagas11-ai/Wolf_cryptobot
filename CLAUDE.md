@@ -295,14 +295,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; first read 11-15 passed TK SHORT on a baseline found too narrow — re-read with the corrected baseline decides).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-15, /ichitest first read taken, baseline fault found and fixed; re-read due; COMBO 11-21
+## Status — 2026-11-16, /ichitest decided: TK SHORT passes offline, rest rejected; COMBO 11-21
 
 1161 tests green. Working tree clean.
 
@@ -752,6 +752,21 @@ video's own cut, fixed in advance. Calibrated on random walks: 60 null runs,
 mean beats 45.9%, 1 over the bar. Criteria in the registry
 (`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
 one-coin run. Even a pass earns a forward paper read, never the live path.
+
+**`/ichitest` decided (2026-11-16, shift baseline, pre-registered).** TK
+cross SHORT n=1729 **net +0.072**, before 2024 +0.025 / 2024+ +0.121,
+**beats 99%** of the shifted null (p98.75 +0.070) → **passes** — the first
+external rule to clear any offline bar here. TK LONG +0.039, beats 98% but
+2024+ −0.015 → fails. Cloud breakout fails both sides (76% / 59%). The
+correction doubled the null's width and the short still cleared it. Hold it
+at arm's length: just over the line, thin early half, ~1-in-10 chance that
+one of the seven offline side-tests run so far passes by luck, funding not
+modelled. Its best argument is that both TK sides beat ~98–99%, the shape
+of time-series momentum. **The owner was told: not a signal, no real money,
+nothing on the live path (rule 1).** Offered, not built: a forward shadow
+ledger (TK shorts on the ten coins at each 4h close, separate key, no
+Telegram signal) — honest arithmetic says ~0.8 trades/day can only catch a
+rule that breaks out of sample, not confirm +0.07R (that needs ~1,000 trades).
 
 **`/ichitest` first read (2026-11-15) — a pass withdrawn before acting on
 it; re-read due.** Ten coins, 4h, since 2020-11. TK cross LONG net +0.038
