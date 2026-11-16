@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Iterable, Optional
 
-from wolf.config import LadderSettings, state_is_persistent, volume_mount
+from wolf.config import LadderSettings, instance_label, state_is_persistent, volume_mount
 from wolf.market import age_minutes
 from wolf.models import Signal, Status
 from wolf.stats import DEFAULT_FDR, benjamini_hochberg, mean_gap, t_to_p
@@ -394,6 +394,65 @@ def _combo_label(outcome) -> str:
     return "OTHER"
 
 
+#: Trading sessions for the sweep-context split, by the UTC hour the signal was
+#: created. Fixed on 2026-11-08 before any reading, as four non-overlapping
+#: blocks covering the day: Tokyo until London opens, London until New York
+#: opens, New York until its close, and the quiet hours after. A cut drawn
+#: after looking at the hours would be the "best hour" search the journal page
+#: refuses to show, so these edges do not move.
+SESSION_EDGES_UTC = (("ASIA", 0, 7), ("LONDON", 7, 13), ("NEWYORK", 13, 21), ("LATE", 21, 24))
+#: The detectors that trade a liquidity sweep and reclaim — the bot's version
+#: of the SMC method the owner brought in. Only these are split by session.
+SWEEP_STRATEGIES = frozenset({"TRAP", "SCALP"})
+#: The one contrast the split was built to test, named before any read: the
+#: AMD reading says a sweep in the London/New York "manipulation" hours is the
+#: real one and an Asian-hours sweep is noise.
+SESSION_ACTIVE = frozenset({"LONDON", "NEWYORK"})
+
+
+def _session_label(outcome) -> str:
+    """The session a sweep signal was created in; ``NOT_SWEEP`` for the rest.
+
+    ``NOT_SWEEP`` and ``NO_TIME`` are dropped from the bucket rather than
+    reported: other strategies are not what the question is about, and a row
+    with no parseable creation time has no session.
+    """
+    if (getattr(outcome, "strategy", "") or "").upper() not in SWEEP_STRATEGIES:
+        return "NOT_SWEEP"
+    created = _safe_dt(getattr(outcome, "created_at", None))
+    if created is None:
+        return "NO_TIME"
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    hour = created.astimezone(timezone.utc).hour
+    for name, start, end in SESSION_EDGES_UTC:
+        if start <= hour < end:
+            return name
+    return "NO_TIME"
+
+
+def _archive_span(rows, tracker) -> dict:
+    """How far back the outcomes behind this card reach, and from where.
+
+    Printed because the card used to read a capped log without saying so: a
+    window longer than the log was silently a shorter window.
+    """
+    earliest = None
+    for o in rows:
+        t = _safe_dt(getattr(o, "resolved_at", None) or getattr(o, "exit_time", None))
+        if t is None:
+            continue
+        t = t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+        if earliest is None or t < earliest:
+            earliest = t
+    try:
+        log_rows = len(tracker.outcomes())
+    except Exception:
+        log_rows = None
+    return {"rows": len(rows), "log_rows": log_rows,
+            "from": earliest.strftime("%Y-%m-%d") if earliest else None}
+
+
 def _evidence_label(outcome) -> str:
     """PRIMARY when the signal carried its detector's own evidence, else THIN.
 
@@ -487,7 +546,7 @@ _COLLECTOR_KEYS = {
 #: — an all-NONE column means the engine simply had nothing to say, which is a
 #: finding rather than an outage, and quoting a collector status for it would
 #: name a fault that does not exist.
-_NO_COLLECTOR = ("learn", "conv", "liq", "combo")
+_NO_COLLECTOR = ("learn", "conv", "liq", "combo", "sess")
 
 
 def _collector_status(tracker, key: str) -> str:
@@ -631,6 +690,25 @@ def _apply_fdr(families: tuple[dict, ...], fdr: float = DEFAULT_FDR) -> None:
         bucket["fdr_survives"] = bool(keep)
 
 
+def _token_conflict(tracker, window_hours: float) -> Optional[dict]:
+    """The poller's record of Telegram 409s, if one landed in the window."""
+    try:
+        row = tracker._store.read("telegram_poll_conflict", default=None) or {}
+    except Exception:
+        return None
+    last = row.get("last_at")
+    if not last:
+        return None
+    try:
+        at = datetime.fromisoformat(last)
+    except (TypeError, ValueError):
+        return None
+    hours = window_hours if window_hours and window_hours > 0 else 24.0
+    if datetime.now(timezone.utc) - at > timedelta(hours=hours):
+        return None
+    return {"count": int(row.get("count") or 0), "last_at": last}
+
+
 def diagnose(
     tracker: Tracker,
     *,
@@ -652,7 +730,12 @@ def diagnose(
     which is fees plus the recorded spread and carries no slippage term. The two
     are different sums and the digest says so; see :func:`_measured_cost`.
     """
-    outcomes = tracker.outcomes()
+    # The archive, not the capped log: a window longer than the log used to
+    # read only the rows that had survived the trim, with nothing on the card
+    # to say so.
+    history = getattr(tracker, "history", None)
+    outcomes = history() if callable(history) else tracker.outcomes()
+    archive_span = _archive_span(outcomes, tracker)
     if window_hours and window_hours > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
         outcomes = [
@@ -864,6 +947,25 @@ def diagnose(
         overlap,
     )
 
+    # Does session context make a sweep better? Asked because the SMC method
+    # the owner brought in waits for a sweep in the London/New York hours and the bot's
+    # sweep detectors take one at any hour. Only TRAP and SCALP are split, by
+    # the UTC hour of creation, at edges fixed before any read; the one gap the
+    # question names joins the FDR family. A level question across hours, so
+    # it needs far more than one card, and nothing about a session filters a
+    # signal.
+    by_session = _with_measured_cost(
+        {k: v for k, v in _buckets_by(_session_label).items()
+         if k not in ("NOT_SWEEP", "NO_TIME")},
+        _session_label,
+    )
+    session_edge = mean_gap(
+        [r_multiple_of(o) for o in traded if _session_label(o) in SESSION_ACTIVE],
+        [r_multiple_of(o) for o in traded
+         if _session_label(o) not in SESSION_ACTIVE | {"NOT_SWEEP", "NO_TIME"}],
+        overlap,
+    )
+
     # Each bucket above is measured against zero, which on a system whose
     # overall mean is negative answers a question nobody asked: every bucket
     # will read negative because every bucket pays the same costs. What decides
@@ -939,11 +1041,14 @@ def diagnose(
     # point: the reader who scans the strategy rows is now scanning the AI rows
     # too, and the correction has to know that.
     families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict,
-                by_learning_action, by_evidence, by_conviction, by_liquidity, by_combo]
+                by_learning_action, by_evidence, by_conviction, by_liquidity, by_combo,
+                by_session]
     if ai_edge is not None:
         families.append({"ai_edge": ai_edge})
     if combo_edge is not None:
         families.append({"combo_edge": combo_edge})
+    if session_edge is not None:
+        families.append({"session_edge": session_edge})
     _apply_fdr(tuple(families))
 
     ladder = _ladder_economics(traded)
@@ -954,6 +1059,11 @@ def diagnose(
     # still inside the container, so it is wiped exactly like a relative path.
     if state_dir and not state_is_persistent(state_dir):
         flags.append("STATE_NOT_PERSISTED")
+    # Another process polling this bot's Telegram token: a second copy of the
+    # bot, wherever it runs. Counted by the poller from Telegram's 409s.
+    shared_token = _token_conflict(tracker, window_hours)
+    if shared_token:
+        flags.append(f"TELEGRAM_TOKEN_SHARED(x{shared_token['count']})")
     # Failures of the AI layer, counted over the signals it actually ran on.
     # NO_AI is excluded deliberately: a layer that is switched off never tried,
     # which is a configuration choice and not a fault, and folding it in here
@@ -1038,6 +1148,8 @@ def diagnose(
         "by_liquidity": by_liquidity,
         "by_combo": by_combo,
         "combo_edge": combo_edge,
+        "by_session": by_session,
+        "session_edge": session_edge,
         "ai_edge": ai_edge,
         "collector_status": {
             label: _collector_status(tracker, key)
@@ -1049,9 +1161,12 @@ def diagnose(
         "ai_failure_rate": round(ai_failure_rate, 3),
         "concurrency": conc,
         "flags": flags,
+        "token_conflict": shared_token,
         "state_dir": state_dir,
         "state_persistent": state_is_persistent(state_dir) if state_dir else None,
         "volume_mount": volume_mount(),
+        "instance": instance_label(),
+        "history": archive_span,
         "thresholds": {
             "min_conclusive_trades": MIN_CONCLUSIVE_TRADES,
             "conclusive_t": CONCLUSIVE_T,
@@ -1220,6 +1335,7 @@ def render_digest(diag: dict) -> str:
         ("conv", "UNRANKED", diag.get("by_conviction") or {}),
         ("liq", "NO_SPREAD", diag.get("by_liquidity") or {}),
         ("combo", "", diag.get("by_combo") or {}),
+        ("sess", "", diag.get("by_session") or {}),
     ):
         real = {k: v for k, v in buckets.items() if k != sentinel}
         if not real:
@@ -1260,6 +1376,15 @@ def render_digest(diag: dict) -> str:
             "— no signal created since then has resolved in this window"
         )
 
+    sess_gap = diag.get("session_edge")
+    if sess_gap:
+        lines.append(
+            f"{'sess:LDN+NY-ASIA+LATE':<22} gap={sess_gap['gap_r']:+.3f}R "
+            f"se={sess_gap['se_r']:.3f} t={sess_gap['t']:+.2f} df={sess_gap['df']} "
+            f"{_fdr_col(sess_gap)}(TRAP+SCALP only, n={sess_gap['n_a']}v{sess_gap['n_b']} "
+            f"eff={sess_gap['eff_n']} nom_t={sess_gap['t_nominal']:+.2f})"
+        )
+
     gap = diag.get("ai_edge")
     if gap:
         lines.append(
@@ -1289,6 +1414,14 @@ def render_digest(diag: dict) -> str:
         mark = "ok" if diag.get("state_persistent") else "EPHEMERAL"
         mount = diag.get("volume_mount") or "none detected"
         lines.append(f"state    {diag['state_dir']} [{mark}] volume_mount={mount}")
+    if diag.get("instance"):
+        lines.append(f"instance {diag['instance']}")
+    hist = diag.get("history") or {}
+    if hist.get("rows"):
+        lines.append(
+            f"history  {hist['rows']} resolved rows on record from {hist['from']} "
+            f"(archive + capped log of {hist['log_rows']})"
+        )
     lad = diag.get("ladder") or {}
     if lad.get("avg_win_r") or lad.get("avg_loss_r"):
         fill = lad.get("rung_fill_rate") or {}
@@ -1323,12 +1456,19 @@ def render_digest(diag: dict) -> str:
                 lines.append(f"           x{count} {reason}")
     if diag["flags"]:
         lines.append("flags    " + " ".join(diag["flags"]))
+    if diag.get("token_conflict"):
+        tc = diag["token_conflict"]
+        lines.append(
+            f"telegram another process is polling this bot token (last {tc['last_at'][:16]}Z): "
+            "a second copy of the bot is running and posting to this chat"
+        )
     n_family = sum(
         len(diag.get(k) or {})
         for k in ("by_strategy", "by_whale_stance", "by_onchain_bias",
                   "by_ai_verdict", "by_learning_action", "by_evidence",
-                  "by_conviction", "by_liquidity", "by_combo")
-    ) + (1 if diag.get("ai_edge") else 0) + (1 if diag.get("combo_edge") else 0)
+                  "by_conviction", "by_liquidity", "by_combo", "by_session")
+    ) + (1 if diag.get("ai_edge") else 0) + (1 if diag.get("combo_edge") else 0) \
+        + (1 if diag.get("session_edge") else 0)
     if n_family:
         lines.append(
             f"fdr      padj = p across all {n_family} buckets at FDR "

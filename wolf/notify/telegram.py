@@ -544,8 +544,14 @@ class TelegramNotifier:
             pnl_line += f" · {info['pnl_amount']:+.2f} USD"
         pnl_line += f" · held {hold:.1f}h · {esc(s.strategy)}"
         lines.append(pnl_line)
-        if "balance" in info:
-            lines.append(f"🏦 Paper balance <b>{info['balance']:.2f} USD</b>")
+        if "net_balance" in info:
+            # Net first: it is the one an account could actually reach. The
+            # gross figure alone read as the balance and disagreed with the
+            # dashboard, which leads with net.
+            lines.append(f"🏦 Paper balance <b>{info['net_balance']:.2f} USD</b> after costs "
+                         f"· {info['balance']:.2f} before")
+        elif "balance" in info:
+            lines.append(f"🏦 Paper balance <b>{info['balance']:.2f} USD</b> (before costs)")
         if getattr(s, "conviction_rank", 0):
             badge = ("🥇", "🥈", "🥉")[s.conviction_rank - 1] if s.conviction_rank <= 3 else "🏆"
             how = (f"AI {s.conviction_score}%" if s.conviction_source == "ai"
@@ -581,7 +587,7 @@ class TelegramNotifier:
             + ("" if stats.get("conclusive", True) else "  ⚠️ small sample"),
             # Expectancy leads in R: targets are ATR multiples, so a percentage
             # average is dominated by whichever volatile symbols happened to trade.
-            f"💰 Expectancy {stats.get('avg_r', 0):+.2f}R "
+            f"💰 Expectancy {stats.get('avg_r', 0):+.2f}R before costs "
             f"({stats.get('avg_pnl_pct', 0):+.2f}%){flat_tag} "
             f"· 🔵 Active {stats.get('active', 0)}",
         ]
@@ -624,9 +630,12 @@ class TelegramNotifier:
             overall_wr = stats.get("win_rate", 0)
             if vetoed_wr is not None and vetoed_n > 0:
                 delta = vetoed_wr - overall_wr
-                readiness = "🔴 consider veto mode" if delta <= -15 else ("🟡 monitor more" if delta <= 0 else "🟢 AI over-cautious")
+                # No verdict: a win-rate gap on a daily window is the kind of
+                # number the diag card exists to discount, and "consider veto
+                # mode" asked for a strategy change on it.
                 lines.append(
-                    f"🛡 Vetoed signals: {vetoed_wr}% win ({vetoed_n} total, {delta:+.0f}% vs avg) — {readiness}"
+                    f"🛡 Vetoed signals: {vetoed_wr}% win ({vetoed_n} total, {delta:+.0f}% vs avg) "
+                    "— pattern, not a finding"
                 )
 
         # Risk-gate monitor: compare flagged signals' win-rate to overall, so a
@@ -641,10 +650,9 @@ class TelegramNotifier:
             n = stats.get(n_key, 0)
             if wr is not None and n > 0:
                 delta = wr - overall_wr
-                hint = f"🔴 enable {hard_hint}" if delta <= -15 else ("🟡 keep monitoring" if delta <= 0 else "🟢 not hurting")
-                gate_lines.append(f"• {label}: {wr}% win ({n} total, {delta:+.0f}% vs avg) — {hint}")
+                gate_lines.append(f"• {label}: {wr}% win ({n} total, {delta:+.0f}% vs avg)")
         if gate_lines:
-            lines.append("\n<b>Risk-gate monitor</b>")
+            lines.append("\n<b>Risk-gate monitor</b> (monitor only; read /diag before changing a gate)")
             lines += gate_lines
 
         lines.append(f"\n{self._stamp()}")
