@@ -234,6 +234,18 @@ split. The bias was real by mechanism; how much of the 37/87 it explained was
 never separated from the timeout. **Before calling two things identical,
 list every parameter, not the ones the argument needs.**
 
+**A random baseline must keep the dependence of what it is compared with.**
+The first `/ichitest` read passed TK-cross SHORT at "beats 100%". The
+baseline drew each random entry on its own, which spread them evenly through
+time, while the rule's trades arrive in clusters because ten coins move
+together — so the null was far narrower than the rule's own spread. The
+random-walk calibration passed because its walks were independent, the one
+property the real basket lacks. On walks sharing a common factor, 11% of null
+runs landed in tails meant to hold 2.5%. Moving the whole trade set by one
+random offset keeps the clustering and calibrates at 1.6%. **Calibrate a null
+on data that shares the real data's correlations, not on the simplest data
+that runs.** A narrow null only flatters passes; rejections read on it stand.
+
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
 unrelated remedies. The provider almost always already said which; the bug was
@@ -283,14 +295,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN, read due after deploy).
+(OPEN; first read 11-15 passed TK SHORT on a baseline found too narrow — re-read with the corrected baseline decides).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-13, outcome archive + /ichitest built (merge before ~11-18); COMBO 11-21
+## Status — 2026-11-15, /ichitest first read taken, baseline fault found and fixed; re-read due; COMBO 11-21
 
 1161 tests green. Working tree clean.
 
@@ -741,6 +753,21 @@ mean beats 45.9%, 1 over the bar. Criteria in the registry
 (`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
 one-coin run. Even a pass earns a forward paper read, never the live path.
 
+**`/ichitest` first read (2026-11-15) — a pass withdrawn before acting on
+it; re-read due.** Ten coins, 4h, since 2020-11. TK cross LONG net +0.038
+(beats 99%, but the 2024+ half was −0.014 → fail); **TK cross SHORT net
++0.069, both halves positive, beats 100% → passed as registered**; cloud
+breakout fails both sides (beats 79% / 57%). Before telling the owner it
+passed, the baseline was found to ignore that the coins move together (see
+the lesson), which inflates "beats". The decisive baseline is now
+`shift_baseline` (whole trade set moved by one random number of days),
+calibrated on correlated null baskets. The rule for the re-read was written
+into the registry before it: same criteria, shift baseline decides, and the
+first pass does not count. Worth holding: both TK sides earned about
++0.1R gross over the baseline, which is what crypto time-series momentum
+would look like — and also what a clustered null can print. **Read: plain
+`/ichitest` after the deploy.**
+
 **Outcome archive (2026-11-13, "gas arsip").** The owner asked whether the
 bot is "learning and collecting data" so the best rule can be picked later.
 They were told picking the best of many after the fact is the max-under-null
@@ -759,8 +786,9 @@ reads the history**; `/beta`, `/montecarlo`, `/mae`, the journal and the
 whatif replays still read the capped log, so their "whole log" readings
 stay comparable with earlier ones. The card prints a `history` line with
 the row count, earliest date and log size. Rows trimmed before the deploy
-are gone for good. **Deploy before ~11-18**, when the 10-24 rows start to
-leave the log.
+are gone for good. **Merged 2026-11-15 (PR #39), ahead of ~11-18** when the
+10-24 rows start to leave the log; the first card after the deploy should
+print the `history` line.
 
 **Second `/diag 600` (2026-11-10 13:28, window 10-16 → 11-10, `@ 1230684`).**
 447 traded, `eff=69`, `mean_open` 6.44: **+0.013 gross / −0.074 net**
@@ -1450,7 +1478,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/beta.py` | each trade's R split into BTC's move under it and the rest, clustered by day (`/beta [hours]`) |
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
-| `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest vs random entries matched on stop/target/cap/hour, with a fixed 2024 cut (`/ichitest [COIN]`) |
+| `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |

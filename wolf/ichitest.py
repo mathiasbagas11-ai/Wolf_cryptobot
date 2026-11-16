@@ -166,6 +166,57 @@ def random_baseline(series: dict, trades: dict, cost_bps: float,
     return out
 
 
+def shift_baseline(series: dict, trades: dict, cost_bps: float,
+                   draws: int = RANDOM_DRAWS, seed: int = 29) -> dict:
+    """Mean net R per draw, per side, with every trade on every coin moved by
+    the *same* random whole number of days.
+
+    The per-trade baseline above draws each entry independently, which spreads
+    random entries evenly through time. The rule's trades are not spread that
+    way: coins move together, so a cross on one is usually a cross on most, and
+    their outcomes rise and fall together. Independent draws therefore give a
+    baseline far narrower than the rule's own spread, and "beats 99%" stops
+    meaning 1-in-100. Moving the whole set by one offset keeps the clustering,
+    the spacing within each coin, each trade's geometry and its UTC hour (the
+    offset is whole days); only *when* the set happens moves. Offsets wrap
+    around inside each coin's own history.
+    """
+    rng = random.Random(seed)
+    bars_per_day = 6 if INTERVAL == "4h" else max(1, round(24 * 3600 * 1000 / _bar_ms(series)))
+    index = {sym: {c.time: k for k, c in enumerate(candles)} for sym, candles in series.items()}
+    span = min(len(c) for c in series.values()) - HOLD_BARS - 1
+    out = {"long": [], "short": []}
+    if span <= bars_per_day * 2:
+        return out
+    for _ in range(draws):
+        days = rng.randrange(1, span // bars_per_day)
+        sides = {"long": [], "short": []}
+        for sym, ts in trades.items():
+            candles = series[sym]
+            usable = len(candles) - HOLD_BARS - 1
+            for t in ts:
+                k0 = index[sym].get(t["time"], t["bar"])
+                k = 1 + (k0 - 1 + days * bars_per_day) % usable
+                entry = candles[k].open
+                f = t["risk_pct"] / 100
+                stop = entry * (1 - f) if t["long"] else entry * (1 + f)
+                tgt = entry * (1 + TARGET_R * f) if t["long"] else entry * (1 - TARGET_R * f)
+                res = simulate(candles, k, entry, stop, tgt, t["long"], hold=HOLD_BARS)
+                if res is None:
+                    continue
+                sides["long" if t["long"] else "short"].append(
+                    res[0] - (cost_bps / 100.0) / t["risk_pct"])
+        for side, rs in sides.items():
+            if rs:
+                out[side].append(statistics.fmean(rs))
+    return out
+
+
+def _bar_ms(series: dict) -> int:
+    c = next(iter(series.values()))
+    return max(1, c[1].time - c[0].time)
+
+
 # ── report ──────────────────────────────────────────────────────────────────
 
 def _net(t: dict, cost_bps: float) -> float:
@@ -220,7 +271,8 @@ def backtest(symbols: Sequence[str] = DEFAULT_SYMBOLS, client=None, cost_bps: fl
     for rule in RULES:
         trades = {sym: run_rule(c, rule) for sym, c in series.items()}
         every = [t for ts in trades.values() for t in ts]
-        base = random_baseline(series, trades, cost_bps, draws=draws)
+        base = shift_baseline(series, trades, cost_bps, draws=draws)
+        naive = random_baseline(series, trades, cost_bps, draws=draws)
         out = {}
         for side, is_long in (("long", True), ("short", False)):
             rows = [t for t in every if t["long"] == is_long]
@@ -233,6 +285,9 @@ def backtest(symbols: Sequence[str] = DEFAULT_SYMBOLS, client=None, cost_bps: fl
                     s["random_hi"] = round(srt[int(BEAT_LINE / 100 * (len(srt) - 1))], 3)
                     s["beats"] = round(sum(1 for b in srt if b < s["net"]) / len(srt) * 100, 1)
                     s["verdict"] = _verdict(s)
+                nv = sorted(naive.get(side) or [])
+                if nv:
+                    s["naive_beats"] = round(sum(1 for b in nv if b < s["net"]) / len(nv) * 100, 1)
             out[side] = s
         out["per_symbol"] = {sym: _summary(ts, cost_bps) for sym, ts in trades.items()}
         report["rules"][rule] = out
@@ -267,10 +322,13 @@ def render(report: dict) -> str:
             fmt = lambda h: (f"n={h['n']} net {h['net']:+.3f}" if h.get("n") else "no trades")  # noqa: E731
             lines.append(f"        before {SPLIT_YEAR}: {fmt(b)} | {SPLIT_YEAR}+: {fmt(a)}")
             if "beats" in s:
-                lines.append(f"        random same coin/side/stop/target/hour: median "
+                lines.append(f"        same trades shifted by a random number of days: median "
                              f"{s['random_median']:+.3f}, p{BEAT_LINE:g} {s['random_hi']:+.3f} → "
                              f"beats {s['beats']:.0f}% (needs {BEAT_LINE:g}% and both halves > 0)"
                              f" — {s['verdict']}")
+            if "naive_beats" in s:
+                lines.append(f"        (per-trade random draws, which ignore that coins move together: "
+                             f"beats {s['naive_beats']:.0f}% — shown for the gap, not read)")
         best = sorted(((sym, d) for sym, d in out["per_symbol"].items() if d.get("n")),
                       key=lambda kv: kv[1]["net"])
         if best:

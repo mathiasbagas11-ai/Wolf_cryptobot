@@ -108,7 +108,8 @@ def test_a_pass_needs_both_halves_of_the_out_of_sample_cut_positive():
 
 def test_the_card_names_its_baseline_its_bar_and_its_cut():
     card = render(backtest(series={"S0": _walk(1, n=3000)}, cost_bps=20.0, draws=50))
-    assert "random same coin/side/stop/target/hour" in card
+    assert "shifted by a random number of days" in card
+    assert "ignore that coins move together" in card
     assert f"needs {BEAT_LINE:g}%" in card
     assert "out-of-sample cut: 2024" in card
     assert "changes no signal" in card
