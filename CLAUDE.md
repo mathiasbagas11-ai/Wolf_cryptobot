@@ -302,7 +302,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-16, /ichitest decided: TK SHORT passes offline, rest rejected; COMBO 11-21
+## Status — 2026-11-18, liq: replicated in direction on a disjoint /diag 600; archive confirmed live; COMBO 11-21
 
 1161 tests green. Working tree clean.
 
@@ -753,6 +753,31 @@ mean beats 45.9%, 1 over the bar. Criteria in the registry
 (`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
 one-coin run. Even a pass earns a forward paper read, never the live path.
 
+**Third `/diag 600` (2026-11-18 21:06, window ~10-24 → 11-18, `@ 992d259`)
+— the clean `liq:` replication.** Disjoint from the first read (09-29 →
+10-23). 456 traded, `eff=80` (largest yet), `mean_open` 5.64: **−0.033
+gross / −0.121 net assumed** (measured fee+spread 0.066R → about −0.099).
+Same shape again. **The archive is live:** `history 560 resolved rows on
+record from 2026-10-20 (archive + capped log of 500)`.
+- **`liq:` replicated in direction:** TIGHT +0.065 / +0.008 net, MID −0.070
+  / −0.135, WIDE −0.092 / −0.171 — WIDE below TIGHT as predicted, monotone
+  for the third window running, gap +0.157R (first read +0.202). Still
+  `padj` 1.000 and each read is ~0.5 se, so a consistent shape, not a
+  finding. Dropping WIDE would leave about −0.074 net: it trims the loss and
+  the bot still loses; TIGHT alone is ~breakeven. Registry note's next step
+  (a pre-registered spread-gate `/whatif`) **offered, not built**.
+- Strategies, all `padj` 1.000: PREDUMP +0.195 (was +0.436 on 11-10),
+  TRAP −0.026, SCALP −0.044, MOMENTUM n=123 **−0.083** (still the worst
+  large row — pause stands), SWING −0.185, PREPUMP −0.241.
+- **COMBO shown, not read** (rule: `/diag 720` ~11-21): 93 vs 360, gap
+  +0.139, COMBO net +0.009, padj 1.000.
+- `whale:` WITH −0.007 vs AGAINST −0.097 — the gap shrank from ~+0.29 to
+  +0.09. `learn:PENALTY` (+0.061) above BOOST (−0.088) again. `ai:` still
+  adds nothing (CONFIRM +0.014, NEUTRAL −0.051). `conv:UNRANKED` −0.749 is
+  the known artifact. `sess:` gap −0.003 (already rejected). 225 chase drops
+  — settled. `TELEGRAM_TOKEN_SHARED(x131)` is the stale 10-30 record still
+  inside the window; it ages out after ~11-24.
+
 **`/ichitest` decided (2026-11-16, shift baseline, pre-registered).** TK
 cross SHORT n=1729 **net +0.072**, before 2024 +0.025 / 2024+ +0.121,
 **beats 99%** of the shifted null (p98.75 +0.070) → **passes** — the first
@@ -947,9 +972,8 @@ beats only 6% of random long-green-candle entries. 2020–21 alone made
 +83R; 2022–26 lost −47R. The video's +52R is the bull market plus fitting to
 BTC. The baseline's own +0.148R was noticed and deliberately not chased.
 
-**Next read:** `/diag 600` again once the capped log has rolled over to a
-disjoint sample (~3–4 weeks) — the `liq:` replication — and `/diag 720`
-around 11-21 for COMBO; meanwhile
+**Next read:** `/diag 720` around 11-21 for COMBO (the `liq:` replication
+was taken 11-18); meanwhile
 `/montecarlo MOMENTUM` again in a week — not to chase the
 streak, but because it is the only number the real-money advice hangs on.
 Nothing paired is left queued. The level question keeps
