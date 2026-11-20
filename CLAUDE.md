@@ -781,9 +781,11 @@ disjoint window, from about 12-20. Rule and date untouched.
   (`ai:NO_AI`, `liq:NO_SPREAD` and `evidence:UNRECORDED`, each n=7 at an
   identical +0.719). They are the same seven trades. They were absent from
   the 11-18 card, so they come from either the extra 10-21 → 10-24 edge of
-  this window or the last two days. Their source is unexplained: all three
-  record paths and the archive round-trip were checked, and each keeps the
-  fields. Too few to matter; look at them if the count grows.
+  this window or the last two days. The archive round-trip keeps all three
+  fields (checked). The likely sources are the two record paths that never
+  set them: the news scanner (`scheduler._post_news`) and the manual
+  `POST /signals` API. Not confirmed. Too few to matter; look at them if the
+  count grows.
 - `TELEGRAM_TOKEN_SHARED(x131)` is still the stale 10-30 record, and stays
   inside 720h windows until ~11-29.
 
