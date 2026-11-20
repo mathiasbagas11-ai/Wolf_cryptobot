@@ -302,9 +302,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-18, liq: replicated in direction on a disjoint /diag 600; archive confirmed live; COMBO 11-21
+## Status — 2026-11-20, COMBO read → INCONCLUSIVE; conv:UNRANKED taken out of the FDR family
 
-1161 tests green. Working tree clean.
+1162 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -459,8 +459,8 @@ tags COMBO / OTHER, **scored only on signals created after
 `COMBO_SINCE` (2026-10-24T00:00Z)** — earlier rows are dropped, not shown —
 with `combo:COMBO-OTHER` gap in the FDR family and each side's measured
 fee+spread. Until such trades resolve the card prints a one-line
-placeholder. Registry `combo-whale-liquid-primary` (OPEN) holds the success
-and kill criteria; **read with `/diag 720` around 2026-11-21, not before**,
+placeholder. Registry `combo-whale-liquid-primary` (**INCONCLUSIVE since 11-20**, see below) holds the success
+and kill criteria; read with `/diag 720` around 2026-11-21, not before,
 and do not touch the rule or date once readings start. No signal is
 filtered; nothing the bot emits changes.
 
@@ -753,6 +753,40 @@ mean beats 45.9%, 1 over the bar. Criteria in the registry
 (`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
 one-coin run. Even a pass earns a forward paper read, never the live path.
 
+**COMBO read (2026-11-20 17:48, `/diag 720`, window ~10-21 → 11-20, `@
+992d259`) → INCONCLUSIVE, keeps running.** 553 traded, `eff=94`: overall
+−0.019 gross / −0.107 net assumed. The archive held every COMBO-eligible row
+(`history 595 rows from 10-20`). COMBO n=100 +0.063 gross / **+0.003 net**;
+OTHER n=395 −0.059 / −0.126; gap +0.123R, **`padj` 1.000**. Success needed
+`padj` < 0.05 and net > 0, rejection needed gap ≤ 0, so neither is met.
+Taken ~6h before the nominal 11-21; one day cannot move `padj` from 1.000
+to under 0.05, so the outcome cannot depend on it. **COMBO does no better
+than its liquid-book part alone:** `liq:TIGHT` printed +0.106 gross / +0.049
+net, whale WITH +0.045 and PRIMARY −0.015. That is the "one effect counted
+three times" worry, visible on the same card. Next read: `/diag 720` on a
+disjoint window, from about 12-20. Rule and date untouched.
+- **`conv:UNRANKED` printed `padj 0.046*`**, the first starred row on any
+  card. It is the known artifact: its members are signals that resolved
+  before the hourly ranking first looked at them, mostly fast stops, so the
+  label is chosen by the outcome and will always "survive" a test of whether
+  it lost. **Fixed as a measurement fault:** it is still printed, with
+  "outcome-defined, not tested", but it is kept out of the BH-FDR family
+  (`diagnose.OUTCOME_DEFINED_CONV`). The owner was told not to read it as a
+  finding.
+- Strategies, all `padj` 1.000: PREDUMP n=64 **+0.402** (net +0.337),
+  TRAP −0.046, SCALP −0.055, MOMENTUM n=143 −0.079, PREPUMP −0.153,
+  SWING −0.326. `liq:` monotone again (TIGHT +0.106 / MID −0.075 / WIDE
+  −0.104); this overlaps the 11-18 read, so it is not a new replication.
+- **Seven rows carry no AI verdict, no spread and no score composition**
+  (`ai:NO_AI`, `liq:NO_SPREAD` and `evidence:UNRECORDED`, each n=7 at an
+  identical +0.719). They are the same seven trades. They were absent from
+  the 11-18 card, so they come from either the extra 10-21 → 10-24 edge of
+  this window or the last two days. Their source is unexplained: all three
+  record paths and the archive round-trip were checked, and each keeps the
+  fields. Too few to matter; look at them if the count grows.
+- `TELEGRAM_TOKEN_SHARED(x131)` is still the stale 10-30 record, and stays
+  inside 720h windows until ~11-29.
+
 **Third `/diag 600` (2026-11-18 21:06, window ~10-24 → 11-18, `@ 992d259`)
 — the clean `liq:` replication.** Disjoint from the first read (09-29 →
 10-23). 456 traded, `eff=80` (largest yet), `mean_open` 5.64: **−0.033
@@ -972,8 +1006,8 @@ beats only 6% of random long-green-candle entries. 2020–21 alone made
 +83R; 2022–26 lost −47R. The video's +52R is the bull market plus fitting to
 BTC. The baseline's own +0.148R was noticed and deliberately not chased.
 
-**Next read:** `/diag 720` around 11-21 for COMBO (the `liq:` replication
-was taken 11-18); meanwhile
+**Next read:** COMBO again with `/diag 720` from about 12-20 (disjoint
+window); `/beta` re-read on a disjoint log (~12-01); meanwhile
 `/montecarlo MOMENTUM` again in a week — not to chase the
 streak, but because it is the only number the real-money advice hangs on.
 Nothing paired is left queued. The level question keeps
@@ -1500,7 +1534,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1161 tests, ~15s
+python -m pytest            # 1162 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
