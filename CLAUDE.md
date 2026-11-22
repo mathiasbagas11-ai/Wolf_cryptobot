@@ -295,14 +295,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (OPEN, `/addtest` read due) and `v2-persistence-label` (OPEN, read at 300 v2 trades).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 + tab + /addtest + v2 persistence label merged (PR #42, `@ 57fb3d1`); /addtest read due after deploy
+## Status — 2026-11-22, v2 live from 04:39 UTC (`@ 57fb3d1`); /addtest read → REJECTED
 
 1187 tests green. Working tree clean.
 
@@ -761,6 +761,22 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**`/addtest` read (2026-11-22, `@ 57fb3d1`) → REJECTED as registered.**
+2842 paired trades; ADD fired on 53%. Plain: win 36%, +0.079R, worst 1%
+−1.12R. ADD: win 38%, **+0.092R**, worst 1% **−1.67R**. Gap +0.013R, t
++1.82 against a bar of t ≥ 2. The added lot alone won 69% at +0.025R. All
+three predictions held: win rate up, mean not significantly up, tail deeper
+by half. Held but not acted on: against the null calibration (lot about
+−0.10R) the real lot ran about +0.1R better, which hints at short-horizon
+mean reversion inside breakout trades. That is post hoc and under the bar,
+and +0.013R a trade is not worth 50% more tail. The owner was told:
+averaging down did what it always does here — a prettier win rate and a
+worse worst day — and the Copilot machinery is not adopted.
+- Same paste: the 24h card at `@ 57fb3d1` confirms the deploy (n=22 eff=9,
+  +0.203 gross / +0.106 net, all `padj` 1.000, `liq:` inverted again on
+  n=4/5). `/v2` printed its empty card: started 04:39 UTC, 0 trades,
+  balance 10,000.
 
 **The Copilot "math atlas" (2026-11-22, "Pelajari soal ini, dan
 terapkan").** The owner sent nine slides and a snapshot of another live
