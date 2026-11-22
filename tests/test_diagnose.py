@@ -1334,3 +1334,24 @@ def test_the_named_session_contrast_is_printed_and_enters_the_fdr_family(
     card = render_digest(diag)
     assert "sess:LDN+NY-ASIA+LATE" in card and "TRAP+SCALP only" in card
     assert "sess:LONDON" in card and "sess:ASIA" in card
+
+
+def test_a_conviction_label_decided_by_how_fast_a_trade_lost_is_never_tested(
+        store, fake_client, tracker_settings):
+    """UNRANKED holds signals that resolved before the first hourly ranking —
+    mostly fast stops — so it "survives" any test of whether it lost. It is
+    printed for the count and kept out of the FDR family."""
+    rows = []
+    for i in range(40):
+        _outcome(rows, r=-1.0 if i % 2 else -0.9, status=Status.SL_HIT.value, n=i)
+    for i in range(40, 80):
+        _outcome(rows, r=1.0 if i % 2 else -1.0, status=Status.TP_HIT.value, n=i)
+        rows[-1]["conviction_first_rank"] = 1
+        rows[-1]["conviction_first_source"] = "ai"
+    diag = diagnose(_tracker_with(store, fake_client, tracker_settings, rows))
+    unranked = diag["by_conviction"]["UNRANKED"]
+    assert "p_adj" not in unranked and "fdr_survives" not in unranked
+    assert "p_adj" in diag["by_conviction"]["AI_PICK"]
+    card = render_digest(diag)
+    row = next(l for l in card.splitlines() if l.startswith("conv:UNRANKED"))
+    assert "outcome-defined" in row and "*" not in row

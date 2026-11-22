@@ -150,6 +150,11 @@ def concurrency(outcomes: Iterable[Signal]) -> dict:
     }
 
 
+#: Conviction labels whose membership depends on how the trade resolved;
+#: printed for the count, never tested (see the FDR family in ``diagnose``).
+OUTCOME_DEFINED_CONV = frozenset({"UNRANKED"})
+
+
 def _conviction_label(o) -> str:
     """The room's verdict at its first look at this signal — and only that.
 
@@ -1040,9 +1045,16 @@ def diagnose(
     # This raises the threshold every other bucket has to clear, which is the
     # point: the reader who scans the strategy rows is now scanning the AI rows
     # too, and the correction has to know that.
+    # conv:UNRANKED is printed but kept out of the family. Its membership is
+    # decided by the outcome: a signal lands there when it resolved before the
+    # hourly ranking first looked at it, which is mostly a fast stop. A bucket
+    # chosen by how quickly a trade lost will always "survive" a test of
+    # whether it lost, and on 2026-11-20 it became the first starred row any
+    # card had printed. It answers nothing a filter could use before entry.
     families = [by_strategy, by_whale_stance, by_onchain_bias, by_ai_verdict,
-                by_learning_action, by_evidence, by_conviction, by_liquidity, by_combo,
-                by_session]
+                by_learning_action, by_evidence,
+                {k: v for k, v in by_conviction.items() if k not in OUTCOME_DEFINED_CONV},
+                by_liquidity, by_combo, by_session]
     if ai_edge is not None:
         families.append({"ai_edge": ai_edge})
     if combo_edge is not None:
@@ -1353,6 +1365,8 @@ def render_digest(diag: dict) -> str:
                 f"{label + ':' + name:<22} n={b['n']} graded={b['graded']} "
                 f"wr={b['win_rate']:.1f} meanR={b['mean_r']:+.3f} t={b['t']:+.2f} "
                 f"{_fdr_col(b)}=> {b['verdict']}"
+                + (" | outcome-defined (resolved before the first ranking), not tested"
+                   if label == "conv" and name in OUTCOME_DEFINED_CONV else "")
                 + (f" | spread {b['median_spread_bps']:.1f}bps fee+spread="
                    f"{b['fee_spread_r']:.3f}R net={b['net_fee_spread_r']:+.3f}"
                    if "fee_spread_r" in b else "")
@@ -1462,7 +1476,7 @@ def render_digest(diag: dict) -> str:
             f"telegram another process is polling this bot token (last {tc['last_at'][:16]}Z): "
             "a second copy of the bot is running and posting to this chat"
         )
-    n_family = sum(
+    n_family = -sum(1 for k in (diag.get("by_conviction") or {}) if k in OUTCOME_DEFINED_CONV) + sum(
         len(diag.get(k) or {})
         for k in ("by_strategy", "by_whale_stance", "by_onchain_bias",
                   "by_ai_verdict", "by_learning_action", "by_evidence",

@@ -295,16 +295,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; first read 11-15 passed TK SHORT on a baseline found too narrow — re-read with the corrected baseline decides).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` (OPEN, the two replacement candidates; read due after deploy).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-15, /ichitest first read taken, baseline fault found and fixed; re-read due; COMBO 11-21
+## Status — 2026-11-22, owner chose to replace the strategy; /trendtest built (two candidates, pre-registered), read due after deploy
 
-1161 tests green. Working tree clean.
+1169 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -459,8 +459,8 @@ tags COMBO / OTHER, **scored only on signals created after
 `COMBO_SINCE` (2026-10-24T00:00Z)** — earlier rows are dropped, not shown —
 with `combo:COMBO-OTHER` gap in the FDR family and each side's measured
 fee+spread. Until such trades resolve the card prints a one-line
-placeholder. Registry `combo-whale-liquid-primary` (OPEN) holds the success
-and kill criteria; **read with `/diag 720` around 2026-11-21, not before**,
+placeholder. Registry `combo-whale-liquid-primary` (**INCONCLUSIVE since 11-20**, see below) holds the success
+and kill criteria; read with `/diag 720` around 2026-11-21, not before,
 and do not touch the rule or date once readings start. No signal is
 filtered; nothing the bot emits changes.
 
@@ -753,6 +753,129 @@ mean beats 45.9%, 1 over the bar. Criteria in the registry
 (`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
 one-coin run. Even a pass earns a forward paper read, never the live path.
 
+**The owner chose to replace the strategy (2026-11-21/22).** After the
+COMBO read the owner asked whether anything worked, was told nothing has a
+demonstrated edge (flat gross, about −0.1R net), and asked to rebuild from
+scratch. Agreed, with one distinction kept: **the strategy goes, the
+measurement stays** (diag, archive, honest baselines, pre-registration).
+The owner's own wish list (BTC correlation, "anomaly" coins, candle
+patterns, FvG, breakout vs fakeout, EMA, volume profile, many engines
+validating each other) was answered with the old bot's record: it already
+stacks six detectors and AI, whale, on-chain and learning layers, and none
+of the layers added anything measurable. The redesign is layered instead
+(market regime → coin selection → entry → exit). It starts with the
+plainest version, and **each extra component must win its own paired test
+before it stays.** Shorts are allowed. The owner's worry about shorting a
+top that keeps rising is handled by allowing shorts only in a BTC down
+regime, and only on a breakdown.
+- **`/trendtest` built (2026-11-22)** — offline, the `/ichitest` pattern.
+  - (A) BTC-regime 20-bar breakout, both directions, 2×ATR stop, 3×ATR
+    trail, 90-bar cap.
+  - (B) Weekly relative momentum, long top 3 / short bottom 3 by 28-day
+    return, which is the "anomaly coins" idea in testable form.
+  - TK-cross SHORT stays a comparator, not a candidate: the owner rightly
+    objected to a short-only strategy.
+  - Calibrated on correlated null baskets (A 1/60, B 3/60 over the 97.5%
+    bar). Criteria are in the registry (`trend-and-relative-momentum`).
+  - **Read: plain `/trendtest` after the deploy.**
+- **Old bot:** the owner said "dimatiin kali ya". They were advised to keep
+  it running until a candidate passes and its forward paper run is built,
+  because it costs nothing, keeps the COMBO read (~12-20) alive, and gives
+  the new era a control. Turning it off is the owner's Railway action;
+  nothing in code changes it.
+- **Where v2 will appear (owner's choice, 11-22; build only if a candidate
+  passes):** the same Telegram chat, in the **High-Conviction topic**
+  (`high_conviction_thread_id`). It replaces the AI conviction ranking
+  (`wolf/reports/conviction.py`), which has measured no edge and is an LLM
+  sitting near the signal path. When v2 goes live:
+  - the ranker is switched off, and `conv:` stops gaining rows (read that as
+    the end of the room, not as data);
+  - TRAP/SCALP "premium" signals (`HIGH_CONVICTION_TYPES` via
+    `TelegramNotifier._route_signal`) go back to their normal topics, so the
+    room carries v2 only;
+  - v2 gets its own paper ledger key, `/v2` and `/diag v2`, a v2-vs-old card
+    over the same window, and a "Strategi v2" tab on the Vercel dashboard.
+  The old bot keeps running as the control.
+- "Good entries to carry over": none of the old entries showed an edge.
+  What carries over is the liquidity lesson, the cost lesson and the
+  instruments, not any detector.
+
+**COMBO read (2026-11-20 17:48, `/diag 720`, window ~10-21 → 11-20, `@
+992d259`) → INCONCLUSIVE, keeps running.** 553 traded, `eff=94`: overall
+−0.019 gross / −0.107 net assumed. The archive held every COMBO-eligible row
+(`history 595 rows from 10-20`). COMBO n=100 +0.063 gross / **+0.003 net**;
+OTHER n=395 −0.059 / −0.126; gap +0.123R, **`padj` 1.000**. Success needed
+`padj` < 0.05 and net > 0, rejection needed gap ≤ 0, so neither is met.
+Taken ~6h before the nominal 11-21; one day cannot move `padj` from 1.000
+to under 0.05, so the outcome cannot depend on it. **COMBO does no better
+than its liquid-book part alone:** `liq:TIGHT` printed +0.106 gross / +0.049
+net, whale WITH +0.045 and PRIMARY −0.015. That is the "one effect counted
+three times" worry, visible on the same card. Next read: `/diag 720` on a
+disjoint window, from about 12-20. Rule and date untouched.
+- **`conv:UNRANKED` printed `padj 0.046*`**, the first starred row on any
+  card. It is the known artifact: its members are signals that resolved
+  before the hourly ranking first looked at them, mostly fast stops, so the
+  label is chosen by the outcome and will always "survive" a test of whether
+  it lost. **Fixed as a measurement fault:** it is still printed, with
+  "outcome-defined, not tested", but it is kept out of the BH-FDR family
+  (`diagnose.OUTCOME_DEFINED_CONV`). The owner was told not to read it as a
+  finding.
+- Strategies, all `padj` 1.000: PREDUMP n=64 **+0.402** (net +0.337),
+  TRAP −0.046, SCALP −0.055, MOMENTUM n=143 −0.079, PREPUMP −0.153,
+  SWING −0.326. `liq:` monotone again (TIGHT +0.106 / MID −0.075 / WIDE
+  −0.104); this overlaps the 11-18 read, so it is not a new replication.
+- **Seven rows carry no AI verdict, no spread and no score composition**
+  (`ai:NO_AI`, `liq:NO_SPREAD` and `evidence:UNRECORDED`, each n=7 at an
+  identical +0.719). They are the same seven trades. They were absent from
+  the 11-18 card, so they come from either the extra 10-21 → 10-24 edge of
+  this window or the last two days. The archive round-trip keeps all three
+  fields (checked). The likely sources are the two record paths that never
+  set them: the news scanner (`scheduler._post_news`) and the manual
+  `POST /signals` API. Not confirmed. Too few to matter; look at them if the
+  count grows.
+- `TELEGRAM_TOKEN_SHARED(x131)` is still the stale 10-30 record, and stays
+  inside 720h windows until ~11-29.
+
+**Third `/diag 600` (2026-11-18 21:06, window ~10-24 → 11-18, `@ 992d259`)
+— the clean `liq:` replication.** Disjoint from the first read (09-29 →
+10-23). 456 traded, `eff=80` (largest yet), `mean_open` 5.64: **−0.033
+gross / −0.121 net assumed** (measured fee+spread 0.066R → about −0.099).
+Same shape again. **The archive is live:** `history 560 resolved rows on
+record from 2026-10-20 (archive + capped log of 500)`.
+- **`liq:` replicated in direction:** TIGHT +0.065 / +0.008 net, MID −0.070
+  / −0.135, WIDE −0.092 / −0.171 — WIDE below TIGHT as predicted, monotone
+  for the third window running, gap +0.157R (first read +0.202). Still
+  `padj` 1.000 and each read is ~0.5 se, so a consistent shape, not a
+  finding. Dropping WIDE would leave about −0.074 net: it trims the loss and
+  the bot still loses; TIGHT alone is ~breakeven. Registry note's next step
+  (a pre-registered spread-gate `/whatif`) **offered, not built**.
+- Strategies, all `padj` 1.000: PREDUMP +0.195 (was +0.436 on 11-10),
+  TRAP −0.026, SCALP −0.044, MOMENTUM n=123 **−0.083** (still the worst
+  large row — pause stands), SWING −0.185, PREPUMP −0.241.
+- **COMBO shown, not read** (rule: `/diag 720` ~11-21): 93 vs 360, gap
+  +0.139, COMBO net +0.009, padj 1.000.
+- `whale:` WITH −0.007 vs AGAINST −0.097 — the gap shrank from ~+0.29 to
+  +0.09. `learn:PENALTY` (+0.061) above BOOST (−0.088) again. `ai:` still
+  adds nothing (CONFIRM +0.014, NEUTRAL −0.051). `conv:UNRANKED` −0.749 is
+  the known artifact. `sess:` gap −0.003 (already rejected). 225 chase drops
+  — settled. `TELEGRAM_TOKEN_SHARED(x131)` is the stale 10-30 record still
+  inside the window; it ages out after ~11-24.
+
+**`/ichitest` decided (2026-11-16, shift baseline, pre-registered).** TK
+cross SHORT n=1729 **net +0.072**, before 2024 +0.025 / 2024+ +0.121,
+**beats 99%** of the shifted null (p98.75 +0.070) → **passes** — the first
+external rule to clear any offline bar here. TK LONG +0.039, beats 98% but
+2024+ −0.015 → fails. Cloud breakout fails both sides (76% / 59%). The
+correction doubled the null's width and the short still cleared it. Hold it
+at arm's length: just over the line, thin early half, ~1-in-10 chance that
+one of the seven offline side-tests run so far passes by luck, funding not
+modelled. Its best argument is that both TK sides beat ~98–99%, the shape
+of time-series momentum. **The owner was told: not a signal, no real money,
+nothing on the live path (rule 1).** Offered, not built: a forward shadow
+ledger (TK shorts on the ten coins at each 4h close, separate key, no
+Telegram signal) — honest arithmetic says ~0.8 trades/day can only catch a
+rule that breaks out of sample, not confirm +0.07R (that needs ~1,000 trades).
+
 **`/ichitest` first read (2026-11-15) — a pass withdrawn before acting on
 it; re-read due.** Ten coins, 4h, since 2020-11. TK cross LONG net +0.038
 (beats 99%, but the 2024+ half was −0.014 → fail); **TK cross SHORT net
@@ -932,9 +1055,8 @@ beats only 6% of random long-green-candle entries. 2020–21 alone made
 +83R; 2022–26 lost −47R. The video's +52R is the bull market plus fitting to
 BTC. The baseline's own +0.148R was noticed and deliberately not chased.
 
-**Next read:** `/diag 600` again once the capped log has rolled over to a
-disjoint sample (~3–4 weeks) — the `liq:` replication — and `/diag 720`
-around 11-21 for COMBO; meanwhile
+**Next read:** COMBO again with `/diag 720` from about 12-20 (disjoint
+window); `/beta` re-read on a disjoint log (~12-01); meanwhile
 `/montecarlo MOMENTUM` again in a week — not to chase the
 streak, but because it is the only number the real-money advice hangs on.
 Nothing paired is left queued. The level question keeps
@@ -1461,7 +1583,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1161 tests, ~15s
+python -m pytest            # 1169 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1479,6 +1601,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
 | `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
+| `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
