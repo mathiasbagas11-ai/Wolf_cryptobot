@@ -295,16 +295,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` (OPEN, `/zonetest` read due after deploy).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 live from 04:39 UTC (`@ 57fb3d1`); /addtest read → REJECTED
+## Status — 2026-11-22, v2 live from 04:39 UTC (`@ 57fb3d1`); /addtest REJECTED; /zonetest built (not merged)
 
-1187 tests green. Working tree clean.
+1194 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -761,6 +761,31 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**`/zonetest` built (2026-11-22, "Gas tes zona").** The owner sent a
+TikTok (@chebito87) selling an indicator that "predicts the daily high and
+low", with a "90% winrate over 4 years". What the owner was told:
+- The 90% is **coverage** (the day's extreme fell inside the zone), not a
+  trade win rate.
+- Its claim of ~88% of days within ±0.25 ADR of a pre-session forecast is
+  implausible without look-ahead or repainting. The zones visibly step at
+  day boundaries.
+- The trade examples are picked.
+
+The formula is unpublished, so `/zonetest` (`wolf/zonetest.py`) tests a
+naive stand-in. The zone sits at the open plus the 60-day median
+(high−open)/ADR20, with a half-width of 0.25 ADR. The card prints:
+- **coverage**, plus the share of days within ±0.10/0.25/0.50 ADR, as a
+  yardstick for the video's numbers;
+- **the zone fade**: entry at the near edge, stop at the far edge, target
+  the open, out at day end.
+
+The fade is graded on 4h bars with the coarse order charged against it, and
+it is compared with zones placed on random days of the same coin. On
+correlated null baskets, naive coverage within ±0.25 ADR was 42–46%. The
+fade won 58% of trades at about −0.21R net, and 0 of 20 null runs cleared
+the 97.5% bar. Registry: `daily-zone-fade`. **Read: plain `/zonetest`
+after the deploy.**
 
 **`/addtest` read (2026-11-22, `@ 57fb3d1`) → REJECTED as registered.**
 2842 paired trades; ADD fired on 53%. Plain: win 36%, +0.079R, worst 1%
@@ -1693,7 +1718,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1187 tests, ~15s
+python -m pytest            # 1194 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1714,6 +1739,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
 | `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
 | `wolf/addtest.py` | paired offline test of averaging down (one lot at 0.5R adverse, closed alone at the half-gap target) on `/trendtest` A's entries (`/addtest`) |
+| `wolf/zonetest.py` | offline test of naive daily high/low zones: coverage (≠ win rate) and the zone fade vs zones on random days (`/zonetest`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |

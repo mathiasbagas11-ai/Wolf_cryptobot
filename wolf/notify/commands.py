@@ -38,6 +38,7 @@ _HELP = (
     "<code>/ichitest</code> — backtest Ichimoku TK cross &amp; cloud breakout against random entries "
     "(~1 min; add a coin, e.g. <code>/ichitest BTC</code>)\n"
     "<code>/v2</code> — 🧪 strategi v2 (tren, paper, belum lolos tes): saldo, posisi, hasil\n"
+    "<code>/zonetest</code> — tes zona high/low harian ala video: coverage vs win rate, dan fade-nya (~2 min)\n"
     "<code>/addtest</code> — tes: averaging down (ADD + exit setengah gap) vs polos di entry yang sama (~2 min)\n"
     "<code>/trendtest</code> — backtest the two candidates for a new strategy "
     "(trend breakout, weekly relative momentum) against random baselines (~2 min)\n"
@@ -100,6 +101,8 @@ class CommandRouter:
             return self._ichitest(arg)
         if cmd == "v2":
             return self._v2()
+        if cmd == "zonetest":
+            return self._zonetest()
         if cmd == "addtest":
             return self._addtest()
         if cmd == "trendtest":
@@ -564,6 +567,18 @@ class CommandRouter:
         except Exception:
             log.exception("v2 card failed")
             return "⚠️ v2 card failed — see logs."
+
+    def _zonetest(self) -> str:
+        """Naive daily zones: coverage and the zone fade (see wolf.zonetest)."""
+        from wolf import zonetest
+
+        try:
+            report = zonetest.backtest(client=getattr(self._app, "client", None),
+                                       cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Zone backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(zonetest.render(report))}</pre>"
 
     def _addtest(self) -> str:
         """Paired test of averaging down on the trend entries (see wolf.addtest)."""
