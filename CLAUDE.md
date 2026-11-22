@@ -295,14 +295,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` (OPEN, `/zonetest` read due after deploy).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 live from 04:39 UTC (`@ 57fb3d1`); /addtest REJECTED; /zonetest merged (PR #43, `@ de82f72`), read due
+## Status — 2026-11-22, v2 live from 04:39 UTC (`@ 57fb3d1`); /addtest REJECTED; /zonetest read → REJECTED (coverage 55% vs claimed ~88%; fade wins 66% and loses −0.078R net)
 
 1194 tests green. Working tree clean.
 
@@ -761,6 +761,17 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**`/zonetest` read (2026-11-22, `@ de82f72`) → REJECTED.** Coverage
+of the naive zone over 21,190 coin-days: high 55%, low 53%, both 31%.
+Within ±0.10/0.25/0.50 ADR of the centre: 23/55/83% (high). That is above
+the random-walk 42–46%, because daily ranges cluster, and far below the
+video's ~88%, which needs a real forecast or look-ahead. **The fade won
+66% of trades and lost −0.078R net.** Gross was −0.004R, both halves were
+negative, and it beat zones on random days 89% of the time against a
+97.5% bar. The owner was told this is the clearest case yet of a high
+win rate on a losing trade. The same paste's 24h card confirmed the deploy
+`@ de82f72`: n=23 eff=10, +0.150 gross / +0.047 net, nothing separated.
 
 **`/zonetest` built (2026-11-22, "Gas tes zona").** The owner sent a
 TikTok (@chebito87) selling an indicator that "predicts the daily high and
