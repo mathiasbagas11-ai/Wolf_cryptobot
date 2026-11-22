@@ -110,6 +110,9 @@ class TelegramNotifier:
         ladder=None,
     ) -> None:
         self._settings = settings
+        #: False while v2 owns the High-Conviction topic, so TRAP stays on its
+        #: normal routes and the room carries v2 only.
+        self.divert_high_conviction = True
         self._timeout = timeout
         self._tz = tz
         self._session = session or requests.Session()
@@ -329,7 +332,7 @@ class TelegramNotifier:
         *and* that topic is configured; otherwise the message stays on its
         normal per-event route, so behaviour is unchanged when the topic is unset.
         """
-        if signal.signal_type in HIGH_CONVICTION_TYPES:
+        if self.divert_high_conviction and signal.signal_type in HIGH_CONVICTION_TYPES:
             hc = self._settings.route_high_conviction()
             if hc:
                 return hc

@@ -124,6 +124,14 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         )
         return {"enabled": True, **app_obj.account.summary(), "ledger": ledger}
 
+    @api.get("/v2", dependencies=[Depends(require_api_key)])
+    def v2_view() -> dict:
+        """🧪 v2's paper ledger for the dashboard's "Strategi v2" tab."""
+        engine = getattr(app_obj, "v2", None)
+        if engine is None:
+            return {"enabled": False}
+        return {"enabled": True, **engine.summary()}
+
     @api.get("/journal", dependencies=[Depends(require_api_key)])
     def journal_view() -> dict:
         """The ledger as a journal: headline numbers, curve, calendar, setups."""

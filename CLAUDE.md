@@ -295,16 +295,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` (OPEN, the two replacement candidates; read due after deploy).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (OPEN, `/addtest` read due) and `v2-persistence-label` (OPEN, read at 300 v2 trades).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, owner chose to replace the strategy; /trendtest built (two candidates, pre-registered), read due after deploy
+## Status — 2026-11-22, v2 + tab + /addtest + v2 persistence label built (not yet merged); /addtest read due after deploy
 
-1169 tests green. Working tree clean.
+1187 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -752,6 +752,100 @@ video's own cut, fixed in advance. Calibrated on random walks: 60 null runs,
 mean beats 45.9%, 1 over the bar. Criteria in the registry
 (`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
 one-coin run. Even a pass earns a forward paper read, never the live path.
+
+**Real-bot card 11-22 02:37 (24h, `@ f2d94b6`) — confirms the deploy.**
+n=27 `eff=9`: +0.313 gross / +0.222 net, ci95 [−0.41, +1.03], all `padj`
+1.000. A good day, and one card. The new `conv:UNRANKED` line printed as
+intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
+`liq:` inverted for the day (TIGHT −0.285, WIDE +0.849 on n=5/6). That is
+noise against three multi-week reads, not a reversal. `sess:` gap −1.107
+(already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
+window.
+
+**The Copilot "math atlas" (2026-11-22, "Pelajari soal ini, dan
+terapkan").** The owner sent nine slides and a snapshot of another live
+futures bot: $14 equity, +61% in 3 days, 70% win rate at a payoff of ~1.
+What the owner was told:
+- The snapshot proves nothing. It is 3 days, about $5 of profit, and the
+  episodes overlap. Averaging-down systems look smooth until the one event
+  that takes everything.
+- **ADD + half-gap recovery** (slide 05) is where the win rate comes from.
+  It reshapes outcomes and does not create an edge.
+- **Kelly on a 4h window** (slide 04) sizes from noise.
+- **The "entry lottery" with trauma/preference memory** (slide 06) is the
+  same kind of thing as our old learning layer, which fitted noise.
+- Slides 07–08 are live-execution plumbing and do not apply to a paper bot.
+- **The 7% halt** (slide 09) is good practice for real money, except that its
+  restart can lower the reference after a loss.
+- **The universe screen** (slide 02: liquidity plus ρ1 > 0 and VR > 1, a
+  "moves continue" test) is the one idea that fits what this project found.
+- Accepted ("1 + 2") and built, both measurement only:
+  - **`/addtest`** (`wolf/addtest.py`): paired, on `/trendtest` A's own
+    entries. The first unit is the plain trade unchanged. One lot is added
+    at 0.5R adverse and closed on its own at the half-gap target, which is
+    the atlas's per-lot recovery. A first version closed both units and was
+    corrected before any read. On correlated null baskets the gap is −0.03
+    to −0.06R (t −3 to −6), win rate +1–2 points, worst 1% −1.05R → −1.60R:
+    on no-edge data averaging down shows as a cost. Registry
+    `average-down-half-gap`. **Read: plain `/addtest` after the deploy.**
+  - **v2 persistence label** (`v2.persistence`): ρ1 and VR(q=6) over the
+    last 180 4h returns, recorded on every v2 entry as PERSIST / NOT. It
+    never filters. It shows on the entry message, `/v2` and the dashboard
+    (pill and label column). Registry `v2-persistence-label`, read once at
+    300 v2 trades; expect it to be underpowered.
+- The owner was told not to copy Copilot with real money until it has
+  months of record, including a sharp down market.
+
+**v2 built (2026-11-22, "gas paper A") — A runs forward on paper.**
+`wolf/v2.py` runs `/trendtest` candidate A unchanged on bars that did not
+exist when it was read. It calls `trendtest`'s own `btc_regime`,
+`breakout_side` and `walk_trail` (the stepper was factored out of
+`simulate_trail` for this), so forward and backtest cannot drift. Details:
+- Own ledger in store key `v2_paper`: start **10,000** (the owner asked for
+  10,000 over 1,000 before any trade; nothing reads the nominal, every
+  measurement is in R), 1% risk, 20bps charged on each trade's own stop.
+- Scheduler job `v2` runs every 15 min (`V2_INTERVAL_MIN`). It fetches
+  500 4h bars per coin from Binance's data host, falling back to the bot
+  client, including the forming bar, whose open is the fill.
+- Only the newest closed bar is read for entries, so a signal missed during
+  downtime is skipped, never filled late.
+- Entries and exits post to the **High-Conviction topic**
+  (`route_conviction`), labelled "paper · belum lolos tes".
+- While `V2_ENABLED` (default **true**) is on, the AI conviction ranker is
+  not built, and `TelegramNotifier.divert_high_conviction=False` keeps TRAP
+  off the room. **`conv:` therefore stops gaining rows from the deploy:**
+  that is the end of the room, not data.
+- `/v2` prints balance, closed trades by side, open positions and
+  kill-rule progress.
+- **Kill rule** (registry `trend-breakout-forward-paper`): at 300 closed
+  trades, a net mean below 0 stops new entries for good. There is **no
+  promotion rule**: about 1.3 trades a day cannot confirm +0.08R. Do not
+  change the rule while it runs.
+- **Vercel "Strategi v2" tab** (`dashboard/app/v2/page.js`) reads
+  `GET /v2` (`V2Engine.summary`). It shows the "belum lolos tes" note,
+  tiles (balance, net R/trade, win rate, trades n/300), a net and gross
+  equity curve, the locked rules, open positions with a 4h chart (entry,
+  current trailing stop, signal and entry markers), and recent closed
+  trades. Checked with `next build` and a screenshot against a mock API.
+- Not built: a `/diag v2` card. The old bot keeps running as the control.
+
+**`/trendtest` read (2026-11-22, `@ f2d94b6`, pre-registered) → both
+REJECTED.**
+- **A (trend breakout):** n=2842, gross +0.131, **net +0.080**, LONG
+  +0.071 / SHORT +0.092, before 2024 +0.135 / 2024+ +0.026, 8 of 10 coins
+  positive. Beats **95%** of the shifted null against a 97.5% bar →
+  rejected. It is the most consistent offline result the project has
+  produced, but the 2024+ half is thin and it shares data and idea with
+  the TK pass, so the two are not independent. **Do not retune it on this
+  data.**
+- **B (relative momentum):** +0.140%/wk, max DD 53%, before 2024 +0.683 /
+  2024+ −0.435 %/wk, beats 85% → rejected outright.
+- Consequence: **no replacement strategy is built**, the old bot keeps
+  running unchanged, and the High-Conviction room stays as it is. Offered
+  to the owner and not built: A forward in paper, unchanged, labelled
+  "did not pass", with a pre-registered kill rule. It can only catch a
+  break (about 1.3 trades a day), not confirm the edge. The manual journal
+  was also offered again.
 
 **The owner chose to replace the strategy (2026-11-21/22).** After the
 COMBO read the owner asked whether anything worked, was told nothing has a
@@ -1583,7 +1677,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1169 tests, ~15s
+python -m pytest            # 1187 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1602,6 +1696,8 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
 | `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
 | `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
+| `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
+| `wolf/addtest.py` | paired offline test of averaging down (one lot at 0.5R adverse, closed alone at the half-gap target) on `/trendtest` A's entries (`/addtest`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
