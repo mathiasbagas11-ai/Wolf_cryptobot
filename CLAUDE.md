@@ -295,16 +295,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` (OPEN, `/sweeptest` read due after deploy).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 live from 04:39 UTC (`@ 57fb3d1`); /addtest REJECTED; /zonetest read → REJECTED (coverage 55% vs claimed ~88%; fade wins 66% and loses −0.078R net)
+## Status — 2026-11-22, v2 live; /addtest and /zonetest REJECTED; /sweeptest built (not merged)
 
-1194 tests green. Working tree clean.
+1198 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -761,6 +761,27 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**`/sweeptest` built (2026-11-22, "Gue mau lu cek strateginya").** The
+owner sent a screenshot from someone else's Threads post. It shows an MT5
+terminal with an Opus sidebar planning a BTC short ("Plan #45": sweep of the
+H1 high, sell 60,900–61,080, SL 62,050, TP 55,250, about 1:5). What the
+owner was told:
+- The plan is sound in structure.
+- One chart proves nothing, and an LLM's plans cannot be backtested as
+  plans. The owner first thought of analysing its #1–#44 history; it is not
+  theirs.
+- `/sweeptest` (`wolf/sweeptest.py`) tests the mechanical core instead, on
+  ~2.7 years of 1h bars for the ten coins:
+  - trade only with the D1 (EMA50 and EMA200) and H4 (EMA50) trend;
+  - enter on an H1 sweep of the last counter-swing that closes back;
+  - stop at the sweep ±0.25 ATR, target the last opposite swing (≥1R),
+    5-day cap;
+  - compared with the same trades shifted to random days.
+- Calibrated: 0 of 30 correlated null baskets cleared 97.5%. Expect cost to
+  bite: 1R is ~0.9% at H1, so cost is ~0.2R a trade.
+- Registry: `trend-pullback-sweep`. **Read: plain `/sweeptest` after the
+  deploy.**
 
 **`/zonetest` read (2026-11-22, `@ de82f72`) → REJECTED.** Coverage
 of the naive zone over 21,190 coin-days: high 55%, low 53%, both 31%.
@@ -1729,7 +1750,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1194 tests, ~15s
+python -m pytest            # 1198 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1751,6 +1772,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
 | `wolf/addtest.py` | paired offline test of averaging down (one lot at 0.5R adverse, closed alone at the half-gap target) on `/trendtest` A's entries (`/addtest`) |
 | `wolf/zonetest.py` | offline test of naive daily high/low zones: coverage (≠ win rate) and the zone fade vs zones on random days (`/zonetest`) |
+| `wolf/sweeptest.py` | offline 1h trend-pullback sweep test (D1/H4 trend, H1 sweep-and-reject, TP opposite swing) vs the same trades on random days (`/sweeptest`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
