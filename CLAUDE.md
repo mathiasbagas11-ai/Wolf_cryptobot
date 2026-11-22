@@ -753,6 +753,15 @@ mean beats 45.9%, 1 over the bar. Criteria in the registry
 (`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
 one-coin run. Even a pass earns a forward paper read, never the live path.
 
+**Real-bot card 11-22 02:37 (24h, `@ f2d94b6`) — confirms the deploy.**
+n=27 `eff=9`: +0.313 gross / +0.222 net, ci95 [−0.41, +1.03], all `padj`
+1.000. A good day, and one card. The new `conv:UNRANKED` line printed as
+intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
+`liq:` inverted for the day (TIGHT −0.285, WIDE +0.849 on n=5/6). That is
+noise against three multi-week reads, not a reversal. `sess:` gap −1.107
+(already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
+window.
+
 **`/trendtest` read (2026-11-22, `@ f2d94b6`, pre-registered) → both
 REJECTED.**
 - **A (trend breakout):** n=2842, gross +0.131, **net +0.080**, LONG
