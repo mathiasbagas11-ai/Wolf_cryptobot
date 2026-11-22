@@ -37,6 +37,7 @@ _HELP = (
     "(~1 min; add a coin, e.g. <code>/ewtest ETH</code>)\n"
     "<code>/ichitest</code> — backtest Ichimoku TK cross &amp; cloud breakout against random entries "
     "(~1 min; add a coin, e.g. <code>/ichitest BTC</code>)\n"
+    "<code>/v2</code> — 🧪 strategi v2 (tren, paper, belum lolos tes): saldo, posisi, hasil\n"
     "<code>/trendtest</code> — backtest the two candidates for a new strategy "
     "(trend breakout, weekly relative momentum) against random baselines (~2 min)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
@@ -96,6 +97,8 @@ class CommandRouter:
             return self._ewtest(arg)
         if cmd == "ichitest":
             return self._ichitest(arg)
+        if cmd == "v2":
+            return self._v2()
         if cmd == "trendtest":
             return self._trendtest()
         if cmd in ("mae", "mfe", "excursion"):
@@ -547,6 +550,17 @@ class CommandRouter:
             log.exception("Ichimoku backtest failed")
             return "⚠️ Backtest failed — see logs."
         return f"<pre>{esc(ichitest.render(report))}</pre>"
+
+    def _v2(self) -> str:
+        """The v2 forward paper run's card (see wolf.v2)."""
+        engine = getattr(self._app, "v2", None)
+        if engine is None:
+            return "v2 is off (V2_ENABLED=false)."
+        try:
+            return f"<pre>{esc(engine.card())}</pre>"
+        except Exception:
+            log.exception("v2 card failed")
+            return "⚠️ v2 card failed — see logs."
 
     def _trendtest(self) -> str:
         """Backtest the two new-strategy candidates offline (see wolf.trendtest).

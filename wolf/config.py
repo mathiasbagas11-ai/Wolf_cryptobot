@@ -681,6 +681,19 @@ class ConvictionSettings:
 
 
 @dataclass(frozen=True)
+class V2Settings:
+    """🧪 v2 — the trend-breakout candidate run forward on paper (wolf.v2).
+
+    On by default since the owner chose it on 2026-11-22. While it is on it
+    owns the High-Conviction topic: the AI conviction ranking is not built and
+    TRAP signals are no longer diverted there, so the room carries v2 only.
+    """
+
+    enabled: bool = True
+    interval_min: int = 15
+
+
+@dataclass(frozen=True)
 class DebateRole:
     """One debate participant (bull / bear / arbiter) → a provider + model."""
 
@@ -1021,6 +1034,7 @@ class Settings:
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
     conviction: ConvictionSettings = field(default_factory=ConvictionSettings)
+    v2: V2Settings = field(default_factory=V2Settings)
     flow: FlowSettings = field(default_factory=FlowSettings)
     onchain: OnChainSettings = field(default_factory=OnChainSettings)
     anomaly: AnomalySettings = field(default_factory=AnomalySettings)
@@ -1080,6 +1094,10 @@ class Settings:
             min_conviction=_env_int("CONVICTION_MIN_CONVICTION", 60),
             lookback_hours=_env_float("CONVICTION_LOOKBACK_HOURS", 12.0),
             max_tokens=_env_int("CONVICTION_MAX_TOKENS", 1500),
+        )
+        v2 = V2Settings(
+            enabled=_env_bool("V2_ENABLED", True),
+            interval_min=_env_int("V2_INTERVAL_MIN", 15),
         )
         flow = FlowSettings(
             enabled=_env_bool("FLOW_ENABLED", False),
@@ -1266,6 +1284,7 @@ class Settings:
             news=news,
             reports=reports,
             conviction=conviction,
+            v2=v2,
             flow=flow,
             onchain=onchain,
             anomaly=anomaly,

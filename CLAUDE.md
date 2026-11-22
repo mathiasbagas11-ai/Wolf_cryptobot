@@ -295,16 +295,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, /trendtest read: both candidates REJECTED (A a near miss at 95%); old bot keeps running
+## Status — 2026-11-22, v2 built: candidate A runs forward on paper in the High-Conviction topic (not yet merged)
 
-1169 tests green. Working tree clean.
+1177 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -761,6 +761,33 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**v2 built (2026-11-22, "gas paper A") — A runs forward on paper.**
+`wolf/v2.py` runs `/trendtest` candidate A unchanged on bars that did not
+exist when it was read. It calls `trendtest`'s own `btc_regime`,
+`breakout_side` and `walk_trail` (the stepper was factored out of
+`simulate_trail` for this), so forward and backtest cannot drift. Details:
+- Own ledger in store key `v2_paper`: start 1000, 1% risk, 20bps charged on
+  each trade's own stop.
+- Scheduler job `v2` runs every 15 min (`V2_INTERVAL_MIN`). It fetches
+  500 4h bars per coin from Binance's data host, falling back to the bot
+  client, including the forming bar, whose open is the fill.
+- Only the newest closed bar is read for entries, so a signal missed during
+  downtime is skipped, never filled late.
+- Entries and exits post to the **High-Conviction topic**
+  (`route_conviction`), labelled "paper · belum lolos tes".
+- While `V2_ENABLED` (default **true**) is on, the AI conviction ranker is
+  not built, and `TelegramNotifier.divert_high_conviction=False` keeps TRAP
+  off the room. **`conv:` therefore stops gaining rows from the deploy:**
+  that is the end of the room, not data.
+- `/v2` prints balance, closed trades by side, open positions and
+  kill-rule progress.
+- **Kill rule** (registry `trend-breakout-forward-paper`): at 300 closed
+  trades, a net mean below 0 stops new entries for good. There is **no
+  promotion rule**: about 1.3 trades a day cannot confirm +0.08R. Do not
+  change the rule while it runs.
+- Not built yet: a `/diag v2` card and the Vercel "Strategi v2" tab (offered
+  next). The old bot keeps running as the control.
 
 **`/trendtest` read (2026-11-22, `@ f2d94b6`, pre-registered) → both
 REJECTED.**
@@ -1610,7 +1637,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1169 tests, ~15s
+python -m pytest            # 1177 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1629,6 +1656,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
 | `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
 | `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
+| `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |

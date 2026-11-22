@@ -82,48 +82,72 @@ def btc_regime(btc: Sequence[Candle]) -> dict[int, int]:
     return out
 
 
-def simulate_trail(candles: Sequence[Candle], k: int, risk: float, long: bool,
-                   hold: int = HOLD_BARS) -> Optional[tuple[float, int, str]]:
-    """R of one trailing-stop trade entered at bar ``k``'s open.
+def walk_trail(candles: Sequence[Candle], k: int, risk: float, long: bool,
+               end: int) -> tuple[Optional[tuple[float, int, str]], float]:
+    """Step one trailing-stop trade from bar ``k``'s open through bar ``end - 1``.
 
-    The stop in force for a bar is the one set by the bars before it, so a bar
-    cannot raise its own stop before testing it. A gap through the stop fills
-    at the open.
+    Returns ``(exit, stop)``: the exit as ``(R, bar, "stop")`` if the stop was
+    hit, else ``None`` with the stop now in force. The stop in force for a bar
+    is the one set by the bars before it, so a bar cannot raise its own stop
+    before testing it, and a gap through the stop fills at the open. The
+    backtest and the live paper run both call this, so they cannot drift.
     """
-    if k + hold > len(candles) or risk <= 0:
-        return None
     entry = candles[k].open
     trail = TRAIL_MULT * risk
     stop = entry - risk if long else entry + risk
     best = entry
-    for j in range(k, k + hold):
+    for j in range(k, end):
         b = candles[j]
         if long:
             if b.low <= stop:
-                return (min(stop, b.open) - entry) / risk, j, "stop"
+                return ((min(stop, b.open) - entry) / risk, j, "stop"), stop
             best = max(best, b.high)
             stop = max(stop, best - trail)
         else:
             if b.high >= stop:
-                return (entry - max(stop, b.open)) / risk, j, "stop"
+                return ((entry - max(stop, b.open)) / risk, j, "stop"), stop
             best = min(best, b.low)
             stop = min(stop, best + trail)
+    return None, stop
+
+
+def simulate_trail(candles: Sequence[Candle], k: int, risk: float, long: bool,
+                   hold: int = HOLD_BARS) -> Optional[tuple[float, int, str]]:
+    """R of one trailing-stop trade entered at bar ``k``'s open, or ``None``
+    when there are not enough bars left to finish it."""
+    if k + hold > len(candles) or risk <= 0:
+        return None
+    hit, _stop = walk_trail(candles, k, risk, long, k + hold)
+    if hit is not None:
+        return hit
+    entry = candles[k].open
     last = candles[k + hold - 1].close
     return ((last - entry) if long else (entry - last)) / risk, k + hold - 1, "timeout"
+
+
+def breakout_side(candles: Sequence[Candle], i: int, regime: dict[int, int]) -> Optional[bool]:
+    """True (long) / False (short) when bar ``i`` closes beyond the previous
+    ``BREAKOUT_BARS`` bars' extreme in the regime's direction, else None."""
+    if i < BREAKOUT_BARS:
+        return None
+    side = regime.get(candles[i].time)
+    if side is None:
+        return None
+    window = candles[i - BREAKOUT_BARS:i]
+    c = candles[i].close
+    if side > 0 and c > max(b.high for b in window):
+        return True
+    if side < 0 and c < min(b.low for b in window):
+        return False
+    return None
 
 
 def trend_signals(candles: Sequence[Candle], regime: dict[int, int]) -> list[tuple[int, bool]]:
     out = []
     for i in range(BREAKOUT_BARS, len(candles)):
-        side = regime.get(candles[i].time)
-        if side is None:
-            continue
-        window = candles[i - BREAKOUT_BARS:i]
-        c = candles[i].close
-        if side > 0 and c > max(b.high for b in window):
-            out.append((i, True))
-        elif side < 0 and c < min(b.low for b in window):
-            out.append((i, False))
+        side = breakout_side(candles, i, regime)
+        if side is not None:
+            out.append((i, side))
     return out
 
 
