@@ -295,16 +295,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` (OPEN, the two replacement candidates; read due after deploy).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-20, COMBO read → INCONCLUSIVE; conv:UNRANKED taken out of the FDR family
+## Status — 2026-11-22, owner chose to replace the strategy; /trendtest built (two candidates, pre-registered), read due after deploy
 
-1162 tests green. Working tree clean.
+1169 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -752,6 +752,40 @@ video's own cut, fixed in advance. Calibrated on random walks: 60 null runs,
 mean beats 45.9%, 1 over the bar. Criteria in the registry
 (`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
 one-coin run. Even a pass earns a forward paper read, never the live path.
+
+**The owner chose to replace the strategy (2026-11-21/22).** After the
+COMBO read the owner asked whether anything worked, was told nothing has a
+demonstrated edge (flat gross, about −0.1R net), and asked to rebuild from
+scratch. Agreed, with one distinction kept: **the strategy goes, the
+measurement stays** (diag, archive, honest baselines, pre-registration).
+The owner's own wish list (BTC correlation, "anomaly" coins, candle
+patterns, FvG, breakout vs fakeout, EMA, volume profile, many engines
+validating each other) was answered with the old bot's record: it already
+stacks six detectors and AI, whale, on-chain and learning layers, and none
+of the layers added anything measurable. The redesign is layered instead
+(market regime → coin selection → entry → exit). It starts with the
+plainest version, and **each extra component must win its own paired test
+before it stays.** Shorts are allowed. The owner's worry about shorting a
+top that keeps rising is handled by allowing shorts only in a BTC down
+regime, and only on a breakdown.
+- **`/trendtest` built (2026-11-22)** — offline, the `/ichitest` pattern.
+  - (A) BTC-regime 20-bar breakout, both directions, 2×ATR stop, 3×ATR
+    trail, 90-bar cap.
+  - (B) Weekly relative momentum, long top 3 / short bottom 3 by 28-day
+    return, which is the "anomaly coins" idea in testable form.
+  - TK-cross SHORT stays a comparator, not a candidate: the owner rightly
+    objected to a short-only strategy.
+  - Calibrated on correlated null baskets (A 1/60, B 3/60 over the 97.5%
+    bar). Criteria are in the registry (`trend-and-relative-momentum`).
+  - **Read: plain `/trendtest` after the deploy.**
+- **Old bot:** the owner said "dimatiin kali ya". They were advised to keep
+  it running until a candidate passes and its forward paper run is built,
+  because it costs nothing, keeps the COMBO read (~12-20) alive, and gives
+  the new era a control. Turning it off is the owner's Railway action;
+  nothing in code changes it.
+- "Good entries to carry over": none of the old entries showed an edge.
+  What carries over is the liquidity lesson, the cost lesson and the
+  instruments, not any detector.
 
 **COMBO read (2026-11-20 17:48, `/diag 720`, window ~10-21 → 11-20, `@
 992d259`) → INCONCLUSIVE, keeps running.** 553 traded, `eff=94`: overall
@@ -1536,7 +1570,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1162 tests, ~15s
+python -m pytest            # 1169 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1554,6 +1588,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
 | `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
+| `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |

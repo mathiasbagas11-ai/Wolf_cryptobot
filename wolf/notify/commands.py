@@ -37,6 +37,8 @@ _HELP = (
     "(~1 min; add a coin, e.g. <code>/ewtest ETH</code>)\n"
     "<code>/ichitest</code> — backtest Ichimoku TK cross &amp; cloud breakout against random entries "
     "(~1 min; add a coin, e.g. <code>/ichitest BTC</code>)\n"
+    "<code>/trendtest</code> — backtest the two candidates for a new strategy "
+    "(trend breakout, weekly relative momentum) against random baselines (~2 min)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
     "<code>/mae</code> — how far trades went for and against them before closing "
@@ -94,6 +96,8 @@ class CommandRouter:
             return self._ewtest(arg)
         if cmd == "ichitest":
             return self._ichitest(arg)
+        if cmd == "trendtest":
+            return self._trendtest()
         if cmd in ("mae", "mfe", "excursion"):
             return self._excursion(arg)
         if cmd == "beta":
@@ -543,6 +547,22 @@ class CommandRouter:
             log.exception("Ichimoku backtest failed")
             return "⚠️ Backtest failed — see logs."
         return f"<pre>{esc(ichitest.render(report))}</pre>"
+
+    def _trendtest(self) -> str:
+        """Backtest the two new-strategy candidates offline (see wolf.trendtest).
+
+        Always the whole basket: relative momentum ranks coins against each
+        other, so a one-coin run has nothing to rank.
+        """
+        from wolf import trendtest
+
+        try:
+            report = trendtest.backtest(client=getattr(self._app, "client", None),
+                                        cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Trend backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(trendtest.render(report))}</pre>"
 
     def _excursion(self, arg: str) -> str:
         """Best and worst point of each resolved trade's path, in R."""
