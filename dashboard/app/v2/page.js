@@ -59,6 +59,13 @@ export default async function V2() {
           LONG {d.long.n} trade{d.long.net_r !== null && ` · rata-rata ${signed(d.long.net_r, 3)}R`} ·
           SHORT {d.short.n} trade{d.short.net_r !== null && ` · rata-rata ${signed(d.short.net_r, 3)}R`}
         </div>
+        {d.by_label && (
+          <div className="sub">
+            Label tren (cuma dicatat, dibaca di {d.kill_after} trade): PERSIST {d.by_label.PERSIST.n} trade
+            {d.by_label.PERSIST.net_r !== null && ` · ${signed(d.by_label.PERSIST.net_r, 3)}R`} ·
+            NOT {d.by_label.NOT.n} trade{d.by_label.NOT.net_r !== null && ` · ${signed(d.by_label.NOT.net_r, 3)}R`}
+          </div>
+        )}
       </section>
 
       <section className="card">
@@ -79,6 +86,7 @@ export default async function V2() {
             <strong>{p.symbol}</strong>{" "}
             <span className={`pill ${p.direction === "LONG" ? "long" : "short"}`}>{p.direction}</span>
             <span className="pill">4h</span>
+            {p.persist && <span className="pill">{p.persist.label} · VR {fmt(p.persist.vr, 2)}</span>}
           </div>
           <div className="sub" style={{ marginTop: 6 }}>
             Entry {price(p.entry)} · stop sekarang {price(p.stop)} · stop awal {price(p.initial_stop)} (1R = {fmt(p.risk_pct, 2)}%)
@@ -97,7 +105,7 @@ export default async function V2() {
         <div className="card scroll">
           <table>
             <thead><tr><th>Koin</th><th>Arah</th><th>Tutup</th><th>Cara</th>
-              <th className="num">R</th><th className="num">R net</th></tr></thead>
+              <th>Label</th><th className="num">R</th><th className="num">R net</th></tr></thead>
             <tbody>
               {d.closed.map((t, i) => (
                 <tr key={i}>
@@ -105,6 +113,7 @@ export default async function V2() {
                   <td className={t.direction === "LONG" ? "pos" : "neg"}>{t.direction}</td>
                   <td style={{ whiteSpace: "nowrap" }}>{short(t.exit_time)}</td>
                   <td>{t.how === "stop" ? "trailing" : "15 hari"}</td>
+                  <td className="sub">{t.label || "—"}</td>
                   <td className="num">{signed(t.r, 2)}</td>
                   <td className={`num ${tone(t.net_r)}`}>{signed(t.net_r, 2)}</td>
                 </tr>

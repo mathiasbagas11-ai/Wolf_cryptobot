@@ -295,16 +295,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (OPEN, `/addtest` read due) and `v2-persistence-label` (OPEN, read at 300 v2 trades).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 built + Vercel "Strategi v2" tab, paper start 10,000 (not yet merged)
+## Status — 2026-11-22, v2 + tab + /addtest + v2 persistence label built (not yet merged); /addtest read due after deploy
 
-1178 tests green. Working tree clean.
+1187 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -761,6 +761,40 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**The Copilot "math atlas" (2026-11-22, "Pelajari soal ini, dan
+terapkan").** The owner sent nine slides and a snapshot of another live
+futures bot: $14 equity, +61% in 3 days, 70% win rate at a payoff of ~1.
+What the owner was told:
+- The snapshot proves nothing. It is 3 days, about $5 of profit, and the
+  episodes overlap. Averaging-down systems look smooth until the one event
+  that takes everything.
+- **ADD + half-gap recovery** (slide 05) is where the win rate comes from.
+  It reshapes outcomes and does not create an edge.
+- **Kelly on a 4h window** (slide 04) sizes from noise.
+- **The "entry lottery" with trauma/preference memory** (slide 06) is the
+  same kind of thing as our old learning layer, which fitted noise.
+- Slides 07–08 are live-execution plumbing and do not apply to a paper bot.
+- **The 7% halt** (slide 09) is good practice for real money, except that its
+  restart can lower the reference after a loss.
+- **The universe screen** (slide 02: liquidity plus ρ1 > 0 and VR > 1, a
+  "moves continue" test) is the one idea that fits what this project found.
+- Accepted ("1 + 2") and built, both measurement only:
+  - **`/addtest`** (`wolf/addtest.py`): paired, on `/trendtest` A's own
+    entries. The first unit is the plain trade unchanged. One lot is added
+    at 0.5R adverse and closed on its own at the half-gap target, which is
+    the atlas's per-lot recovery. A first version closed both units and was
+    corrected before any read. On correlated null baskets the gap is −0.03
+    to −0.06R (t −3 to −6), win rate +1–2 points, worst 1% −1.05R → −1.60R:
+    on no-edge data averaging down shows as a cost. Registry
+    `average-down-half-gap`. **Read: plain `/addtest` after the deploy.**
+  - **v2 persistence label** (`v2.persistence`): ρ1 and VR(q=6) over the
+    last 180 4h returns, recorded on every v2 entry as PERSIST / NOT. It
+    never filters. It shows on the entry message, `/v2` and the dashboard
+    (pill and label column). Registry `v2-persistence-label`, read once at
+    300 v2 trades; expect it to be underpowered.
+- The owner was told not to copy Copilot with real money until it has
+  months of record, including a sharp down market.
 
 **v2 built (2026-11-22, "gas paper A") — A runs forward on paper.**
 `wolf/v2.py` runs `/trendtest` candidate A unchanged on bars that did not
@@ -1643,7 +1677,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1178 tests, ~15s
+python -m pytest            # 1187 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1663,6 +1697,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
 | `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
 | `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
+| `wolf/addtest.py` | paired offline test of averaging down (one lot at 0.5R adverse, closed alone at the half-gap target) on `/trendtest` A's entries (`/addtest`) |
 | `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
 | `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |

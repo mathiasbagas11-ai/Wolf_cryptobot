@@ -38,6 +38,7 @@ _HELP = (
     "<code>/ichitest</code> — backtest Ichimoku TK cross &amp; cloud breakout against random entries "
     "(~1 min; add a coin, e.g. <code>/ichitest BTC</code>)\n"
     "<code>/v2</code> — 🧪 strategi v2 (tren, paper, belum lolos tes): saldo, posisi, hasil\n"
+    "<code>/addtest</code> — tes: averaging down (ADD + exit setengah gap) vs polos di entry yang sama (~2 min)\n"
     "<code>/trendtest</code> — backtest the two candidates for a new strategy "
     "(trend breakout, weekly relative momentum) against random baselines (~2 min)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
@@ -99,6 +100,8 @@ class CommandRouter:
             return self._ichitest(arg)
         if cmd == "v2":
             return self._v2()
+        if cmd == "addtest":
+            return self._addtest()
         if cmd == "trendtest":
             return self._trendtest()
         if cmd in ("mae", "mfe", "excursion"):
@@ -561,6 +564,18 @@ class CommandRouter:
         except Exception:
             log.exception("v2 card failed")
             return "⚠️ v2 card failed — see logs."
+
+    def _addtest(self) -> str:
+        """Paired test of averaging down on the trend entries (see wolf.addtest)."""
+        from wolf import addtest
+
+        try:
+            report = addtest.backtest(client=getattr(self._app, "client", None),
+                                      cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("ADD backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(addtest.render(report))}</pre>"
 
     def _trendtest(self) -> str:
         """Backtest the two new-strategy candidates offline (see wolf.trendtest).

@@ -25,6 +25,7 @@ Each pass:
 from __future__ import annotations
 
 import logging
+import math
 import statistics
 import time
 from datetime import datetime, timezone
@@ -70,12 +71,55 @@ def fetch_4h(symbol: str, client=None, limit: int = FETCH_BARS, timeout: float =
     return []
 
 
+PERSIST_W = 180            # 4h log returns read for ρ1 and VR (30 days)
+PERSIST_Q = 6              # VR horizon: 6 bars = 24h
+
+
+def persistence(closes: Sequence[float], w: int = PERSIST_W, q: int = PERSIST_Q) -> Optional[dict]:
+    """Lag-1 autocorrelation and variance ratio of the last ``w`` 4h log returns.
+
+    Recorded on each v2 entry as a label, never used to filter. It is the
+    universe test from the Copilot atlas (ρ1 > 0 and VR > 1, i.e. moves tend
+    to continue), measured forward on v2's own trades. ``None`` when history is
+    short or flat.
+    """
+    if len(closes) < w + q + 1:
+        return None
+    c = closes[-(w + 1):]
+    r = [math.log(c[i] / c[i - 1]) for i in range(1, len(c)) if c[i - 1] > 0 and c[i] > 0]
+    if len(r) < w:
+        return None
+    x, y = r[:-1], r[1:]
+    mx, my = statistics.fmean(x), statistics.fmean(y)
+    sxy = sum((a - mx) * (b - my) for a, b in zip(x, y))
+    sxx = sum((a - mx) ** 2 for a in x)
+    syy = sum((b - my) ** 2 for b in y)
+    if sxx <= 0 or syy <= 0:
+        return None
+    rho1 = sxy / math.sqrt(sxx * syy)
+    var1 = statistics.variance(r)
+    rq = [sum(r[i - q + 1:i + 1]) for i in range(q - 1, len(r))]
+    vr = statistics.variance(rq) / (q * var1) if var1 > 0 and len(rq) > 1 else None
+    if vr is None:
+        return None
+    label = "PERSIST" if rho1 > 0 and vr > 1 else "NOT"
+    return {"rho1": round(rho1, 4), "vr": round(vr, 4), "label": label}
+
+
 def _iso(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
 
 
 def _fmt(px: float) -> str:
     return f"{px:,.6g}" if px < 1 else f"{px:,.4f}" if px < 100 else f"{px:,.2f}"
+
+
+def _persist_line(p: Optional[dict]) -> str:
+    if not p:
+        return "Label tren: n/a (riwayat kurang)"
+    word = "tren cenderung lanjut" if p["label"] == "PERSIST" else "tren tidak terbukti lanjut"
+    return (f"Label tren (cuma dicatat, bukan filter): {p['label']} — {word} "
+            f"(ρ1 {p['rho1']:+.3f}, VR {p['vr']:.2f})")
 
 
 class V2Engine:
@@ -193,7 +237,8 @@ class V2Engine:
                    "entry": entry, "risk": risk, "risk_pct": risk / entry * 100,
                    "stop": entry - risk if long else entry + risk,
                    "level": max(b.high for b in window) if long else min(b.low for b in window),
-                   "opened": _iso(entry_bar.time)}
+                   "opened": _iso(entry_bar.time),
+                   "persist": persistence([b.close for b in bars[:n]])}
             st["open"][sym] = pos
             made.append({"symbol": sym, **pos})
             self._say(self._entry_text(sym, pos))
@@ -222,6 +267,7 @@ class V2Engine:
                 f"Entry (open 4h): {_fmt(pos['entry'])}\n"
                 f"Stop awal: {_fmt(pos['stop'])} ({STOP_ATR:g}×ATR = {pos['risk_pct']:.2f}%)\n"
                 f"Exit: trailing {STOP_ATR * TRAIL_MULT:g}×ATR dari harga terbaik, tanpa TP, maks 15 hari\n"
+                f"{_persist_line(pos.get('persist'))}\n"
                 f"Paper only — aturan ini gagal tipis di backtest (95% vs syarat 97.5%). Bukan sinyal uang beneran.")
 
     def _exit_text(self, t: dict, st: dict) -> str:
@@ -261,6 +307,7 @@ class V2Engine:
             "net_r": round(statistics.fmean(nets), 4) if nets else None,
             "gross_r": round(statistics.fmean(t["r"] for t in closed), 4) if closed else None,
             "long": side(True), "short": side(False),
+            "by_label": self._by_label(closed),
             "kill_after": KILL_AFTER, "killed": st["killed"],
             "rules": {"breakout_bars": BREAKOUT_BARS, "stop_atr": STOP_ATR,
                       "trail_atr": STOP_ATR * TRAIL_MULT, "hold_days": HOLD_BARS // 6},
@@ -268,14 +315,24 @@ class V2Engine:
                       "entry": p["entry"], "stop": p["stop"], "initial_stop":
                       p["entry"] - p["risk"] if p["long"] else p["entry"] + p["risk"],
                       "risk_pct": round(p["risk_pct"], 3), "level": p.get("level"),
-                      "opened": p["opened"], "signal_time": _iso(p["signal_time"])}
+                      "opened": p["opened"], "signal_time": _iso(p["signal_time"]),
+                      "persist": p.get("persist")}
                      for sym, p in sorted(st["open"].items())],
             "closed": [{"symbol": t["symbol"], "direction": "LONG" if t["long"] else "SHORT",
                         "entry": t["entry"], "r": t["r"], "net_r": t["net_r"], "how": t["how"],
-                        "opened": t["opened"], "exit_time": t["exit_time"]}
+                        "opened": t["opened"], "exit_time": t["exit_time"],
+                        "label": (t.get("persist") or {}).get("label")}
                        for t in reversed(closed[-recent:])],
             "curve": curve,
         }
+
+    @staticmethod
+    def _by_label(closed: Sequence[dict]) -> dict:
+        out = {}
+        for name in ("PERSIST", "NOT"):
+            rs = [t["net_r"] for t in closed if (t.get("persist") or {}).get("label") == name]
+            out[name] = {"n": len(rs), "net_r": round(statistics.fmean(rs), 4) if rs else None}
+        return out
 
     # ── card ────────────────────────────────────────────────────────────
     def card(self) -> str:
@@ -295,13 +352,19 @@ class V2Engine:
                 rs = [t["net_r"] for t in closed if t["long"] is flag]
                 if rs:
                     lines.append(f"  {side:<5} n={len(rs)} rata-rata {statistics.fmean(rs):+.3f}R")
+            lab = self._by_label(closed)
+            if lab["PERSIST"]["n"] or lab["NOT"]["n"]:
+                f = lambda d: f"n={d['n']} {d['net_r']:+.3f}R" if d["n"] else "n=0"  # noqa: E731
+                lines.append(f"  label  PERSIST {f(lab['PERSIST'])} · NOT {f(lab['NOT'])} "
+                             "(cuma dicatat; dibaca di 300 trade)")
         else:
             lines.append("selesai  belum ada trade yang tutup")
         if st["open"]:
             lines.append(f"terbuka  {len(st['open'])} posisi")
             for sym, p in sorted(st["open"].items()):
+                lab = (p.get("persist") or {}).get("label", "n/a")
                 lines.append(f"  {'LONG ' if p['long'] else 'SHORT'} {sym:<9} entry {_fmt(p['entry'])} "
-                             f"stop {_fmt(p['stop'])} sejak {p['opened'][:16].replace('T', ' ')}")
+                             f"stop {_fmt(p['stop'])} sejak {p['opened'][:16].replace('T', ' ')} [{lab}]")
         else:
             lines.append("terbuka  tidak ada posisi")
         if st["killed"]:

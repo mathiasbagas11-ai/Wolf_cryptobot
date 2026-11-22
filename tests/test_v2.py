@@ -170,3 +170,32 @@ def test_the_dashboard_endpoint_serves_the_v2_ledger(settings):
     body = TestClient(create_app(app_obj)).get("/v2").json()
     assert body["enabled"] and body["start_balance"] == 10_000.0 and body["n"] == 1
     assert body["curve"][0]["net"] == 1.95 and body["long"]["n"] == 1
+
+
+def test_a_trending_series_is_labelled_persist_and_a_choppy_one_not():
+    from wolf.v2 import persistence
+    import math as _m
+    trend, p, r = [], 100.0, 0.0
+    import random as _r
+    g = _r.Random(1)
+    for _ in range(400):
+        r = 0.6 * r + g.gauss(0, 0.01)       # positively autocorrelated returns
+        p *= _m.exp(r)
+        trend.append(p)
+    chop, p, r = [], 100.0, 0.0
+    for _ in range(400):
+        r = -0.6 * r + g.gauss(0, 0.01)      # negatively autocorrelated returns
+        p *= _m.exp(r)
+        chop.append(p)
+    assert persistence(trend)["label"] == "PERSIST"
+    assert persistence(chop)["label"] == "NOT"
+    assert persistence(trend[:50]) is None
+
+
+def test_every_v2_entry_carries_the_persistence_label_and_it_is_never_a_filter(store):
+    n = 400
+    data = {"BTCUSDT": _btc(n), "SOLUSDT": _flat_then_break(n)}
+    out = _engine(store, data, n - 1, _Notifier()).run()
+    sol = [e for e in out["entries"] if e["symbol"] == "SOLUSDT"][0]
+    assert "persist" in sol            # recorded (None when the history is flat)
+    assert "Label tren" in _engine(store, data, n - 1)._entry_text("SOLUSDT", sol)
