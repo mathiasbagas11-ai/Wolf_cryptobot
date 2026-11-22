@@ -295,14 +295,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` (OPEN, the two replacement candidates; read due after deploy).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, owner chose to replace the strategy; /trendtest built (two candidates, pre-registered), read due after deploy
+## Status — 2026-11-22, /trendtest read: both candidates REJECTED (A a near miss at 95%); old bot keeps running
 
 1169 tests green. Working tree clean.
 
@@ -752,6 +752,24 @@ video's own cut, fixed in advance. Calibrated on random walks: 60 null runs,
 mean beats 45.9%, 1 over the bar. Criteria in the registry
 (`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
 one-coin run. Even a pass earns a forward paper read, never the live path.
+
+**`/trendtest` read (2026-11-22, `@ f2d94b6`, pre-registered) → both
+REJECTED.**
+- **A (trend breakout):** n=2842, gross +0.131, **net +0.080**, LONG
+  +0.071 / SHORT +0.092, before 2024 +0.135 / 2024+ +0.026, 8 of 10 coins
+  positive. Beats **95%** of the shifted null against a 97.5% bar →
+  rejected. It is the most consistent offline result the project has
+  produced, but the 2024+ half is thin and it shares data and idea with
+  the TK pass, so the two are not independent. **Do not retune it on this
+  data.**
+- **B (relative momentum):** +0.140%/wk, max DD 53%, before 2024 +0.683 /
+  2024+ −0.435 %/wk, beats 85% → rejected outright.
+- Consequence: **no replacement strategy is built**, the old bot keeps
+  running unchanged, and the High-Conviction room stays as it is. Offered
+  to the owner and not built: A forward in paper, unchanged, labelled
+  "did not pass", with a pre-registered kill rule. It can only catch a
+  break (about 1.3 trades a day), not confirm the edge. The manual journal
+  was also offered again.
 
 **The owner chose to replace the strategy (2026-11-21/22).** After the
 COMBO read the owner asked whether anything worked, was told nothing has a
