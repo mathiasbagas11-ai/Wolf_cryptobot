@@ -38,6 +38,7 @@ _HELP = (
     "<code>/ichitest</code> — backtest Ichimoku TK cross &amp; cloud breakout against random entries "
     "(~1 min; add a coin, e.g. <code>/ichitest BTC</code>)\n"
     "<code>/v2</code> — 🧪 strategi v2 (tren, paper, belum lolos tes): saldo, posisi, hasil\n"
+    "<code>/sweeptest</code> — tes strategi Threads: ikut tren, short/long di sweep H1, TP swing (~3 min)\n"
     "<code>/zonetest</code> — tes zona high/low harian ala video: coverage vs win rate, dan fade-nya (~2 min)\n"
     "<code>/addtest</code> — tes: averaging down (ADD + exit setengah gap) vs polos di entry yang sama (~2 min)\n"
     "<code>/trendtest</code> — backtest the two candidates for a new strategy "
@@ -101,6 +102,8 @@ class CommandRouter:
             return self._ichitest(arg)
         if cmd == "v2":
             return self._v2()
+        if cmd == "sweeptest":
+            return self._sweeptest()
         if cmd == "zonetest":
             return self._zonetest()
         if cmd == "addtest":
@@ -567,6 +570,18 @@ class CommandRouter:
         except Exception:
             log.exception("v2 card failed")
             return "⚠️ v2 card failed — see logs."
+
+    def _sweeptest(self) -> str:
+        """Trend-pullback sweep from a Threads screenshot (see wolf.sweeptest)."""
+        from wolf import sweeptest
+
+        try:
+            report = sweeptest.backtest(client=getattr(self._app, "client", None),
+                                        cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Sweep backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(sweeptest.render(report))}</pre>"
 
     def _zonetest(self) -> str:
         """Naive daily zones: coverage and the zone fade (see wolf.zonetest)."""
