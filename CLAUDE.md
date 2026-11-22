@@ -302,7 +302,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 + tab + /addtest + v2 persistence label built (not yet merged); /addtest read due after deploy
+## Status — 2026-11-22, v2 + tab + /addtest + v2 persistence label merged (PR #42, `@ 57fb3d1`); /addtest read due after deploy
 
 1187 tests green. Working tree clean.
 
