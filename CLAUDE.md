@@ -295,14 +295,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` (OPEN, `/sweeptest` read due after deploy).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED the same day** (net −0.319R, beats 25%).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 live; /addtest and /zonetest REJECTED; /sweeptest merged (PR #44, `@ b3a9a5a`), read due
+## Status — 2026-11-22, v2 live; /addtest, /zonetest and /sweeptest all REJECTED
 
 1198 tests green. Working tree clean.
 
@@ -762,7 +762,7 @@ noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
 
-**`/sweeptest` built (2026-11-22, "Gue mau lu cek strateginya").** The
+**`/sweeptest` built (2026-11-22, "Gue mau lu cek strateginya") — read below: REJECTED.** The
 owner sent a screenshot from someone else's Threads post. It shows an MT5
 terminal with an Opus sidebar planning a BTC short ("Plan #45": sweep of the
 H1 high, sell 60,900–61,080, SL 62,050, TP 55,250, about 1:5). What the
@@ -780,8 +780,20 @@ owner was told:
   - compared with the same trades shifted to random days.
 - Calibrated: 0 of 30 correlated null baskets cleared 97.5%. Expect cost to
   bite: 1R is ~0.9% at H1, so cost is ~0.2R a trade.
-- Registry: `trend-pullback-sweep`. **Read: plain `/sweeptest` after the
-  deploy.**
+- Registry: `trend-pullback-sweep` (REJECTED 11-22).
+
+**`/sweeptest` read (2026-11-22, `@ b3a9a5a`) → REJECTED.** n=2603 on
+1h bars since 2024-02-26: won 29%, gross −0.014R, **net −0.319R** (1R median
+0.81%, so cost runs ~0.3R a trade), target median 2.55R. LONG −0.333 /
+SHORT −0.311; both halves negative (−0.276 / −0.362); every coin negative.
+The same trades on random days: median −0.285, p97.5 −0.122 → **beats
+25%**. The with-trend sweep-and-reject entry times the market no better
+than chance, and at H1 stop widths the cost alone sinks it. The owner was
+told the Threads plan may be a fine discretionary trade, but its mechanical
+core is not an edge — and that short stops make cost the first enemy.
+- Same paste: 24h card at `@ b3a9a5a` confirms the deploy (n=24 eff=11,
+  +0.165 gross / +0.068 net, all `padj` 1.000; `liq:` inverted again on
+  n=4/6, `sess:` gap −1.150 on a rejected hypothesis).
 
 **`/zonetest` read (2026-11-22, `@ de82f72`) → REJECTED.** Coverage
 of the naive zone over 21,190 coin-days: high 55%, low 53%, both 31%.
