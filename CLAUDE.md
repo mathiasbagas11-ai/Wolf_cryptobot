@@ -783,6 +783,19 @@ regime, and only on a breakdown.
   because it costs nothing, keeps the COMBO read (~12-20) alive, and gives
   the new era a control. Turning it off is the owner's Railway action;
   nothing in code changes it.
+- **Where v2 will appear (owner's choice, 11-22; build only if a candidate
+  passes):** the same Telegram chat, in the **High-Conviction topic**
+  (`high_conviction_thread_id`). It replaces the AI conviction ranking
+  (`wolf/reports/conviction.py`), which has measured no edge and is an LLM
+  sitting near the signal path. When v2 goes live:
+  - the ranker is switched off, and `conv:` stops gaining rows (read that as
+    the end of the room, not as data);
+  - TRAP/SCALP "premium" signals (`HIGH_CONVICTION_TYPES` via
+    `TelegramNotifier._route_signal`) go back to their normal topics, so the
+    room carries v2 only;
+  - v2 gets its own paper ledger key, `/v2` and `/diag v2`, a v2-vs-old card
+    over the same window, and a "Strategi v2" tab on the Vercel dashboard.
+  The old bot keeps running as the control.
 - "Good entries to carry over": none of the old entries showed an edge.
   What carries over is the liquidity lesson, the cost lesson and the
   instruments, not any detector.
