@@ -302,9 +302,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 built: candidate A runs forward on paper in the High-Conviction topic (not yet merged)
+## Status — 2026-11-22, v2 built + Vercel "Strategi v2" tab, paper start 10,000 (not yet merged)
 
-1177 tests green. Working tree clean.
+1178 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -767,8 +767,9 @@ window.
 exist when it was read. It calls `trendtest`'s own `btc_regime`,
 `breakout_side` and `walk_trail` (the stepper was factored out of
 `simulate_trail` for this), so forward and backtest cannot drift. Details:
-- Own ledger in store key `v2_paper`: start 1000, 1% risk, 20bps charged on
-  each trade's own stop.
+- Own ledger in store key `v2_paper`: start **10,000** (the owner asked for
+  10,000 over 1,000 before any trade; nothing reads the nominal, every
+  measurement is in R), 1% risk, 20bps charged on each trade's own stop.
 - Scheduler job `v2` runs every 15 min (`V2_INTERVAL_MIN`). It fetches
   500 4h bars per coin from Binance's data host, falling back to the bot
   client, including the forming bar, whose open is the fill.
@@ -786,8 +787,13 @@ exist when it was read. It calls `trendtest`'s own `btc_regime`,
   trades, a net mean below 0 stops new entries for good. There is **no
   promotion rule**: about 1.3 trades a day cannot confirm +0.08R. Do not
   change the rule while it runs.
-- Not built yet: a `/diag v2` card and the Vercel "Strategi v2" tab (offered
-  next). The old bot keeps running as the control.
+- **Vercel "Strategi v2" tab** (`dashboard/app/v2/page.js`) reads
+  `GET /v2` (`V2Engine.summary`). It shows the "belum lolos tes" note,
+  tiles (balance, net R/trade, win rate, trades n/300), a net and gross
+  equity curve, the locked rules, open positions with a 4h chart (entry,
+  current trailing stop, signal and entry markers), and recent closed
+  trades. Checked with `next build` and a screenshot against a mock API.
+- Not built: a `/diag v2` card. The old bot keeps running as the control.
 
 **`/trendtest` read (2026-11-22, `@ f2d94b6`, pre-registered) → both
 REJECTED.**
@@ -1637,7 +1643,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1177 tests, ~15s
+python -m pytest            # 1178 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

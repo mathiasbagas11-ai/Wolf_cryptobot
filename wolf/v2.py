@@ -43,7 +43,7 @@ STATE_KEY = "v2_paper"
 BAR_MS = 4 * 3600 * 1000
 FETCH_BARS = 500
 KILL_AFTER = 300
-START_BALANCE = 1000.0
+START_BALANCE = 10_000.0
 RISK_PCT = 1.0
 LABEL = "🧪 V2 TREND (paper · belum lolos tes)"
 _HOSTS = ("https://data-api.binance.vision/api/v3/klines",
@@ -230,6 +230,52 @@ class V2Engine:
         return (f"{LABEL}\n✅ Tutup {side} {t['symbol']} — {how}\n"
                 f"Hasil: {t['r']:+.2f}R kotor, {t['net_r']:+.2f}R setelah biaya\n"
                 f"Trade ke-{len(st['closed'])} · saldo paper {st['balance']:,.2f}")
+
+    # ── dashboard ───────────────────────────────────────────────────────
+    def summary(self, recent: int = 30) -> dict:
+        """Everything the Vercel "Strategi v2" tab shows, from the same ledger
+        the card reads. The curve compounds each closed trade at RISK_PCT, net
+        and gross, so the two lines differ by cost alone."""
+        st = self.state()
+        closed = st["closed"]
+        net_bal = gross_bal = 1.0
+        curve = []
+        for t in closed:
+            net_bal *= 1 + RISK_PCT / 100 * t["net_r"]
+            gross_bal *= 1 + RISK_PCT / 100 * t["r"]
+            ts = int(datetime.fromisoformat(t["exit_time"]).timestamp())
+            curve.append({"t": ts, "net": round((net_bal - 1) * 100, 3),
+                          "gross": round((gross_bal - 1) * 100, 3)})
+        nets = [t["net_r"] for t in closed]
+
+        def side(flag):
+            rs = [t["net_r"] for t in closed if t["long"] is flag]
+            return {"n": len(rs), "net_r": round(statistics.fmean(rs), 4) if rs else None}
+
+        return {
+            "label": LABEL, "started": st["started"], "start_balance": START_BALANCE,
+            "balance": round(st["balance"], 2),
+            "return_pct": round((st["balance"] / START_BALANCE - 1) * 100, 3),
+            "risk_pct": RISK_PCT, "cost_bps": self._cost_bps,
+            "n": len(closed), "wins": sum(1 for x in nets if x > 0),
+            "net_r": round(statistics.fmean(nets), 4) if nets else None,
+            "gross_r": round(statistics.fmean(t["r"] for t in closed), 4) if closed else None,
+            "long": side(True), "short": side(False),
+            "kill_after": KILL_AFTER, "killed": st["killed"],
+            "rules": {"breakout_bars": BREAKOUT_BARS, "stop_atr": STOP_ATR,
+                      "trail_atr": STOP_ATR * TRAIL_MULT, "hold_days": HOLD_BARS // 6},
+            "open": [{"symbol": sym, "direction": "LONG" if p["long"] else "SHORT",
+                      "entry": p["entry"], "stop": p["stop"], "initial_stop":
+                      p["entry"] - p["risk"] if p["long"] else p["entry"] + p["risk"],
+                      "risk_pct": round(p["risk_pct"], 3), "level": p.get("level"),
+                      "opened": p["opened"], "signal_time": _iso(p["signal_time"])}
+                     for sym, p in sorted(st["open"].items())],
+            "closed": [{"symbol": t["symbol"], "direction": "LONG" if t["long"] else "SHORT",
+                        "entry": t["entry"], "r": t["r"], "net_r": t["net_r"], "how": t["how"],
+                        "opened": t["opened"], "exit_time": t["exit_time"]}
+                       for t in reversed(closed[-recent:])],
+            "curve": curve,
+        }
 
     # ── card ────────────────────────────────────────────────────────────
     def card(self) -> str:

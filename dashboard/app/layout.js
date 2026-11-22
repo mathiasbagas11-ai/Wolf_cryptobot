@@ -13,6 +13,7 @@ export default function RootLayout({ children }) {
           <nav>
             <Link href="/">Overview</Link>
             <Link href="/signals">Sinyal aktif</Link>
+            <Link href="/v2">Strategi v2</Link>
           </nav>
         </header>
         <main>{children}</main>

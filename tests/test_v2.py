@@ -155,3 +155,18 @@ def test_v2_is_reachable_as_a_telegram_command(store):
     reply = CommandRouter(app).handle("/v2")
     assert reply.startswith("<pre>") and "V2 TREND" in reply and "300" in reply
     assert "/v2" in CommandRouter(app).handle("/help")
+
+
+def test_the_dashboard_endpoint_serves_the_v2_ledger(settings):
+    from fastapi.testclient import TestClient
+    from wolf.api import create_app
+    from wolf.app import build_application
+    app_obj = build_application(settings)
+    st = app_obj.v2.state()
+    st["closed"] = [{"symbol": "SOLUSDT", "long": True, "entry": 100.0, "r": 2.0, "net_r": 1.95,
+                     "how": "stop", "opened": "2026-11-22T00:00:00+00:00",
+                     "exit_time": "2026-11-23T00:00:00+00:00"}]
+    app_obj.store.write(STATE_KEY, st)
+    body = TestClient(create_app(app_obj)).get("/v2").json()
+    assert body["enabled"] and body["start_balance"] == 10_000.0 and body["n"] == 1
+    assert body["curve"][0]["net"] == 1.95 and body["long"]["n"] == 1
