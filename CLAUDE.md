@@ -302,7 +302,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 live; /addtest and /zonetest REJECTED; /sweeptest built (not merged)
+## Status — 2026-11-22, v2 live; /addtest and /zonetest REJECTED; /sweeptest merged (PR #44, `@ b3a9a5a`), read due
 
 1198 tests green. Working tree clean.
 
