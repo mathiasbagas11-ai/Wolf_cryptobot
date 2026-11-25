@@ -295,16 +295,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` (OPEN, `/sweeptest` read due after deploy).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` (OPEN, `/trendtest 1h` and `/trendtest 15m` read due after deploy).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, v2 silent since 11-22 → pulse added; v2 tab on Vela; /sweeptest read due
+## Status — 2026-11-25, `/trendtest 1h|15m` built (v3 candidate, read due); /sweeptest REJECTED; v2 silent because the market is
 
-1203 tests green. Working tree clean.
+1211 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -762,6 +762,63 @@ noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
 
+**`/trendtest 1h` and `/trendtest 15m` built (2026-11-25, "bikin dulu tes
+tf rendah buat v3").** Two questions came first:
+- The owner asked to promote v2 by lowering its bar to the 95% it reached.
+  They were told no, because moving the line after the read changes the
+  verdict and not the evidence; with ~10 offline tests run, a 95% bar would
+  give roughly a 40% chance of one false pass (about 22% at 97.5%); and A's
+  2024+ half is only +0.026R. Options given: keep real money paused and let
+  the paper run speak (recommended), or follow v2 by hand at 0.25% risk as
+  the owner's own choice and not as a pass ("gas B" builds those rules, not
+  yet taken).
+- They then asked about v2 on a low timeframe "for scalping". They were told
+  cost in R grows as the stop shrinks (≈0.05R at 4h → ~0.10R at 1h → ~0.20R
+  at 15m → ~0.35R at 5m), and that this project's low-timeframe record shows
+  no gross edge that could pay it. They agreed to an offline test before any
+  v3 paper run.
+What was built:
+- `wolf/lowtftest.py` calls `trendtest`'s own `btc_regime`, `run_trend` and
+  `simulate_trail` unchanged, with the same bar counts on the shorter clock
+  (300-bar regime, 20-bar breakout, 2×/3×ATR, 90-bar cap).
+- History: 1h ~2.7 years, 15m ~1 year.
+- Baseline: the same trades shifted by whole random days, 200 draws.
+- Pass rule: 97.5%, n ≥ 100, net > 0, and both halves (split at the median
+  trade date) positive. The card prints gross, cost and net side by side,
+  and A's 4h line for comparison.
+- Calibration: 0 of 30 correlated null baskets passed on each timeframe. A
+  full-size 15m run takes about 6 s on synthetic data.
+- Plain `/trendtest` is unchanged. Registry: `v2-rule-on-lower-timeframes`
+  (OPEN), with the prediction written before any read: 15m fails, 1h most
+  likely fails.
+- A pass earns a separate v3 paper ledger outside the High-Conviction topic;
+  v2 is never changed. **Read: `/trendtest 1h` and `/trendtest 15m` after the
+  deploy.**
+
+**`/montecarlo MOMENTUM` (2026-11-25) — a second, near-disjoint read gives
+the same number.** Pool 10-29 → 11-24 (the capped log; the 10-23 read
+pooled 09-29 → 10-22): 125 trades over 27 days, **−0.016 gross / −0.098
+net**, against −0.025 / −0.098 last time. 30-day median −13.7% (gross
+−3.4%), 87% of paths lose, max DD p95 32.6%, p95 losing streak 11; lived
+path −12.2% net, DD 17.9%. Weeks W44 −0.179, W45 −0.083, W46 +0.117,
+W47 −0.288, W48 +0.710 gross (n=10, a part week; do not read it). Two
+month-long pools agreeing is still not a test (no FDR, overlap not
+discounted), but it is the number the real-money advice hangs on, and it
+has not moved: **the pause stands.** Next look at `/diag 720` ~12-20.
+
+**`/sweeptest` read (2026-11-25, pre-registered) → REJECTED.** Ten coins,
+1h since 2024-02-29: n=2613, win 29%, **gross −0.009R, net −0.314R**
+(total −821.5R), median 1R 0.82%, median target 2.56R; LONG −0.342 /
+SHORT −0.298, both halves negative, every coin negative. Beats 27% of the
+same trades on random days (needs 97.5%). Gross is zero and the real
+figures land almost exactly on the null calibration (win ~30%, target
+~2.6R, 1R ~0.9%): the trend filter plus the H1 sweep times nothing, and
+cost at H1 stop widths (~0.3R a trade) is the whole loss. The owner was
+told the screenshot's plan looks good because 1:5 geometry always does at
+a ~30% win rate, and that the next AI-sidebar plan should get the same
+answer without a new test. **Do not retune pivot width, stop buffer, EMAs
+or the 1R floor on this data.**
+
 **v2 has emitted nothing since it started (11-22 → 11-25), so each pass now
 records a pulse (2026-11-25, "gaada sinyal v2 dari hari minggu").** At
 ~1.3 trades a day a Poisson count makes three empty days ~1–2% likely, but
@@ -778,9 +835,13 @@ side it allows, and each coin's % still to go to its own 20-bar level, held
 coins marked) — also when the pass is skipped for want of BTC bars. `/v2`
 prints it as `mesin` lines and the dashboard's v2 tab as "Status mesin",
 flagging a pass older than an hour. Measurement only; `_enter` reads none
-of it. **Next: owner runs `/v2` after the deploy** — a stale pass or a
-`GAGAL` list is a fault, a fresh pass with every coin short of its level is
-the market.
+of it. **Read 2026-11-25 05:30 UTC (`@ 33b08b4`, PR #45) → the market,
+not a fault.** Pass 0.0h old, data 10/10, BTC 59,421.85 against its
+300-bar mean 75,853.52 (−21.7%), so shorts only; the five nearest coins
+still needed a further 0.86–1.23% fall to close below their 20-bar lows
+(AVAX, ETH, BTC, SOL, BNB). v2 is running; it is waiting for a breakdown
+after a fall that has already happened. Read the pulse again only if a
+later `/v2` shows a stale pass or a `GAGAL` list.
 
 **Vela charts on the v2 tab (2026-11-25, "copy repo LuxAlgo/Vela, terapkan,
 paper test di v2").** Vela (`@luxalgo/vela`, Apache-2.0 + a NOTICE that
@@ -1275,8 +1336,8 @@ BTC. The baseline's own +0.148R was noticed and deliberately not chased.
 
 **Next read:** COMBO again with `/diag 720` from about 12-20 (disjoint
 window); `/beta` re-read on a disjoint log (~12-01); meanwhile
-`/montecarlo MOMENTUM` again in a week — not to chase the
-streak, but because it is the only number the real-money advice hangs on.
+`/montecarlo MOMENTUM` read 11-25 (−0.098 net again; pause stands) — next
+look only with the 12-20 `/diag 720`.
 Nothing paired is left queued. The level question keeps
 landing card by card; the two open offers below are what would sharpen it.
 
@@ -1801,7 +1862,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1203 tests, ~15s
+python -m pytest            # 1211 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1820,6 +1881,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
 | `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
 | `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
+| `wolf/lowtftest.py` | v2's rule bar for bar on 1h / 15m vs the same trades on random days — the v3 question (`/trendtest 1h`, `/trendtest 15m`) |
 | `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
 | `wolf/addtest.py` | paired offline test of averaging down (one lot at 0.5R adverse, closed alone at the half-gap target) on `/trendtest` A's entries (`/addtest`) |
 | `wolf/zonetest.py` | offline test of naive daily high/low zones: coverage (≠ win rate) and the zone fade vs zones on random days (`/zonetest`) |
