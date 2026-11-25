@@ -302,7 +302,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, v2 silent since 11-22 → pulse added; v2 tab on Vela; /sweeptest read due
+## Status — 2026-11-25, v2 silent because the market is (pulse read); v2 tab on Vela; /sweeptest read due
 
 1203 tests green. Working tree clean.
 
@@ -778,9 +778,13 @@ side it allows, and each coin's % still to go to its own 20-bar level, held
 coins marked) — also when the pass is skipped for want of BTC bars. `/v2`
 prints it as `mesin` lines and the dashboard's v2 tab as "Status mesin",
 flagging a pass older than an hour. Measurement only; `_enter` reads none
-of it. **Next: owner runs `/v2` after the deploy** — a stale pass or a
-`GAGAL` list is a fault, a fresh pass with every coin short of its level is
-the market.
+of it. **Read 2026-11-25 05:30 UTC (`@ 33b08b4`, PR #45) → the market,
+not a fault.** Pass 0.0h old, data 10/10, BTC 59,421.85 against its
+300-bar mean 75,853.52 (−21.7%), so shorts only; the five nearest coins
+still needed a further 0.86–1.23% fall to close below their 20-bar lows
+(AVAX, ETH, BTC, SOL, BNB). v2 is running; it is waiting for a breakdown
+after a fall that has already happened. Read the pulse again only if a
+later `/v2` shows a stale pass or a `GAGAL` list.
 
 **Vela charts on the v2 tab (2026-11-25, "copy repo LuxAlgo/Vela, terapkan,
 paper test di v2").** Vela (`@luxalgo/vela`, Apache-2.0 + a NOTICE that
