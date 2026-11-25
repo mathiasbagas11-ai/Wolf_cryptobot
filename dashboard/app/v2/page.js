@@ -8,6 +8,51 @@ const tone = (v) => (v > 0 ? "pos" : v < 0 ? "neg" : "");
 const when = (iso) => (iso ? iso.slice(0, 16).replace("T", " ") : "—");
 const short = (iso) => (iso ? iso.slice(5, 16).replace("T", " ") : "—");
 
+function Pulse({ lp, now }) {
+  if (!lp) return <p className="sub">Belum ada pass tercatat sejak deploy ini — job v2 belum jalan.</p>;
+  const ageH = (now - Date.parse(lp.at)) / 3600000;
+  const stale = ageH > 1;   // the job runs every 15 minutes
+  const b = lp.btc || {};
+  return (
+    <>
+      <p className={stale ? "err" : "sub"}>
+        Pass terakhir {when(lp.at)} UTC ({ageH.toFixed(1)} jam lalu{stale ? " — harusnya tiap 15 menit, cek Railway" : ""}) ·
+        data {lp.fetched}/{lp.of} koin{lp.missing?.length ? ` · gagal: ${lp.missing.join(", ")}` : ""}
+      </p>
+      {lp.skipped ? <p className="err">Pass dilewati: {lp.skipped}</p> : (
+        <>
+          {b.sma && (
+            <p className="sub">
+              BTC {price(b.close)} vs rata-rata 300 candle {price(b.sma)} ({signed((b.close / b.sma - 1) * 100, 1)}%)
+              → v2 cuma ambil <b>{b.side}</b>.
+            </p>
+          )}
+          <div className="scroll">
+            <table>
+              <thead><tr><th>Koin</th><th className="num">Close 4h</th><th className="num">Level breakout</th>
+                <th className="num">Masih kurang</th></tr></thead>
+              <tbody>
+                {lp.coins.map((c) => (
+                  <tr key={c.symbol}>
+                    <td>{c.symbol}{c.open && <span className="pill">pegang</span>}</td>
+                    <td className="num">{price(c.close)}</td>
+                    <td className="num">{price(c.level)}</td>
+                    <td className={`num ${c.gap_pct <= 0 ? "pos" : ""}`}>{c.gap_pct <= 0 ? "tembus" : `${fmt(c.gap_pct, 2)}%`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="sub" style={{ marginTop: 6 }}>
+            "Masih kurang" = seberapa jauh candle 4h harus tutup lagi biar jadi sinyal {b.side}. Sepi sinyal + pass
+            jalan + data lengkap = pasarnya memang lagi ga breakout, bukan bot mati.
+          </p>
+        </>
+      )}
+    </>
+  );
+}
+
 function Tile({ label, value, hint, cls = "" }) {
   return (
     <div className="tile">
@@ -87,6 +132,11 @@ export default async function V2() {
             Harga di atas garis → v2 cuma ambil long. Di bawah → cuma short. Ini cuma gambar aturannya, bukan sinyal baru.
           </p>
         </details>
+      </section>
+
+      <section className="card">
+        <h2>Status mesin <span>kenapa belum ada sinyal?</span></h2>
+        <Pulse lp={d.last_pass} now={Date.now()} />
       </section>
 
       <h2 style={{ margin: "18px 0 8px" }}>Posisi terbuka <span className="sub">({d.open.length})</span></h2>

@@ -302,9 +302,9 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, v2 live; v2 tab charts on Vela; /sweeptest read still due
+## Status — 2026-11-25, v2 silent since 11-22 → pulse added; v2 tab on Vela; /sweeptest read due
 
-1198 tests green. Working tree clean.
+1203 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -761,6 +761,26 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**v2 has emitted nothing since it started (11-22 → 11-25), so each pass now
+records a pulse (2026-11-25, "gaada sinyal v2 dari hari minggu").** At
+~1.3 trades a day a Poisson count makes three empty days ~1–2% likely, but
+breakouts cluster in trends, so empty stretches are far commoner than that;
+the count alone cannot say. What it cannot do either is tell a quiet market
+from the TRAP-shaped fault: a job that never runs, or bars that never
+arrive, look identical from the chat. Code read: Candle times are ms
+(`from_binance` keeps the open time), the scheduler job and the app wiring
+are present, and the forming-bar check needs Binance's data host, which
+returns it. Nothing wrong was found, and the sandbox cannot reach an
+exchange to replay the four days. So `V2Engine.run` now writes
+`last_pass` (time, coins fetched / missing, BTC close vs SMA(300) and the
+side it allows, and each coin's % still to go to its own 20-bar level, held
+coins marked) — also when the pass is skipped for want of BTC bars. `/v2`
+prints it as `mesin` lines and the dashboard's v2 tab as "Status mesin",
+flagging a pass older than an hour. Measurement only; `_enter` reads none
+of it. **Next: owner runs `/v2` after the deploy** — a stale pass or a
+`GAGAL` list is a fault, a fresh pass with every coin short of its level is
+the market.
 
 **Vela charts on the v2 tab (2026-11-25, "copy repo LuxAlgo/Vela, terapkan,
 paper test di v2").** Vela (`@luxalgo/vela`, Apache-2.0 + a NOTICE that
@@ -1781,7 +1801,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1198 tests, ~15s
+python -m pytest            # 1203 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

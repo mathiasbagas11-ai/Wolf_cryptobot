@@ -169,13 +169,52 @@ class V2Engine:
         btc = series.get("BTCUSDT")
         if not btc:
             log.warning("v2: no BTC bars, pass skipped")
+            st["last_pass"] = {"at": _iso(now), "fetched": len(series), "of": len(self._symbols),
+                               "missing": [s for s in self._symbols if s not in series],
+                               "skipped": "no BTC bars"}
+            self._save(st)
             return {"skipped": "no BTC bars"}
         regime = btc_regime(btc[:closed_n["BTCUSDT"]])
         exits = self._advance(st, series, closed_n)
         entries = [] if st["killed"] else self._enter(st, series, closed_n, regime)
         self._check_kill(st)
+        st["last_pass"] = self._pulse(now, series, closed_n, regime, set(st["open"]))
         self._save(st)
         return {"exits": exits, "entries": entries}
+
+    def _pulse(self, now: int, series: dict, closed_n: dict, regime: dict, held: set) -> dict:
+        """What this pass saw, so silence can be told apart from a fault.
+
+        "No signal for days" is shared by three unrelated causes: the job not
+        running, the bars not arriving, and a market with no breakout in the
+        regime's direction. The pass time, the fetched count and each coin's
+        distance to its own breakout level separate them. Measurement only:
+        nothing here feeds ``_enter``.
+        """
+        btc = series["BTCUSDT"][:closed_n["BTCUSDT"]]
+        closes = [b.close for b in btc[-REGIME_BARS:]]
+        sma = statistics.fmean(closes) if len(closes) == REGIME_BARS else None
+        side = regime.get(btc[-1].time) if btc else None
+        coins = []
+        for sym, bars in series.items():
+            n = closed_n[sym]
+            if n < BREAKOUT_BARS + 1 or side is None:
+                continue
+            last, window = bars[n - 1], bars[n - 1 - BREAKOUT_BARS:n - 1]
+            level = max(b.high for b in window) if side > 0 else min(b.low for b in window)
+            # % the close still has to travel past the level; <= 0 means it broke.
+            gap = (level - last.close) / last.close * 100 if side > 0 else \
+                  (last.close - level) / last.close * 100
+            coins.append({"symbol": sym, "close": last.close, "level": level,
+                          "gap_pct": round(gap, 3), "open": sym in held})
+        coins.sort(key=lambda c: c["gap_pct"])
+        return {"at": _iso(now), "fetched": len(series), "of": len(self._symbols),
+                "missing": [s for s in self._symbols if s not in series],
+                "bar": _iso(btc[-1].time) if btc else None,
+                "btc": {"close": btc[-1].close if btc else None,
+                        "sma": round(sma, 2) if sma else None,
+                        "side": "LONG" if side == 1 else "SHORT" if side == -1 else None},
+                "coins": coins}
 
     def _advance(self, st: dict, series: dict, closed_n: dict) -> list[dict]:
         done = []
@@ -325,6 +364,7 @@ class V2Engine:
                         "label": (t.get("persist") or {}).get("label")}
                        for t in reversed(closed[-recent:])],
             "curve": curve,
+            "last_pass": st.get("last_pass"),
         }
 
     @staticmethod
@@ -374,6 +414,30 @@ class V2Engine:
         else:
             lines.append(f"aturan   cek mati di {KILL_AFTER} trade: rata-rata net < 0 → berhenti "
                          f"({len(closed)}/{KILL_AFTER})")
+        lines.extend(self._pulse_lines(st.get("last_pass")))
         lines.append("catatan  backtest-nya gagal tipis; ini cek di data baru, bukan bukti. "
                      f"~1–2 trade/hari: {KILL_AFTER} trade cuma bisa nangkep kalau rusak, belum membuktikan bagus.")
         return "\n".join(lines)
+
+    def _pulse_lines(self, lp: Optional[dict]) -> list[str]:
+        if not lp:
+            return ["mesin    belum ada pass tercatat (job v2 belum jalan sejak deploy ini)"]
+        age_h = (self._now() - datetime.fromisoformat(lp["at"]).timestamp() * 1000) / 3_600_000
+        out = [f"mesin    pass terakhir {lp['at'][:16].replace('T', ' ')} UTC ({age_h:.1f} jam lalu) · "
+               f"data {lp['fetched']}/{lp['of']} koin"
+               + (f" · GAGAL: {', '.join(lp['missing'])}" if lp.get("missing") else "")]
+        if lp.get("skipped"):
+            out.append(f"  pass dilewati: {lp['skipped']}")
+            return out
+        b = lp["btc"]
+        if b.get("sma"):
+            d = (b["close"] / b["sma"] - 1) * 100
+            word = "cuma LONG" if b["side"] == "LONG" else "cuma SHORT"
+            out.append(f"  BTC {_fmt(b['close'])} vs rata-rata 300 {_fmt(b['sma'])} ({d:+.1f}%) → {word}")
+        near = [c for c in lp["coins"] if not c["open"]][:5]
+        if near:
+            out.append("  jarak ke breakout (candle 4h terakhir, % yang masih kurang):")
+            for c in near:
+                out.append(f"    {c['symbol']:<9} {c['gap_pct']:+.2f}%  (level {_fmt(c['level'])})")
+        return out
+
