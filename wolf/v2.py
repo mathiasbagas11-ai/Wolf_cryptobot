@@ -35,8 +35,8 @@ import requests
 
 from wolf.bbtest import DEFAULT_SYMBOLS, _atr_series
 from wolf.models import Candle
-from wolf.trendtest import (BREAKOUT_BARS, HOLD_BARS, STOP_ATR, TRAIL_MULT, breakout_side,
-                            btc_regime, walk_trail)
+from wolf.trendtest import (BREAKOUT_BARS, HOLD_BARS, REGIME_BARS, STOP_ATR, TRAIL_MULT,
+                            breakout_side, btc_regime, walk_trail)
 
 log = logging.getLogger("wolf.v2")
 
@@ -310,7 +310,8 @@ class V2Engine:
             "by_label": self._by_label(closed),
             "kill_after": KILL_AFTER, "killed": st["killed"],
             "rules": {"breakout_bars": BREAKOUT_BARS, "stop_atr": STOP_ATR,
-                      "trail_atr": STOP_ATR * TRAIL_MULT, "hold_days": HOLD_BARS // 6},
+                      "trail_atr": STOP_ATR * TRAIL_MULT, "hold_days": HOLD_BARS // 6,
+                      "regime_bars": REGIME_BARS},
             "open": [{"symbol": sym, "direction": "LONG" if p["long"] else "SHORT",
                       "entry": p["entry"], "stop": p["stop"], "initial_stop":
                       p["entry"] - p["risk"] if p["long"] else p["entry"] + p["risk"],

@@ -1,6 +1,6 @@
 import { wolf, fmt, signed, price } from "../../lib/wolf";
 import EquityCurve from "../EquityCurve";
-import Chart from "../signals/Chart";
+import VelaChart from "./VelaChart";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +78,17 @@ export default async function V2() {
         </ul>
       </section>
 
+      <section className="card">
+        <h2>Arah pasar sekarang <span>BTC 4h + rata-rata {r.regime_bars || 300} candle (~50 hari)</span></h2>
+        <details>
+          <summary>Lihat chart BTC</summary>
+          <VelaChart symbol="BTCUSDT" mode="regime" rules={r} />
+          <p className="sub" style={{ marginTop: 6 }}>
+            Harga di atas garis → v2 cuma ambil long. Di bawah → cuma short. Ini cuma gambar aturannya, bukan sinyal baru.
+          </p>
+        </details>
+      </section>
+
       <h2 style={{ margin: "18px 0 8px" }}>Posisi terbuka <span className="sub">({d.open.length})</span></h2>
       {d.open.length === 0 && <p className="sub">Tidak ada posisi. Nunggu breakout yang searah regime BTC.</p>}
       {d.open.map((p, idx) => (
@@ -94,8 +105,14 @@ export default async function V2() {
           <div className="sub">Masuk {when(p.opened)} UTC · level breakout {price(p.level)}</div>
           <details open={idx === 0}>
             <summary>Lihat chart</summary>
-            <Chart symbol={p.symbol} timeframe="4h" entry={p.entry} sl={p.stop} tps={[]}
-              isLong={p.direction === "LONG"} createdAt={p.signal_time} activatedAt={p.opened} />
+            <VelaChart symbol={p.symbol} rules={r} pos={p} />
+            <p className="sub" style={{ marginTop: 6 }}>
+              Garis: <span style={{ color: "#4c8dff" }}>biru = entry</span> ·{" "}
+              <span style={{ color: "#e5484d" }}>merah putus = stop sekarang</span> · abu titik = stop awal ·{" "}
+              <span style={{ color: "#e8b339" }}>kuning titik = level breakout</span>. Pita = Donchian {r.breakout_bars}{" "}
+              (high/low {r.breakout_bars} candle); sinyal = candle tutup keluar dari pita candle sebelumnya.
+              Panel bawah = ATR 14, dasar stop {r.stop_atr}×ATR. Ikon S = candle sinyal, E = candle entry.
+            </p>
           </details>
         </article>
       ))}

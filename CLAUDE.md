@@ -302,7 +302,7 @@ believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-22, v2 live; /addtest and /zonetest REJECTED; /sweeptest built (not merged)
+## Status — 2026-11-25, v2 live; v2 tab charts on Vela; /sweeptest read still due
 
 1198 tests green. Working tree clean.
 
@@ -761,6 +761,37 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**Vela charts on the v2 tab (2026-11-25, "copy repo LuxAlgo/Vela, terapkan,
+paper test di v2").** Vela (`@luxalgo/vela`, Apache-2.0 + a NOTICE that
+requires a visible attribution wherever a chart renders) is a TradingView-
+style chart library: a WebGL renderer plus ~100 built-in display indicators.
+It has no strategy engine of its own; Pine scripts need the separate
+`@luxalgo/vela-pinets` addon, which is **AGPL** and was deliberately not
+installed. What the owner was told:
+- Vela is a way to *look at* indicators, not a source of signals, so there
+  is nothing in it to paper-test as such.
+- v2's rules are locked for its forward run; adding a Vela indicator to v2's
+  entries would be a strategy change and would void the run's 300-trade
+  read. A Vela indicator idea goes through an offline `/xxtest` first, like
+  every other rule here.
+What was built (display only, nothing the bot decides changed):
+- `dashboard/app/v2/VelaChart.js`: v2's own rule drawn with Vela's native
+  indicators — BTC 4h + SMA(`regime_bars`=300) for the regime, and per open
+  position Donchian(`breakout_bars`) + ATR(14, SMA smoothing, matching
+  `bbtest._atr_series`), with hlines for entry / current stop / initial stop
+  / breakout level and timeline marks on the signal and entry bars. Lengths
+  come from the bot's `/v2` `rules`; `wolf/v2.py` now also returns
+  `regime_bars`. Vela's donchian band includes the current bar while
+  `breakout_side` uses the 20 bars before it, so the caption says "the
+  previous candle's band".
+- Pinned `@luxalgo/vela@0.10.6` (released 11-11; the package is three weeks
+  old and ships several versions a day). The built-in Vela logomark stays
+  on and a caption links velacharts.dev — **do not remove both**.
+- Checked with `next build` and a Playwright screenshot against a mock `/v2`
+  with intercepted synthetic klines (the sandbox cannot reach Binance).
+  hline labels were dropped because they pile on the price axis; colours are
+  named in the caption instead. `/signals` still uses Lightweight Charts.
 
 **`/sweeptest` built (2026-11-22, "Gue mau lu cek strateginya").** The
 owner sent a screenshot from someone else's Threads post. It shows an MT5
