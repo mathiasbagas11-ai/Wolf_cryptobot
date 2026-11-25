@@ -169,7 +169,7 @@ def run_trend(candles: Sequence[Candle], regime: dict[int, int]) -> list[dict]:
         if res is None:
             continue
         r, exit_i, how = res
-        trades.append({"r": r, "how": how, "long": long, "bar": k,
+        trades.append({"r": r, "how": how, "long": long, "bar": k, "exit_bar": exit_i,
                        "time": candles[k].time, "risk_pct": risk / entry * 100})
         free_from = exit_i + 1
     return trades

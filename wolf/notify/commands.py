@@ -45,6 +45,7 @@ _HELP = (
     "(trend breakout, weekly relative momentum) against random baselines (~2 min); "
     "<code>/trendtest 1h</code> / <code>/trendtest 15m</code> — aturan v2 di TF rendah (calon v3, ~3–5 min); "
     "<code>/trendtest 1d</code> — aturan v2 di 1D, spot, long only saat BTC naik (~1 min)\n"
+    "<code>/holdtest</code> — spot: breakout v2 vs cuma pegang koin selama BTC di atas rata-rata 300 hari (~2 min)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
     "<code>/mae</code> — how far trades went for and against them before closing "
@@ -112,6 +113,8 @@ class CommandRouter:
             return self._addtest()
         if cmd == "trendtest":
             return self._lowtftest(arg) if arg else self._trendtest()
+        if cmd == "holdtest":
+            return self._holdtest()
         if cmd in ("mae", "mfe", "excursion"):
             return self._excursion(arg)
         if cmd == "beta":
@@ -608,6 +611,17 @@ class CommandRouter:
             log.exception("ADD backtest failed")
             return "⚠️ Backtest failed — see logs."
         return f"<pre>{esc(addtest.render(report))}</pre>"
+
+    def _holdtest(self) -> str:
+        """v2's daily breakout vs holding while BTC is above its mean (see wolf.holdtest)."""
+        from wolf import holdtest
+
+        try:
+            report = holdtest.backtest(client=getattr(self._app, "client", None))
+        except Exception:
+            log.exception("Hold backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(holdtest.render(report))}</pre>"
 
     def _lowtftest(self, arg: str) -> str:
         """v2's rule bar for bar on 1h or 15m, offline (see wolf.lowtftest)."""
