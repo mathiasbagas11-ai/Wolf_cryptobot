@@ -199,3 +199,46 @@ def test_every_v2_entry_carries_the_persistence_label_and_it_is_never_a_filter(s
     sol = [e for e in out["entries"] if e["symbol"] == "SOLUSDT"][0]
     assert "persist" in sol            # recorded (None when the history is flat)
     assert "Label tren" in _engine(store, data, n - 1)._entry_text("SOLUSDT", sol)
+
+
+# ── the pulse: telling a quiet market from a stopped job ──────────────────
+
+def test_a_pass_records_when_it_ran_and_how_far_each_coin_is_from_its_breakout(store):
+    data = {"BTCUSDT": _btc(320), "ETHUSDT": [_bar(i, 50, 50.5, 49.5, 50) for i in range(320)]}
+    eng = _engine(store, data, now_bar=319)
+    eng.run()
+    lp = store.read(STATE_KEY)["last_pass"]
+    assert lp["fetched"] == 2 and lp["of"] == 2 and lp["missing"] == []
+    assert lp["btc"]["side"] == "LONG" and lp["btc"]["sma"] is not None
+    eth = next(c for c in lp["coins"] if c["symbol"] == "ETHUSDT")
+    # flat at 50 with highs at 50.5: the close still needs +1% to break out long
+    assert eth["level"] == 50.5 and abs(eth["gap_pct"] - 1.0) < 1e-9
+    assert eng.summary()["last_pass"] == lp
+
+
+def test_a_coin_that_broke_out_reads_a_gap_at_or_below_zero_and_is_marked_held(store):
+    data = {"BTCUSDT": _btc(320), "SOLUSDT": _flat_then_break(320)}
+    eng = _engine(store, data, now_bar=319)
+    eng.run()
+    sol = next(c for c in store.read(STATE_KEY)["last_pass"]["coins"] if c["symbol"] == "SOLUSDT")
+    assert sol["gap_pct"] <= 0 and sol["open"] is True
+
+
+def test_a_coin_whose_bars_failed_is_named_on_the_card_not_silently_dropped(store):
+    data = {"BTCUSDT": _btc(320), "ETHUSDT": []}
+    eng = _engine(store, data, now_bar=319)
+    eng.run()
+    card = eng.card()
+    assert "data 1/2 koin" in card and "GAGAL: ETHUSDT" in card
+    assert "jam lalu" in card
+
+
+def test_a_pass_without_btc_is_still_recorded_as_skipped(store):
+    eng = _engine(store, {"BTCUSDT": [], "ETHUSDT": _btc(320)}, now_bar=319)
+    assert eng.run() == {"skipped": "no BTC bars"}
+    assert "pass dilewati: no BTC bars" in eng.card()
+
+
+def test_a_card_before_any_pass_says_the_job_has_not_run(store):
+    eng = _engine(store, {"BTCUSDT": _btc(320)}, now_bar=319)
+    assert "belum ada pass tercatat" in eng.card()
