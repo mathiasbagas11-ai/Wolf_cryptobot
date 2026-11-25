@@ -98,5 +98,46 @@ def test_trendtest_with_a_timeframe_runs_the_transplant_and_plain_trendtest_is_u
     assert "V2-ON-15M" in router.handle("/trendtest 15m")
     assert "V2-ON-1H" in router.handle("/trendtest 1h")
     assert "TREND-TEST" in router.handle("/trendtest")
+    assert "V2-ON-1D SPOT LONG-ONLY" in router.handle("/trendtest 1d")
     assert "Pakai" in router.handle("/trendtest 5m")
-    assert seen == ["15m", "1h", "4h"]
+    assert seen == ["15m", "1h", "4h", "1d"]
+
+
+# ── 1d: spot, long only, only in BTC's UP regime ─────────────────────────
+
+def _daily(seed, n=1500, drift=0.0):
+    rng = random.Random(seed)
+    out = {}
+    for sym in DEFAULT_SYMBOLS[:4]:
+        p, rows = 100.0, []
+        for i in range(n):
+            o = p
+            p = p * math.exp(drift + rng.gauss(0, 0.03))
+            rows.append(Candle(time=T0 + i * 86_400_000, open=o, high=max(o, p) * 1.01,
+                               low=min(o, p) * 0.99, close=p, volume=1.0))
+        out[sym] = rows
+    return out
+
+
+def test_on_1d_spot_no_short_is_ever_taken_even_when_btc_falls():
+    a = lowtftest.backtest("1d", series=_daily(21, drift=-0.002), cost_bps=20.0, draws=10)["trend"]
+    assert not a.get("n") or a["short"]["n"] == 0
+
+
+def test_on_1d_spot_every_trade_is_a_long_taken_while_btc_is_above_its_mean():
+    series = _daily(22, drift=0.001)
+    a = lowtftest.backtest("1d", series=series, cost_bps=20.0, draws=10)["trend"]
+    regime = trendtest.btc_regime(series["BTCUSDT"])
+    longs = sum(1 for c in series.values() for t in trendtest.run_trend(c, regime) if t["long"])
+    assert a["n"] > 0 and a["short"]["n"] == 0 and a["long"]["n"] <= longs
+
+
+def test_the_1d_read_uses_the_stricter_fourth_look_bar_and_says_spot():
+    report = lowtftest.backtest("1d", series=_daily(23, drift=0.001), cost_bps=20.0, draws=10)
+    assert report["beat_line"] == 98.33
+    text = lowtftest.render(report)
+    assert "SPOT LONG-ONLY" in text and "needs 98.33%" in text and "no funding" in text
+
+
+def test_the_lower_timeframes_keep_their_registered_bar():
+    assert lowtftest.BEAT_BY_TF["1h"] == lowtftest.BEAT_BY_TF["15m"] == 97.5

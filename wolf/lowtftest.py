@@ -54,7 +54,15 @@ log = logging.getLogger("wolf.lowtftest")
 FRAMES = {
     "1h": (3_600_000, 24, 24_000),     # ~2.7 years
     "15m": (900_000, 96, 35_000),      # ~1 year
+    "1d": (86_400_000, 1, 3_000),      # everything Binance has (BTC from 2017-08)
 }
+# 1d is spot, so long only and only in BTC's UP regime: there is no
+# short on spot, and the owner holds coins only when the market is rising.
+# Spot also means no funding. It is the fourth clock this rule has been read
+# on (15m, 1h, 4h, 1d), so its bar is stricter: 0.05 over three looks beyond
+# the original, one-sided, i.e. 1 - 0.05/3 ≈ 98.33%, fixed before the read.
+SPOT_LONG_ONLY = {"1d"}
+BEAT_BY_TF = {"1h": 97.5, "15m": 97.5, "1d": 98.33}
 RANDOM_DRAWS = 200
 BEAT_LINE = 97.5
 MIN_TRADES = 100
@@ -172,6 +180,14 @@ def backtest(tf: str, symbols: Sequence[str] = DEFAULT_SYMBOLS, client=None, cos
     report["from"] = time.strftime("%Y-%m-%d", time.gmtime(min(c[0].time for c in series.values()) / 1000))
 
     regime = btc_regime(btc)
+    long_only = tf in SPOT_LONG_ONLY
+    if long_only:
+        # Drop the DOWN side of the regime, so no short can ever fire. Done on
+        # the regime rather than on the trades, so a short never blocks a coin.
+        regime = {t: s for t, s in regime.items() if s > 0}
+    report["long_only"] = long_only
+    bar_line = BEAT_BY_TF[tf]
+    report["beat_line"] = bar_line
     trades = {sym: run_trend(c, regime) for sym, c in series.items()}
     every = sorted((t for ts in trades.values() for t in ts), key=lambda t: t["time"])
     a = _summary(every, cost_bps)
@@ -187,12 +203,12 @@ def backtest(tf: str, symbols: Sequence[str] = DEFAULT_SYMBOLS, client=None, cos
         if base:
             srt = sorted(base)
             a["median"] = round(statistics.median(srt), 4)
-            a["hi"] = round(srt[int(BEAT_LINE / 100 * (len(srt) - 1))], 4)
+            a["hi"] = round(srt[int(bar_line / 100 * (len(srt) - 1))], 4)
             a["beats"] = round(sum(1 for b in srt if b < a["net"]) / len(srt) * 100, 1)
             halves = [a["first"].get("net"), a["second"].get("net")]
             if a["n"] < MIN_TRADES:
                 a["verdict"] = f"INCONCLUSIVE (n<{MIN_TRADES})"
-            elif a["beats"] >= BEAT_LINE and a["net"] > 0 and all(h is not None and h > 0 for h in halves):
+            elif a["beats"] >= bar_line and a["net"] > 0 and all(h is not None and h > 0 for h in halves):
                 a["verdict"] = "PASSES the pre-registered bar — earns a v3 paper run, not real money"
             else:
                 a["verdict"] = "does not beat the same trades shifted to random days"
@@ -202,9 +218,13 @@ def backtest(tf: str, symbols: Sequence[str] = DEFAULT_SYMBOLS, client=None, cos
 
 def render(report: dict) -> str:
     tf = report.get("tf", "?")
-    head = (f"V2-ON-{tf.upper()} | v2's rule bar for bar on {tf}: BTC regime {REGIME_BARS}-bar mean, "
+    spot = " SPOT LONG-ONLY" if report.get("long_only") or tf in SPOT_LONG_ONLY else ""
+    bar_line = report.get("beat_line", BEAT_BY_TF.get(tf, BEAT_LINE))
+    head = (f"V2-ON-{tf.upper()}{spot} | v2's rule bar for bar on {tf}: BTC regime {REGIME_BARS}-bar mean, "
             f"{BREAKOUT_BARS}-bar breakout with it, stop {STOP_ATR:g}xATR, trail {STOP_ATR * TRAIL_MULT:g}xATR, "
-            f"out after {HOLD_BARS} bars; net of {report.get('cost_bps', 20):g}bps, funding not modelled")
+            f"out after {HOLD_BARS} bars; net of {report.get('cost_bps', 20):g}bps"
+            + ("; spot: longs only, only while BTC is above its mean, no funding" if spot
+               else ", funding not modelled"))
     if "error" in report:
         return head + "\n" + report["error"]
     lines = [head, f"since    {report['from']} ({tf} bars)"]
@@ -224,11 +244,16 @@ def render(report: dict) -> str:
     lines.append(f"         LONG {side(a['long'])} · SHORT {side(a['short'])}")
     lines.append(f"         first half (to {a['split']}): {side(a['first'])} | second half: {side(a['second'])}")
     if "beats" in a:
-        lines.append(f"         same trades on random days: median {a['median']:+.3f}, p{BEAT_LINE:g} {a['hi']:+.3f} "
-                     f"→ beats {a['beats']:.0f}% (needs {BEAT_LINE:g}% and both halves > 0) — {a['verdict']}")
+        lines.append(f"         same trades on random days: median {a['median']:+.3f}, p{bar_line:g} {a['hi']:+.3f} "
+                     f"→ beats {a['beats']:.0f}% (needs {bar_line:g}% and both halves > 0) — {a['verdict']}")
     per = sorted(((s, d) for s, d in a["per_symbol"].items() if d.get("n")), key=lambda kv: kv[1]["net"])
     lines.append("         per coin net: " + ", ".join(f"{s.replace('USDT', '')} {d['net']:+.2f}" for s, d in per))
     lines.append("compare  v2 on 4h (/trendtest A): gross +0.131 · cost ~0.05 · net +0.080, beats 95%")
-    lines.append("note     rules are v2's, not tuned; prediction written before the read: 15m fails, 1h likely "
-                 "fails. Offline only — v2 and every live signal are unchanged.")
+    if spot:
+        lines.append("note     rules are v2's, not tuned; fourth clock read, so the bar is 98.33%. Prediction written "
+                     "before the read: gross at or above 4h, but too few independent trades to clear the bar. "
+                     "Offline only — v2 and every live signal are unchanged.")
+    else:
+        lines.append("note     rules are v2's, not tuned; prediction written before the read: 15m fails, 1h likely "
+                     "fails. Offline only — v2 and every live signal are unchanged.")
     return "\n".join(lines)
