@@ -295,14 +295,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` (OPEN, `/trendtest 1h` and `/trendtest 15m` read due after deploy).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, `/trendtest 1h|15m` built (v3 candidate, read due); /sweeptest REJECTED; v2 silent because the market is
+## Status — 2026-11-25, v2 on lower timeframes REJECTED (no v3); /sweeptest REJECTED; v2 silent because the market is
 
 1211 tests green. Working tree clean.
 
@@ -761,6 +761,27 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**`/trendtest 15m` read (2026-11-25) → REJECTED; the v3 question is closed.**
+Ten coins since 2025-11-25: n=7911, win 28%, **gross +0.039R, cost 0.309R,
+net −0.269R**, median 1R 0.77%, both halves negative, every coin negative,
+beats 64%. Cost came in worse than predicted (0.31 vs ~0.20R). Across the
+three clocks it is one line — gross +0.131 / +0.093 / +0.039 and cost
+~0.05 / 0.12 / 0.31 at 4h / 1h / 15m: the momentum fades as the bar
+shortens while the price of trading it rises. **No v3.** The owner was told
+4h is where this rule has any chance, and that the answer for scalping in
+general is the same cost wall. Do not try other timeframes on this data.
+
+**`/trendtest 1h` read (2026-11-25, pre-registered) → 1h REJECTED.** Ten
+coins since 2024-02-29: n=5358, win 34%, **gross +0.093R, cost 0.120R, net
+−0.028R** (total −148R), median 1R 1.95%; LONG −0.063 / SHORT +0.008;
+both halves negative (−0.022 / −0.033). Beats 92% of the same trades on
+random days (median −0.089). The prediction held: cost landed at 0.12R
+(predicted ~0.10) and gross shrank rather than grew. The useful part: gross
+stays positive and the timing beats random by ~0.06R, so the breakout still
+carries momentum on 1h — it is just smaller than what 1h stops pay to trade.
+The owner was told this is the cost lesson in one line, and that no v3 is
+built on 1h.
 
 **`/trendtest 1h` and `/trendtest 15m` built (2026-11-25, "bikin dulu tes
 tf rendah buat v3").** Two questions came first:
