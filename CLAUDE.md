@@ -295,16 +295,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` (OPEN, `/trendtest 1d` read due; bar 98.33%).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, v2 on lower timeframes REJECTED (no v3); /sweeptest REJECTED; v2 silent because the market is
+## Status — 2026-11-25, `/trendtest 1d` (spot, long only) built, read due; v2 on lower timeframes REJECTED (no v3)
 
-1211 tests green. Working tree clean.
+1215 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -761,6 +761,27 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**`/trendtest 1d` built (2026-11-25, "gas tes 1D … spot only dan harus
+bullish").** The owner asked about a higher timeframe and set the terms
+themselves: spot, so long only, and only in a rising market. They were told:
+- at 1D cost per trade drops to ~0.02R, but trades last weeks;
+- on perpetuals, funding would eat ~0.3R a trade (spot removes that);
+- the sample is small;
+- even a pass cannot be confirmed forward, at ~1 trade a week;
+- this is the fourth clock the rule is read on, so the bar rises to 98.33%.
+Built in `wolf/lowtftest.py`:
+- a `1d` frame (up to 3,000 daily bars);
+- the DOWN side of BTC's regime dropped before any signal is read, so no
+  short fires;
+- 20bps, no funding;
+- the card says SPOT LONG-ONLY and needs 98.33%.
+Calibration: 0 of 40 correlated null baskets passed, median n 281, no short
+ever taken. Prediction, written before the read: gross at or above 4h, but
+too few independent trades to clear the bar. Registry
+`v2-rule-daily-spot-long`. A pass is recorded only; no paper run is built and
+v2 is not changed. After this read, no more timeframes of this rule.
+**Read: `/trendtest 1d` after the deploy.**
 
 **`/trendtest 15m` read (2026-11-25) → REJECTED; the v3 question is closed.**
 Ten coins since 2025-11-25: n=7911, win 28%, **gross +0.039R, cost 0.309R,
@@ -1883,7 +1904,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1211 tests, ~15s
+python -m pytest            # 1215 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1902,7 +1923,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
 | `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
 | `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
-| `wolf/lowtftest.py` | v2's rule bar for bar on 1h / 15m vs the same trades on random days — the v3 question (`/trendtest 1h`, `/trendtest 15m`) |
+| `wolf/lowtftest.py` | v2's rule bar for bar on 1h / 15m (rejected) and 1d spot long-only vs the same trades on random days (`/trendtest 1h`, `/trendtest 15m`, `/trendtest 1d`) |
 | `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
 | `wolf/addtest.py` | paired offline test of averaging down (one lot at 0.5R adverse, closed alone at the half-gap target) on `/trendtest` A's entries (`/addtest`) |
 | `wolf/zonetest.py` | offline test of naive daily high/low zones: coverage (≠ win rate) and the zone fade vs zones on random days (`/zonetest`) |

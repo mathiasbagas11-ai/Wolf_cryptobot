@@ -43,7 +43,8 @@ _HELP = (
     "<code>/addtest</code> — tes: averaging down (ADD + exit setengah gap) vs polos di entry yang sama (~2 min)\n"
     "<code>/trendtest</code> — backtest the two candidates for a new strategy "
     "(trend breakout, weekly relative momentum) against random baselines (~2 min); "
-    "<code>/trendtest 1h</code> / <code>/trendtest 15m</code> — aturan v2 di TF rendah (calon v3, ~3–5 min)\n"
+    "<code>/trendtest 1h</code> / <code>/trendtest 15m</code> — aturan v2 di TF rendah (calon v3, ~3–5 min); "
+    "<code>/trendtest 1d</code> — aturan v2 di 1D, spot, long only saat BTC naik (~1 min)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
     "<code>/mae</code> — how far trades went for and against them before closing "
@@ -614,7 +615,7 @@ class CommandRouter:
 
         tf = (arg or "").strip().lower()
         if tf not in lowtftest.FRAMES:
-            return f"Pakai <code>/trendtest 1h</code> atau <code>/trendtest 15m</code> (bukan {esc(tf)})."
+            return f"Pakai <code>/trendtest 1h</code>, <code>/trendtest 15m</code> atau <code>/trendtest 1d</code> (bukan {esc(tf)})."
         try:
             report = lowtftest.backtest(tf, client=getattr(self._app, "client", None),
                                         cost_bps=self._app.settings.round_trip_cost_bps)
