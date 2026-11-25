@@ -42,7 +42,8 @@ _HELP = (
     "<code>/zonetest</code> — tes zona high/low harian ala video: coverage vs win rate, dan fade-nya (~2 min)\n"
     "<code>/addtest</code> — tes: averaging down (ADD + exit setengah gap) vs polos di entry yang sama (~2 min)\n"
     "<code>/trendtest</code> — backtest the two candidates for a new strategy "
-    "(trend breakout, weekly relative momentum) against random baselines (~2 min)\n"
+    "(trend breakout, weekly relative momentum) against random baselines (~2 min); "
+    "<code>/trendtest 1h</code> / <code>/trendtest 15m</code> — aturan v2 di TF rendah (calon v3, ~3–5 min)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
     "<code>/mae</code> — how far trades went for and against them before closing "
@@ -109,7 +110,7 @@ class CommandRouter:
         if cmd == "addtest":
             return self._addtest()
         if cmd == "trendtest":
-            return self._trendtest()
+            return self._lowtftest(arg) if arg else self._trendtest()
         if cmd in ("mae", "mfe", "excursion"):
             return self._excursion(arg)
         if cmd == "beta":
@@ -606,6 +607,21 @@ class CommandRouter:
             log.exception("ADD backtest failed")
             return "⚠️ Backtest failed — see logs."
         return f"<pre>{esc(addtest.render(report))}</pre>"
+
+    def _lowtftest(self, arg: str) -> str:
+        """v2's rule bar for bar on 1h or 15m, offline (see wolf.lowtftest)."""
+        from wolf import lowtftest
+
+        tf = (arg or "").strip().lower()
+        if tf not in lowtftest.FRAMES:
+            return f"Pakai <code>/trendtest 1h</code> atau <code>/trendtest 15m</code> (bukan {esc(tf)})."
+        try:
+            report = lowtftest.backtest(tf, client=getattr(self._app, "client", None),
+                                        cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Low-timeframe backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(lowtftest.render(report))}</pre>"
 
     def _trendtest(self) -> str:
         """Backtest the two new-strategy candidates offline (see wolf.trendtest).
