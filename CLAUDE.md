@@ -295,14 +295,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` (OPEN, `/trendtest 1d` read due; bar 98.33%).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` — **REJECTED 2026-11-25** (net +0.354R but random-day longs earn +0.194R; beats 90% against 98.33%).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, `/trendtest 1d` (spot, long only) built, read due; v2 on lower timeframes REJECTED (no v3)
+## Status — 2026-11-25, v2's rule on 15m / 1h / 1d all REJECTED; 4h runs forward as v2; timeframe question closed
 
 1215 tests green. Working tree clean.
 
@@ -762,6 +762,24 @@ noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
 
+**`/trendtest 1d` read (2026-11-25, pre-registered) → REJECTED; the
+timeframe question is closed.** Ten coins since 2018-09-09, spot, long only
+in BTC's UP regime: n=415, win 43%, **gross +0.374R, cost 0.020R, net
++0.354R** (total +146.7R), 1R 10.61%. Halves +0.536 / +0.172, nine of ten
+coins positive. **But the same trades on random days earn +0.194R**, and
+the rule beats only 90% against a 98.33% bar. The prediction held exactly.
+- Read: most of the +0.354R is being long spot crypto while it rose
+  2018–2026, not the breakout. The rule adds ~+0.16R over that, which 90%
+  cannot tell from luck.
+- The second half is a third of the first: the same decay as 4h.
+- The owner was told: a big positive net is not an edge when random entries
+  with the same exits earn half of it. Do not follow it with real money on
+  this read.
+- Offered, not built: the simpler benchmark the card points at. That is,
+  hold BTC (or the basket) whenever BTC is above its 300-day mean, sold
+  below. It asks whether the breakout adds anything over the regime alone.
+  It would be a new pre-registered test, counted as a fifth look.
+
 **`/trendtest 1d` built (2026-11-25, "gas tes 1D … spot only dan harus
 bullish").** The owner asked about a higher timeframe and set the terms
 themselves: spot, so long only, and only in a rising market. They were told:
@@ -781,7 +799,6 @@ ever taken. Prediction, written before the read: gross at or above 4h, but
 too few independent trades to clear the bar. Registry
 `v2-rule-daily-spot-long`. A pass is recorded only; no paper run is built and
 v2 is not changed. After this read, no more timeframes of this rule.
-**Read: `/trendtest 1d` after the deploy.**
 
 **`/trendtest 15m` read (2026-11-25) → REJECTED; the v3 question is closed.**
 Ten coins since 2025-11-25: n=7911, win 28%, **gross +0.039R, cost 0.309R,
