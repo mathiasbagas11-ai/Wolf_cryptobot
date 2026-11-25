@@ -295,14 +295,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` (OPEN, `/sweeptest` read due after deploy).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, v2 silent because the market is (pulse read); v2 tab on Vela; /sweeptest read due
+## Status — 2026-11-25, v2 silent because the market is (pulse read); /sweeptest REJECTED; v2 tab on Vela
 
 1203 tests green. Working tree clean.
 
@@ -761,6 +761,19 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**`/sweeptest` read (2026-11-25, pre-registered) → REJECTED.** Ten coins,
+1h since 2024-02-29: n=2613, win 29%, **gross −0.009R, net −0.314R**
+(total −821.5R), median 1R 0.82%, median target 2.56R; LONG −0.342 /
+SHORT −0.298, both halves negative, every coin negative. Beats 27% of the
+same trades on random days (needs 97.5%). Gross is zero and the real
+figures land almost exactly on the null calibration (win ~30%, target
+~2.6R, 1R ~0.9%): the trend filter plus the H1 sweep times nothing, and
+cost at H1 stop widths (~0.3R a trade) is the whole loss. The owner was
+told the screenshot's plan looks good because 1:5 geometry always does at
+a ~30% win rate, and that the next AI-sidebar plan should get the same
+answer without a new test. **Do not retune pivot width, stop buffer, EMAs
+or the 1R floor on this data.**
 
 **v2 has emitted nothing since it started (11-22 → 11-25), so each pass now
 records a pulse (2026-11-25, "gaada sinyal v2 dari hari minggu").** At
