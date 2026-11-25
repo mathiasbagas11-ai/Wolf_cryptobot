@@ -762,6 +762,17 @@ noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
 
+**`/montecarlo MOMENTUM` (2026-11-25) — a second, near-disjoint read gives
+the same number.** Pool 10-29 → 11-24 (the capped log; the 10-23 read
+pooled 09-29 → 10-22): 125 trades over 27 days, **−0.016 gross / −0.098
+net**, against −0.025 / −0.098 last time. 30-day median −13.7% (gross
+−3.4%), 87% of paths lose, max DD p95 32.6%, p95 losing streak 11; lived
+path −12.2% net, DD 17.9%. Weeks W44 −0.179, W45 −0.083, W46 +0.117,
+W47 −0.288, W48 +0.710 gross (n=10, a part week; do not read it). Two
+month-long pools agreeing is still not a test (no FDR, overlap not
+discounted), but it is the number the real-money advice hangs on, and it
+has not moved: **the pause stands.** Next look at `/diag 720` ~12-20.
+
 **`/sweeptest` read (2026-11-25, pre-registered) → REJECTED.** Ten coins,
 1h since 2024-02-29: n=2613, win 29%, **gross −0.009R, net −0.314R**
 (total −821.5R), median 1R 0.82%, median target 2.56R; LONG −0.342 /
@@ -1292,8 +1303,8 @@ BTC. The baseline's own +0.148R was noticed and deliberately not chased.
 
 **Next read:** COMBO again with `/diag 720` from about 12-20 (disjoint
 window); `/beta` re-read on a disjoint log (~12-01); meanwhile
-`/montecarlo MOMENTUM` again in a week — not to chase the
-streak, but because it is the only number the real-money advice hangs on.
+`/montecarlo MOMENTUM` read 11-25 (−0.098 net again; pause stands) — next
+look only with the 12-20 `/diag 720`.
 Nothing paired is left queued. The level question keeps
 landing card by card; the two open offers below are what would sharpen it.
 
