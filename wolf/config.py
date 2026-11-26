@@ -697,10 +697,12 @@ class V2Settings:
 class OpenBotSettings:
     """🤖 OpenBot challenger — an outside LLM agent's calls, graded by Wolf
     (wolf.openbot). Measurement only: its own ledger, nothing on the signal
-    path. ``thread_id`` empty → the system topic."""
+    path. ``notify`` off by default (owner, 2026-11-26: the agent runs inside
+    OpenBot, nothing goes to Telegram); ``thread_id`` empty → the system topic."""
 
     enabled: bool = True
     interval_min: int = 15
+    notify: bool = False
     thread_id: str = ""
 
 
@@ -1114,6 +1116,7 @@ class Settings:
         openbot = OpenBotSettings(
             enabled=_env_bool("OPENBOT_ENABLED", True),
             interval_min=_env_int("OPENBOT_INTERVAL_MIN", 15),
+            notify=_env_bool("OPENBOT_NOTIFY", False),
             thread_id=os.getenv("OPENBOT_THREAD_ID", "").strip(),
         )
         flow = FlowSettings(

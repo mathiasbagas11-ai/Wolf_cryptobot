@@ -316,7 +316,7 @@ and the 350-trade sample target.
 
 ## Status — 2026-11-26, OpenBot LLM challenger referee built; `/holdtest` read still due
 
-1236 tests green. Working tree clean.
+1237 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -794,8 +794,11 @@ Telegram token (the 10-29 copy-bot lesson). Built as a **referee only**,
   stop; 1% risk on 10,000; own key `openbot_paper`, never the tracker;
 - `/openbot` (and `GET /openbot`) prints the ledger and OpenBot / v2 / old
   bot over the same window (level, not paired — context, not a contest);
-- posts to `OPENBOT_THREAD_ID`, else the system topic. `OPENBOT_ENABLED`
-  default true; with nothing open a pass makes no request.
+- **posts nothing to Telegram by default** (`OPENBOT_NOTIFY=false`; owner,
+  11-26: "gausah kirim ke telegram, jalan di openbotnya sendiri"). The agent
+  calls `POST /openbot/signals` itself and reads `GET /openbot?format=text`;
+  `/ob` and `/openbot` stay as a manual fallback. `OPENBOT_ENABLED` default
+  true; with nothing open a pass makes no request.
 Registry `openbot-llm-challenger` (OPEN): read at 100 closed trades; "gacor"
 only if net > 0 and day-level t ≥ 2. Whether OpenBot agents can make HTTP
 calls is unknown (openbot.run is unreachable from the sandbox), so `/ob` by
@@ -1993,7 +1996,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1236 tests, ~15s
+python -m pytest            # 1237 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in

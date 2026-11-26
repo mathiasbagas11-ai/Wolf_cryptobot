@@ -400,7 +400,8 @@ def build_application(settings: Settings | None = None) -> Application:
     openbot = None
     if settings.openbot.enabled:
         from wolf.openbot import OpenBotLedger
-        openbot = OpenBotLedger(store, notifier=notifier, client=client,
+        openbot = OpenBotLedger(store, notifier=notifier if settings.openbot.notify else None,
+                                client=client,
                                 cost_bps=settings.round_trip_cost_bps,
                                 thread_id=settings.openbot.thread_id or settings.telegram.route_system(),
                                 tracker=tracker, v2=v2)

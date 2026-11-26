@@ -137,3 +137,9 @@ def test_the_telegram_commands_record_and_report(store):
     assert "Ditolak" in router.handle("/ob SOL LONG 98 104")
     card = router.handle("/openbot")
     assert "OPENBOT" in card and "SOLUSDT" in card and "100 trade" in card
+
+
+def test_the_challenger_posts_nothing_to_telegram_unless_asked(settings):
+    from wolf.app import build_application
+    app = build_application(settings)
+    assert app.openbot is not None and app.openbot._notifier is None
