@@ -246,6 +246,18 @@ random offset keeps the clustering and calibrates at 1.6%. **Calibrate a null
 on data that shares the real data's correlations, not on the simplest data
 that runs.** A narrow null only flatters passes; rejections read on it stand.
 
+**A synthetic bar drawn from a few points understates its own range.** The
+first `/holdtest` calibration said v2's breakout beat holding on pure noise
+two times in three. The cause was not the rule or the portfolio code but the
+fake data: bars built from four sub-steps have highs and lows much closer
+together than a continuous path, so trailing stops were touched too rarely
+and every trade drifted up — about +0.17R a trade on a martingale. Earlier
+calibrations hid it because each compared the rule against a baseline run
+through the same simulator, so the bias cancelled; a portfolio built another
+way does not share it. **When a null calibration leans, check the fake data
+before the method — and make bars from enough points that the range is
+real.**
+
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
 unrelated remedies. The provider almost always already said which; the bug was
@@ -295,16 +307,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` — **REJECTED 2026-11-25** (net +0.354R but random-day longs earn +0.194R; beats 90% against 98.33%).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` — **REJECTED 2026-11-25** (net +0.354R but random-day longs earn +0.194R; beats 90% against 98.33%). One added 2026-11-25: `breakout-vs-regime-hold` (OPEN, `/holdtest` read due; bar 98.75%).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, v2's rule on 15m / 1h / 1d all REJECTED; 4h runs forward as v2; timeframe question closed
+## Status — 2026-11-25, `/holdtest` built (breakout vs regime hold, read due); v2's rule on 15m / 1h / 1d REJECTED
 
-1215 tests green. Working tree clean.
+1224 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -762,6 +774,39 @@ noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
 
+**`/holdtest` built (2026-11-25, "gas tes hold").** This is the question the
+1d read pointed at: does the breakout add anything over plain holding while
+BTC is above its 300-day mean? Built in `wolf/holdtest.py`.
+- The two are not in one unit, so both run as **daily spot portfolios** over
+  the same days:
+  - **B** is `/trendtest 1d`'s own trades, sized at 1% risk, capped at 100%
+    of equity, marked open to open.
+  - **H** buys the coins equal-weight on the open after BTC closes above its
+    mean, lets them drift, and sells everything on the open after it closes
+    below.
+  - Both pay 10bps a side; no funding.
+- Test: Sharpe(B) − Sharpe(H), paired stationary block bootstrap (30-day
+  blocks, 2000 draws). This is the fifth look, so the bar is 98.75% and both
+  halves must agree. The mirror (≤1.25%, both halves) reads "hold beats the
+  breakout".
+- CAGR, max DD, exposure and BTC buy-and-hold are printed as context only.
+  `run_trend` now also records `exit_bar` (additive).
+- Arithmetic is pinned in tests: H equals the coin less one buy cost; B
+  equals the product of (1 + 1%·R − two costs) per trade.
+- **Calibration caught a fault in the calibration data itself.** On random
+  walks with only 4 points per bar, the trailing stop prints about +0.17R a
+  trade: the bars are too narrow, so stops are touched too rarely. That
+  biased B (mean share 67%, 3/60 false "adds"). With 32 points per bar the
+  bias is gone (+0.04R at 1.3 se): mean share 48%, 0 false "adds", 2 false
+  "hold wins" in 60.
+- The earlier `/trendtest`, `/lowtftest`, `/addtest` calibrations used
+  coarse walks, but each compared against a shift baseline run through the
+  same simulator, so the bias cancelled there. It does not cancel against a
+  portfolio built another way.
+- Prediction, written before the read: no difference shown. H will likely
+  show the higher total and the deeper drawdown. Registry
+  `breakout-vs-regime-hold`. **Read: `/holdtest` after the deploy.**
+
 **`/trendtest 1d` read (2026-11-25, pre-registered) → REJECTED; the
 timeframe question is closed.** Ten coins since 2018-09-09, spot, long only
 in BTC's UP regime: n=415, win 43%, **gross +0.374R, cost 0.020R, net
@@ -775,7 +820,7 @@ the rule beats only 90% against a 98.33% bar. The prediction held exactly.
 - The owner was told: a big positive net is not an edge when random entries
   with the same exits earn half of it. Do not follow it with real money on
   this read.
-- Offered, not built: the simpler benchmark the card points at. That is,
+- Built the same day as `/holdtest` (see above): the simpler benchmark the card points at. That is,
   hold BTC (or the basket) whenever BTC is above its 300-day mean, sold
   below. It asks whether the breakout adds anything over the regime alone.
   It would be a new pre-registered test, counted as a fifth look.
@@ -1921,7 +1966,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1215 tests, ~15s
+python -m pytest            # 1224 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1941,6 +1986,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
 | `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
 | `wolf/lowtftest.py` | v2's rule bar for bar on 1h / 15m (rejected) and 1d spot long-only vs the same trades on random days (`/trendtest 1h`, `/trendtest 15m`, `/trendtest 1d`) |
+| `wolf/holdtest.py` | spot daily portfolios: v2's breakout vs holding the basket while BTC > its 300-day mean, paired block-bootstrap Sharpe (`/holdtest`) |
 | `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
 | `wolf/addtest.py` | paired offline test of averaging down (one lot at 0.5R adverse, closed alone at the half-gap target) on `/trendtest` A's entries (`/addtest`) |
 | `wolf/zonetest.py` | offline test of naive daily high/low zones: coverage (≠ win rate) and the zone fade vs zones on random days (`/zonetest`) |
