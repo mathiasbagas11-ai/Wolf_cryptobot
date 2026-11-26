@@ -307,16 +307,16 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` — **REJECTED 2026-11-25** (net +0.354R but random-day longs earn +0.194R; beats 90% against 98.33%). One added 2026-11-25: `breakout-vs-regime-hold` (OPEN, `/holdtest` read due; bar 98.75%).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` — **REJECTED 2026-11-25** (net +0.354R but random-day longs earn +0.194R; beats 90% against 98.33%). One added 2026-11-25: `breakout-vs-regime-hold` (OPEN, `/holdtest` read due; bar 98.75%). One added 2026-11-26: `openbot-llm-challenger` (OPEN, read at 100 closed trades).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, `/holdtest` built (breakout vs regime hold, read due); v2's rule on 15m / 1h / 1d REJECTED
+## Status — 2026-11-26, OpenBot LLM challenger referee built; `/holdtest` read still due
 
-1224 tests green. Working tree clean.
+1238 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -773,6 +773,44 @@ intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
 noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
+
+**OpenBot challenger built (2026-11-26, "b aja bro, kita lihat seberapa
+gacor").** The owner wants a second project in the OpenBot desktop app
+(openbot.run: a Mac workspace running Codex/Claude/Gemini/Grok agents) and a
+comparison with this repo. Offered A (agents *write* a bot) or B (the agent
+*is* the bot and decides trades); they chose **B, on a new Gemini model**.
+They were told the record: every LLM layer measured here added nothing; an
+LLM's calls cannot be backtested; a Mac app stops when the Mac sleeps; hand-
+relayed calls can be cherry-picked; and the agent must not share Wolf's
+Telegram token (the 10-29 copy-bot lesson). Built as a **referee only**,
+`wolf/openbot.py`:
+- calls arrive by `/ob BTC LONG <SL> <TP> [jam] [alasan]` or
+  `POST /openbot/signals` (X-API-Key); **Wolf sets the entry** at the live
+  15m price on arrival; refusals (coin outside the ten, wrong-side levels,
+  stop outside 0.2–15%, 1–72h, one per coin, five open) are counted by
+  reason on the card;
+- graded every 15 min on 15m bars opening after the entry: SL first on a
+  straddling bar, else TP, else the close at the limit; 20bps on its own
+  stop; 1% risk on 10,000; own key `openbot_paper`, never the tracker;
+- `/openbot` (and `GET /openbot`) prints the ledger and OpenBot / v2 / old
+  bot over the same window (level, not paired — context, not a contest);
+- **posts nothing to Telegram by default** (`OPENBOT_NOTIFY=false`; owner,
+  11-26: "gausah kirim ke telegram, jalan di openbotnya sendiri"). The agent
+  calls `POST /openbot/signals` itself and reads `GET /openbot?format=text`;
+  `/ob` and `/openbot` stay as a manual fallback. Both endpoints also take
+  **`OPENBOT_API_KEY`**, a scoped key that opens nothing else (not the
+  ledger, `/scan` or the replays); the agent is given that, never `API_KEY`. `OPENBOT_ENABLED` default
+  true; with nothing open a pass makes no request.
+Registry `openbot-llm-challenger` (OPEN): read at 100 closed trades; "gacor"
+only if net > 0 and day-level t ≥ 2. Whether OpenBot agents can make HTTP
+calls is unknown (openbot.run is unreachable from the sandbox), so `/ob` by
+hand is the default path.
+- **`OPENBOT_BRIEF.md`** (11-26, owner chose "2"): what the agent is
+  given instead of the repo — the experiment's rules and referee API, Wolf's
+  lessons in short, and the rejected-ideas table, with no strategy code.
+  The owner was told a whole-repo handoff would make it "Wolf v2" rather
+  than a challenger and would send the project notes to a third-party model.
+  **When a registry entry is settled, update the brief's table too.**
 
 **`/holdtest` built (2026-11-25, "gas tes hold").** This is the question the
 1d read pointed at: does the breakout add anything over plain holding while
@@ -1966,7 +2004,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1224 tests, ~15s
+python -m pytest            # 1238 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1987,6 +2025,7 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
 | `wolf/lowtftest.py` | v2's rule bar for bar on 1h / 15m (rejected) and 1d spot long-only vs the same trades on random days (`/trendtest 1h`, `/trendtest 15m`, `/trendtest 1d`) |
 | `wolf/holdtest.py` | spot daily portfolios: v2's breakout vs holding the basket while BTC > its 300-day mean, paired block-bootstrap Sharpe (`/holdtest`) |
+| `wolf/openbot.py` | 🤖 referee for an outside LLM agent's calls (`/ob`, `POST /openbot/signals`): Wolf sets the entry, grades on 15m, own ledger `openbot_paper`, `/openbot` vs v2 vs old bot |
 | `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
 | `wolf/addtest.py` | paired offline test of averaging down (one lot at 0.5R adverse, closed alone at the half-gap target) on `/trendtest` A's entries (`/addtest`) |
 | `wolf/zonetest.py` | offline test of naive daily high/low zones: coverage (≠ win rate) and the zone fade vs zones on random days (`/zonetest`) |

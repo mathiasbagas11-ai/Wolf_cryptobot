@@ -694,6 +694,19 @@ class V2Settings:
 
 
 @dataclass(frozen=True)
+class OpenBotSettings:
+    """🤖 OpenBot challenger — an outside LLM agent's calls, graded by Wolf
+    (wolf.openbot). Measurement only: its own ledger, nothing on the signal
+    path. ``notify`` off by default (owner, 2026-11-26: the agent runs inside
+    OpenBot, nothing goes to Telegram); ``thread_id`` empty → the system topic."""
+
+    enabled: bool = True
+    interval_min: int = 15
+    notify: bool = False
+    thread_id: str = ""
+
+
+@dataclass(frozen=True)
 class DebateRole:
     """One debate participant (bull / bear / arbiter) → a provider + model."""
 
@@ -993,6 +1006,10 @@ class Settings:
     # X-API-Key header. Empty leaves the API open for local dev only: once the
     # service has a public domain (below) an unset key refuses instead.
     api_key: str = ""
+    # A second key that opens only the OpenBot challenger's two endpoints
+    # (submit a call, read its card), so the outside agent never holds the
+    # key to the whole ledger. Empty → those endpoints take API_KEY only.
+    openbot_api_key: str = ""
     # Railway injects RAILWAY_PUBLIC_DOMAIN once a domain is generated for the
     # service. Its presence is the one reliable sign the API is reachable from
     # the internet, which is exactly when "no key means open" stops being a
@@ -1035,6 +1052,7 @@ class Settings:
     reports: ReportsSettings = field(default_factory=ReportsSettings)
     conviction: ConvictionSettings = field(default_factory=ConvictionSettings)
     v2: V2Settings = field(default_factory=V2Settings)
+    openbot: OpenBotSettings = field(default_factory=OpenBotSettings)
     flow: FlowSettings = field(default_factory=FlowSettings)
     onchain: OnChainSettings = field(default_factory=OnChainSettings)
     anomaly: AnomalySettings = field(default_factory=AnomalySettings)
@@ -1098,6 +1116,12 @@ class Settings:
         v2 = V2Settings(
             enabled=_env_bool("V2_ENABLED", True),
             interval_min=_env_int("V2_INTERVAL_MIN", 15),
+        )
+        openbot = OpenBotSettings(
+            enabled=_env_bool("OPENBOT_ENABLED", True),
+            interval_min=_env_int("OPENBOT_INTERVAL_MIN", 15),
+            notify=_env_bool("OPENBOT_NOTIFY", False),
+            thread_id=os.getenv("OPENBOT_THREAD_ID", "").strip(),
         )
         flow = FlowSettings(
             enabled=_env_bool("FLOW_ENABLED", False),
@@ -1260,6 +1284,7 @@ class Settings:
             # wins when set, so an existing deployment keeps its port.
             api_port=_env_int("API_PORT", _env_int("PORT", 8000)),
             api_key=_env_str("API_KEY"),
+            openbot_api_key=_env_str("OPENBOT_API_KEY"),
             public_domain=_env_str("RAILWAY_PUBLIC_DOMAIN"),
             gemini_api_key=_env_str("GEMINI_API_KEY"),
             groq_api_key=_env_str("GROQ_API_KEY"),
@@ -1285,6 +1310,7 @@ class Settings:
             reports=reports,
             conviction=conviction,
             v2=v2,
+            openbot=openbot,
             flow=flow,
             onchain=onchain,
             anomaly=anomaly,

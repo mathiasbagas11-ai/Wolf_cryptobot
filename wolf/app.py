@@ -78,6 +78,7 @@ class Application:
     flow: Optional[FlowIntelReporter] = None
     conviction: Optional[ConvictionRanker] = None
     v2: object = None                 # wolf.v2.V2Engine (paper forward run)
+    openbot: object = None            # wolf.openbot.OpenBotLedger (LLM challenger, paper)
     deepdive: Optional[TokenDeepDive] = None
     # On-chain collectors. Each is None when disabled; the scheduler only adds a
     # job for the ones that exist, so a disabled collector costs nothing.
@@ -394,6 +395,17 @@ def build_application(settings: Settings | None = None) -> Application:
                       thread_id=settings.telegram.route_conviction())
         notifier.divert_high_conviction = False
 
+    # 🤖 OpenBot challenger: an outside LLM agent's calls, refereed here on
+    # their own ledger. Measurement only; nothing it records reaches the tracker.
+    openbot = None
+    if settings.openbot.enabled:
+        from wolf.openbot import OpenBotLedger
+        openbot = OpenBotLedger(store, notifier=notifier if settings.openbot.notify else None,
+                                client=client,
+                                cost_bps=settings.round_trip_cost_bps,
+                                thread_id=settings.openbot.thread_id or settings.telegram.route_system(),
+                                tracker=tracker, v2=v2)
+
     anomaly = build_anomaly_scanner(settings) if settings.anomaly.enabled else None
     flow = (
         build_flow_reporter(settings, store, universe_provider, anomaly=anomaly)
@@ -423,6 +435,7 @@ def build_application(settings: Settings | None = None) -> Application:
         flow=flow,
         conviction=conviction,
         v2=v2,
+        openbot=openbot,
         deepdive=deepdive,
         anomaly=anomaly,
         **collectors,

@@ -263,3 +263,30 @@ def test_the_api_listens_where_railway_routes_a_generated_domain(monkeypatch):
     assert Settings.from_env().api_port == 8080
     monkeypatch.setenv("API_PORT", "9000")
     assert Settings.from_env().api_port == 9000
+
+
+def test_openbot_endpoint_refuses_an_unknown_coin_and_counts_it(client):
+    api, app_obj = client
+    body = api.post("/openbot/signals", json={"symbol": "PEPE", "direction": "LONG",
+                                              "sl": 1, "tp": 2}).json()
+    assert body["refused"] == "coin_outside_universe"
+    view = api.get("/openbot").json()
+    assert view["state"]["received"] == 1
+    assert api.post("/openbot/signals", json={"symbol": "BTC"}).status_code == 400
+
+
+def test_openbot_endpoint_is_guarded_by_the_api_key(secured_client):
+    assert secured_client.post("/openbot/signals", json={}).status_code == 401
+
+
+def test_the_openbot_key_opens_only_the_openbot_endpoints(settings):
+    app_obj = build_application(replace(settings, api_key="main", openbot_api_key="agent"))
+    api = TestClient(create_app(app_obj))
+    agent = {"X-API-Key": "agent"}
+    assert api.get("/openbot", headers=agent).status_code == 200
+    assert api.post("/openbot/signals", headers=agent,
+                    json={"symbol": "PEPE", "direction": "LONG", "sl": 1, "tp": 2}).status_code == 200
+    assert api.get("/signals/outcomes", headers=agent).status_code == 401
+    assert api.get("/paper", headers=agent).status_code == 401
+    assert api.get("/openbot", headers={"X-API-Key": "main"}).status_code == 200
+    assert api.get("/health").json().get("openbot_api_key", False) in (False, True)
