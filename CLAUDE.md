@@ -803,6 +803,12 @@ Registry `openbot-llm-challenger` (OPEN): read at 100 closed trades; "gacor"
 only if net > 0 and day-level t ≥ 2. Whether OpenBot agents can make HTTP
 calls is unknown (openbot.run is unreachable from the sandbox), so `/ob` by
 hand is the default path.
+- **`OPENBOT_BRIEF.md`** (11-26, owner chose "2"): what the agent is
+  given instead of the repo — the experiment's rules and referee API, Wolf's
+  lessons in short, and the rejected-ideas table, with no strategy code.
+  The owner was told a whole-repo handoff would make it "Wolf v2" rather
+  than a challenger and would send the project notes to a third-party model.
+  **When a registry entry is settled, update the brief's table too.**
 
 **`/holdtest` built (2026-11-25, "gas tes hold").** This is the question the
 1d read pointed at: does the breakout add anything over plain holding while
