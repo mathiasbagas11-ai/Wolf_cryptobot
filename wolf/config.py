@@ -1006,6 +1006,10 @@ class Settings:
     # X-API-Key header. Empty leaves the API open for local dev only: once the
     # service has a public domain (below) an unset key refuses instead.
     api_key: str = ""
+    # A second key that opens only the OpenBot challenger's two endpoints
+    # (submit a call, read its card), so the outside agent never holds the
+    # key to the whole ledger. Empty → those endpoints take API_KEY only.
+    openbot_api_key: str = ""
     # Railway injects RAILWAY_PUBLIC_DOMAIN once a domain is generated for the
     # service. Its presence is the one reliable sign the API is reachable from
     # the internet, which is exactly when "no key means open" stops being a
@@ -1280,6 +1284,7 @@ class Settings:
             # wins when set, so an existing deployment keeps its port.
             api_port=_env_int("API_PORT", _env_int("PORT", 8000)),
             api_key=_env_str("API_KEY"),
+            openbot_api_key=_env_str("OPENBOT_API_KEY"),
             public_domain=_env_str("RAILWAY_PUBLIC_DOMAIN"),
             gemini_api_key=_env_str("GEMINI_API_KEY"),
             groq_api_key=_env_str("GROQ_API_KEY"),
