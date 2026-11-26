@@ -41,6 +41,11 @@ MIN_GRADED_FOR_VERDICT = 20
 
 PENDING_KEY = "pending_signals"
 OUTCOMES_KEY = "signal_outcomes"
+#: Every resolved outcome, kept for good. The outcome log above is capped
+#: (``max_outcomes``) and drops its oldest rows, so a window longer than the
+#: log silently read only what was left — ~25 days on the live deployment.
+#: This append-only copy is what long windows read instead.
+ARCHIVE_KEY = "signal_outcomes_archive"
 
 # Notify callback: (signal, event, info) -> None. ``event`` is one of
 # ACTIVATED | TP_HIT | RESOLVED.
@@ -238,6 +243,8 @@ class EvalResult:
         "exit_time",
         "realized_pnl_pct",
         "timeout_price",
+        "mfe_r",
+        "mae_r",
     )
 
     def __init__(self) -> None:
@@ -251,6 +258,10 @@ class EvalResult:
         # Blended PnL% of a scaled exit; set only for a partial (TP1-banked) win
         # so _resolve books the realized number instead of the single-exit geom.
         self.realized_pnl_pct: Optional[float] = None
+        # Best and worst excursion in R across the live bars, through the
+        # bar that resolved the trade; None until the position is live.
+        self.mfe_r: Optional[float] = None
+        self.mae_r: Optional[float] = None
         # The real market price at a blended timeout, kept because exit_price is
         # then overwritten with a synthetic figure derived from the PnL. It is
         # the only input the blend reads, so a row that has lost it cannot be
@@ -292,11 +303,36 @@ class Tracker:
     def _save_pending(self, signals: list[Signal]) -> None:
         self._store.write(PENDING_KEY, [s.to_dict() for s in signals])
 
+    def _seed_archive(self) -> None:
+        """Start the archive from whatever the capped log still holds.
+
+        Rows already trimmed from the log are gone and cannot be recovered;
+        everything still in it is copied once, the first time this runs.
+        """
+        try:
+            if self._store.lines_exist(ARCHIVE_KEY):
+                return
+            rows = [d for d in (self._store.read(OUTCOMES_KEY, default=[]) or [])
+                    if isinstance(d, dict)]
+            self._store.append_lines(ARCHIVE_KEY, rows)
+            if rows:
+                log.info("Outcome archive started with %d rows from the capped log", len(rows))
+        except Exception:
+            log.exception("Could not seed the outcome archive")
+
     def _append_outcome(self, signal: Signal) -> None:
         cap = self._settings.max_outcomes
+        row = signal.to_dict()
+        self._seed_archive()
+        try:
+            self._store.append_lines(ARCHIVE_KEY, [row])
+        except Exception:
+            # The archive is a measurement aid; a failure to write it must
+            # never stop the ledger itself from booking the outcome.
+            log.exception("Could not archive outcome %s", signal.id)
         self._store.update(
             OUTCOMES_KEY,
-            lambda cur: ((cur or []) + [signal.to_dict()])[-cap:],
+            lambda cur: ((cur or []) + [row])[-cap:],
             default=[],
         )
 
@@ -478,6 +514,7 @@ class Tracker:
         res.activated_time = _activation_time(sig, created_at) if res.activated else None
         eff_sl = sig.sl
         first_lvl = ladder[0].level if ladder else None
+        risk_abs = abs(entry - sig.sl)
 
         for c in future:
             c_time = datetime.fromtimestamp(c.time / 1000, tz=timezone.utc)
@@ -491,6 +528,18 @@ class Tracker:
                     continue
             elif res.activated_time is not None and c_time < res.activated_time:
                 continue  # candle predates activation — no position existed yet
+
+            # The excursion is read before any exit rule on this bar, so the
+            # bar that closes the trade still counts: a stop-out bar reached
+            # at least -1R and says so. On that bar the far side may have
+            # traded after the exit, which the bar cannot tell apart; it is
+            # the same ambiguity the intrabar rule below resolves, and here
+            # it can only widen the figure, never invent a path.
+            if risk_abs > 0:
+                fav = (c.high - entry) if is_long else (entry - c.low)
+                adv = (entry - c.low) if is_long else (c.high - entry)
+                res.mfe_r = max(res.mfe_r if res.mfe_r is not None else 0.0, fav / risk_abs)
+                res.mae_r = max(res.mae_r if res.mae_r is not None else 0.0, adv / risk_abs)
 
             # A candle reports its high and its low but not the order they
             # traded in. On a bar wide enough to reach both a take-profit and
@@ -688,6 +737,9 @@ class Tracker:
                     price_t = res.tps_meta.get(lvl, (None, None))[0]
                     pending_notifications.append((sig, "TP_HIT", {"level": lvl, "price": price_t}))
                 sig.tps_hit = res.tps_hit
+                if res.mfe_r is not None:
+                    sig.mfe_r = round(res.mfe_r, 3)
+                    sig.mae_r = round(res.mae_r, 3)
 
                 if res.terminal is None:
                     sig.status = Status.ACTIVE.value if res.activated else Status.PENDING.value
@@ -727,20 +779,23 @@ class Tracker:
         return info
 
     def _lesson(self, sig: Signal) -> str:
-        """One-line takeaway from the cumulative record for this strategy."""
+        """One-line record for this strategy, stated without a verdict.
+
+        This line used to end in advice: "edge holding — keep taking these"
+        above 55% and a positive average. Both inputs are gross of costs and
+        untested for chance, so the advice landed on the owner's phone with every
+        trade report while the diag card, which charges costs and FDR, said no
+        strategy had an edge. A report that tells a reader to act has to clear
+        the bar the card does; this one cannot, so it reports and stops.
+        """
         bucket = self.stats().get("by_strategy", {}).get(sig.strategy)
         if not bucket or not bucket.get("total"):
-            return f"{sig.strategy}: first graded trade — building a baseline."
+            return f"{sig.strategy}: first graded trade."
         wr = bucket["win_rate"]
         n = bucket["total"]
         avg = bucket["avg_pnl"]
-        if wr >= 55 and avg > 0:
-            verdict = "edge holding — keep taking these"
-        elif wr >= 45:
-            verdict = "roughly coin-flip — needs tighter filters"
-        else:
-            verdict = "underperforming — tighten or pause this setup"
-        return f"{sig.strategy}: {wr:.0f}% win over {n} ({avg:+.2f}% avg) — {verdict}."
+        return (f"{sig.strategy} so far: {wr:.0f}% win over {n} ({avg:+.2f}% avg), "
+                "before costs, not tested for luck — see /diag.")
 
     def _resolve(self, sig: Signal, res: EvalResult, created_at: datetime, now: datetime) -> None:
         exit_price = res.exit_price
@@ -841,6 +896,35 @@ class Tracker:
     def outcomes(self) -> list[Signal]:
         raw = self._store.read(OUTCOMES_KEY, default=[])
         return [Signal.from_dict(d) for d in raw if isinstance(d, dict)]
+
+    def history(self) -> list[Signal]:
+        """Every outcome ever archived, merged with the capped log.
+
+        The log wins where both hold a row (it is the copy later corrections,
+        such as a re-booking, were written to). Oldest first, by resolution
+        time, the same order the log keeps.
+        """
+        self._seed_archive()
+        # The log is taken whole; the archive only adds what the log no longer
+        # holds, matched by id. A row with no id cannot be matched, so the
+        # archive's copy of one is left out rather than risked twice.
+        log_rows = [d for d in (self._store.read(OUTCOMES_KEY, default=[]) or [])
+                    if isinstance(d, dict)]
+        in_log = {d.get("id") for d in log_rows if d.get("id")}
+        older: dict[str, dict] = {}
+        for d in self._store.read_lines(ARCHIVE_KEY):
+            if isinstance(d, dict) and d.get("id") and d["id"] not in in_log:
+                older[d["id"]] = d  # a later copy of the same row wins
+        rows = [Signal.from_dict(d) for d in list(older.values()) + log_rows]
+
+        def _when(sig: Signal) -> datetime:
+            t = _resolved_at(sig)
+            if t is None:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+        rows.sort(key=_when)
+        return rows
 
     def stats(self, window_hours: Optional[float] = None) -> dict:
         """Aggregate win-rate / PnL stats over resolved outcomes.

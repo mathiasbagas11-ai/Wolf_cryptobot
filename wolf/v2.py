@@ -1,0 +1,443 @@
+"""v2 — the trend-breakout rule (``/trendtest`` candidate A) run forward on paper.
+
+It did not pass its offline bar: on six years it beat 95% of its baseline
+against a 97.5% line, net +0.080R a trade. The only honest next look is on
+bars that did not exist when it was read, so this runs it forward,
+**unchanged**, on its own paper ledger, separate from the old bot's. It is
+labelled "did not pass" on every message and is never a real-money signal.
+
+The rule is ``wolf.trendtest``'s, called rather than copied (``breakout_side``,
+``walk_trail``, ``btc_regime``), so the forward run and the backtest cannot
+drift apart. Pre-registered in the registry (``trend-breakout-forward-paper``)
+with a kill rule: after ``KILL_AFTER`` closed trades, a net mean below zero
+stops new entries for good.
+
+Each pass:
+1. fetches the basket's 4h bars, including the bar still forming, whose open
+   is the fill for a signal on the bar that just closed;
+2. walks each open position over the closed bars since its entry, exactly as
+   the backtest would, and closes it on the stop or at ``HOLD_BARS``;
+3. checks the newest closed bar of each flat coin for a breakout with BTC's
+   regime. Only the newest bar is read: a signal missed while the bot was down
+   is skipped, never filled late at a price that no longer exists.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import statistics
+import time
+from datetime import datetime, timezone
+from typing import Callable, Optional, Sequence
+
+import requests
+
+from wolf.bbtest import DEFAULT_SYMBOLS, _atr_series
+from wolf.models import Candle
+from wolf.trendtest import (BREAKOUT_BARS, HOLD_BARS, REGIME_BARS, STOP_ATR, TRAIL_MULT,
+                            breakout_side, btc_regime, walk_trail)
+
+log = logging.getLogger("wolf.v2")
+
+STATE_KEY = "v2_paper"
+BAR_MS = 4 * 3600 * 1000
+FETCH_BARS = 500
+KILL_AFTER = 300
+START_BALANCE = 10_000.0
+RISK_PCT = 1.0
+LABEL = "🧪 V2 TREND (paper · belum lolos tes)"
+_HOSTS = ("https://data-api.binance.vision/api/v3/klines",
+          "https://api.binance.com/api/v3/klines")
+
+
+def fetch_4h(symbol: str, client=None, limit: int = FETCH_BARS, timeout: float = 10.0) -> list[Candle]:
+    """The last ``limit`` 4h bars, including the one still forming."""
+    for url in _HOSTS:
+        try:
+            resp = requests.get(url, params={"symbol": symbol, "interval": "4h", "limit": limit},
+                                timeout=timeout)
+            if resp.status_code == 200:
+                rows = resp.json()
+                if isinstance(rows, list) and rows:
+                    return [Candle.from_binance(r) for r in rows]
+        except (requests.RequestException, ValueError, TypeError, IndexError):
+            log.debug("v2 klines via %s failed for %s", url, symbol, exc_info=True)
+    if client is not None:
+        try:
+            return client.get_klines(symbol, "4h", limit) or []
+        except Exception:
+            log.debug("v2 fallback klines failed for %s", symbol, exc_info=True)
+    return []
+
+
+PERSIST_W = 180            # 4h log returns read for ρ1 and VR (30 days)
+PERSIST_Q = 6              # VR horizon: 6 bars = 24h
+
+
+def persistence(closes: Sequence[float], w: int = PERSIST_W, q: int = PERSIST_Q) -> Optional[dict]:
+    """Lag-1 autocorrelation and variance ratio of the last ``w`` 4h log returns.
+
+    Recorded on each v2 entry as a label, never used to filter. It is the
+    universe test from the Copilot atlas (ρ1 > 0 and VR > 1, i.e. moves tend
+    to continue), measured forward on v2's own trades. ``None`` when history is
+    short or flat.
+    """
+    if len(closes) < w + q + 1:
+        return None
+    c = closes[-(w + 1):]
+    r = [math.log(c[i] / c[i - 1]) for i in range(1, len(c)) if c[i - 1] > 0 and c[i] > 0]
+    if len(r) < w:
+        return None
+    x, y = r[:-1], r[1:]
+    mx, my = statistics.fmean(x), statistics.fmean(y)
+    sxy = sum((a - mx) * (b - my) for a, b in zip(x, y))
+    sxx = sum((a - mx) ** 2 for a in x)
+    syy = sum((b - my) ** 2 for b in y)
+    if sxx <= 0 or syy <= 0:
+        return None
+    rho1 = sxy / math.sqrt(sxx * syy)
+    var1 = statistics.variance(r)
+    rq = [sum(r[i - q + 1:i + 1]) for i in range(q - 1, len(r))]
+    vr = statistics.variance(rq) / (q * var1) if var1 > 0 and len(rq) > 1 else None
+    if vr is None:
+        return None
+    label = "PERSIST" if rho1 > 0 and vr > 1 else "NOT"
+    return {"rho1": round(rho1, 4), "vr": round(vr, 4), "label": label}
+
+
+def _iso(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+
+
+def _fmt(px: float) -> str:
+    return f"{px:,.6g}" if px < 1 else f"{px:,.4f}" if px < 100 else f"{px:,.2f}"
+
+
+def _persist_line(p: Optional[dict]) -> str:
+    if not p:
+        return "Label tren: n/a (riwayat kurang)"
+    word = "tren cenderung lanjut" if p["label"] == "PERSIST" else "tren tidak terbukti lanjut"
+    return (f"Label tren (cuma dicatat, bukan filter): {p['label']} — {word} "
+            f"(ρ1 {p['rho1']:+.3f}, VR {p['vr']:.2f})")
+
+
+class V2Engine:
+    def __init__(self, store, notifier=None, client=None, cost_bps: float = 20.0,
+                 thread_id: str = "", symbols: Sequence[str] = DEFAULT_SYMBOLS,
+                 fetch: Optional[Callable[[str], list[Candle]]] = None,
+                 now_ms: Optional[Callable[[], int]] = None):
+        self._store = store
+        self._notifier = notifier
+        self._cost_bps = cost_bps
+        self._thread = thread_id
+        self._symbols = tuple(symbols)
+        self._fetch = fetch or (lambda s: fetch_4h(s, client))
+        self._now = now_ms or (lambda: int(time.time() * 1000))
+
+    # ── state ───────────────────────────────────────────────────────────
+    def state(self) -> dict:
+        st = self._store.read(STATE_KEY, default=None) or {}
+        st.setdefault("started", datetime.now(timezone.utc).isoformat())
+        st.setdefault("balance", START_BALANCE)
+        st.setdefault("open", {})
+        st.setdefault("closed", [])
+        st.setdefault("last_bar", {})
+        st.setdefault("killed", None)
+        return st
+
+    def _save(self, st: dict) -> None:
+        self._store.write(STATE_KEY, st)
+
+    def _say(self, text: str) -> None:
+        if self._notifier is not None and getattr(self._notifier, "enabled", False):
+            self._notifier.send(text, self._thread)
+
+    def net_r(self, r: float, risk_pct: float) -> float:
+        return r - (self._cost_bps / 100.0) / risk_pct
+
+    # ── one pass ────────────────────────────────────────────────────────
+    def run(self) -> dict:
+        st = self.state()
+        now = self._now()
+        series, closed_n = {}, {}
+        for sym in self._symbols:
+            bars = self._fetch(sym)
+            if bars:
+                series[sym] = bars
+                closed_n[sym] = sum(1 for b in bars if b.time + BAR_MS <= now)
+        btc = series.get("BTCUSDT")
+        if not btc:
+            log.warning("v2: no BTC bars, pass skipped")
+            st["last_pass"] = {"at": _iso(now), "fetched": len(series), "of": len(self._symbols),
+                               "missing": [s for s in self._symbols if s not in series],
+                               "skipped": "no BTC bars"}
+            self._save(st)
+            return {"skipped": "no BTC bars"}
+        regime = btc_regime(btc[:closed_n["BTCUSDT"]])
+        exits = self._advance(st, series, closed_n)
+        entries = [] if st["killed"] else self._enter(st, series, closed_n, regime)
+        self._check_kill(st)
+        st["last_pass"] = self._pulse(now, series, closed_n, regime, set(st["open"]))
+        self._save(st)
+        return {"exits": exits, "entries": entries}
+
+    def _pulse(self, now: int, series: dict, closed_n: dict, regime: dict, held: set) -> dict:
+        """What this pass saw, so silence can be told apart from a fault.
+
+        "No signal for days" is shared by three unrelated causes: the job not
+        running, the bars not arriving, and a market with no breakout in the
+        regime's direction. The pass time, the fetched count and each coin's
+        distance to its own breakout level separate them. Measurement only:
+        nothing here feeds ``_enter``.
+        """
+        btc = series["BTCUSDT"][:closed_n["BTCUSDT"]]
+        closes = [b.close for b in btc[-REGIME_BARS:]]
+        sma = statistics.fmean(closes) if len(closes) == REGIME_BARS else None
+        side = regime.get(btc[-1].time) if btc else None
+        coins = []
+        for sym, bars in series.items():
+            n = closed_n[sym]
+            if n < BREAKOUT_BARS + 1 or side is None:
+                continue
+            last, window = bars[n - 1], bars[n - 1 - BREAKOUT_BARS:n - 1]
+            level = max(b.high for b in window) if side > 0 else min(b.low for b in window)
+            # % the close still has to travel past the level; <= 0 means it broke.
+            gap = (level - last.close) / last.close * 100 if side > 0 else \
+                  (last.close - level) / last.close * 100
+            coins.append({"symbol": sym, "close": last.close, "level": level,
+                          "gap_pct": round(gap, 3), "open": sym in held})
+        coins.sort(key=lambda c: c["gap_pct"])
+        return {"at": _iso(now), "fetched": len(series), "of": len(self._symbols),
+                "missing": [s for s in self._symbols if s not in series],
+                "bar": _iso(btc[-1].time) if btc else None,
+                "btc": {"close": btc[-1].close if btc else None,
+                        "sma": round(sma, 2) if sma else None,
+                        "side": "LONG" if side == 1 else "SHORT" if side == -1 else None},
+                "coins": coins}
+
+    def _advance(self, st: dict, series: dict, closed_n: dict) -> list[dict]:
+        done = []
+        for sym, pos in list(st["open"].items()):
+            bars = series.get(sym)
+            if not bars:
+                continue
+            idx = {b.time: n for n, b in enumerate(bars)}
+            k = idx.get(pos["entry_time"])
+            if k is None:
+                continue                    # entry bar fell out of the window; try next pass
+            closed = bars[:closed_n[sym]]
+            end = min(len(closed), k + HOLD_BARS)
+            risk = pos["risk"]
+            hit, stop = walk_trail(closed, k, risk, pos["long"], end) if end > k else (None, pos["stop"])
+            if hit is None and len(closed) >= k + HOLD_BARS:
+                last = closed[k + HOLD_BARS - 1].close
+                r = ((last - pos["entry"]) if pos["long"] else (pos["entry"] - last)) / risk
+                hit = (r, k + HOLD_BARS - 1, "timeout")
+            if hit is None:
+                pos["stop"] = stop
+                continue
+            r, j, how = hit
+            net = self.net_r(r, pos["risk_pct"])
+            st["balance"] *= 1 + RISK_PCT / 100 * net
+            trade = {**pos, "symbol": sym, "r": round(r, 4), "net_r": round(net, 4), "how": how,
+                     "exit_time": _iso(closed[j].time)}
+            st["closed"].append(trade)
+            del st["open"][sym]
+            done.append(trade)
+            self._say(self._exit_text(trade, st))
+        return done
+
+    def _enter(self, st: dict, series: dict, closed_n: dict, regime: dict) -> list[dict]:
+        made = []
+        for sym, bars in series.items():
+            if sym in st["open"]:
+                continue
+            n = closed_n[sym]
+            if n < BREAKOUT_BARS + 15 or n >= len(bars):
+                continue                    # no forming bar to fill at, or too little history
+            i = n - 1
+            if st["last_bar"].get(sym) == bars[i].time:
+                continue
+            st["last_bar"][sym] = bars[i].time
+            long = breakout_side(bars[:n], i, regime)
+            if long is None:
+                continue
+            atr = _atr_series(bars[:n])[i]
+            entry_bar = bars[n]
+            if atr != atr or atr <= 0 or entry_bar.time != bars[i].time + BAR_MS:
+                continue
+            entry = entry_bar.open
+            risk = STOP_ATR * atr
+            if risk >= entry:
+                continue
+            window = bars[i - BREAKOUT_BARS:i]
+            pos = {"long": long, "signal_time": bars[i].time, "entry_time": entry_bar.time,
+                   "entry": entry, "risk": risk, "risk_pct": risk / entry * 100,
+                   "stop": entry - risk if long else entry + risk,
+                   "level": max(b.high for b in window) if long else min(b.low for b in window),
+                   "opened": _iso(entry_bar.time),
+                   "persist": persistence([b.close for b in bars[:n]])}
+            st["open"][sym] = pos
+            made.append({"symbol": sym, **pos})
+            self._say(self._entry_text(sym, pos))
+        return made
+
+    def _check_kill(self, st: dict) -> None:
+        if st["killed"] or len(st["closed"]) < KILL_AFTER:
+            return
+        mean = statistics.fmean(t["net_r"] for t in st["closed"])
+        if mean < 0:
+            st["killed"] = {"at": datetime.now(timezone.utc).isoformat(), "trades": len(st["closed"]),
+                            "mean_net_r": round(mean, 4)}
+            self._say(f"{LABEL}\n⛔ Aturan stop kena: setelah {len(st['closed'])} trade rata-rata net "
+                      f"{mean:+.3f}R (< 0). v2 berhenti buka posisi baru. Posisi terbuka tetap diselesaikan.")
+
+    # ── messages ────────────────────────────────────────────────────────
+    def _entry_text(self, sym: str, pos: dict) -> str:
+        side = "LONG 🟢" if pos["long"] else "SHORT 🔴"
+        regime = "naik (BTC di atas rata-rata ~50 hari)" if pos["long"] else \
+                 "turun (BTC di bawah rata-rata ~50 hari)"
+        why = (f"candle 4h tutup di atas high {BREAKOUT_BARS} candle ({_fmt(pos['level'])})"
+               if pos["long"] else
+               f"candle 4h tutup di bawah low {BREAKOUT_BARS} candle ({_fmt(pos['level'])})")
+        return (f"{LABEL}\n{side} {sym}\n"
+                f"Regime BTC: {regime}\nAlasan: {why}\n"
+                f"Entry (open 4h): {_fmt(pos['entry'])}\n"
+                f"Stop awal: {_fmt(pos['stop'])} ({STOP_ATR:g}×ATR = {pos['risk_pct']:.2f}%)\n"
+                f"Exit: trailing {STOP_ATR * TRAIL_MULT:g}×ATR dari harga terbaik, tanpa TP, maks 15 hari\n"
+                f"{_persist_line(pos.get('persist'))}\n"
+                f"Paper only — aturan ini gagal tipis di backtest (95% vs syarat 97.5%). Bukan sinyal uang beneran.")
+
+    def _exit_text(self, t: dict, st: dict) -> str:
+        how = {"stop": "kena stop/trailing", "timeout": "batas 15 hari"}.get(t["how"], t["how"])
+        side = "LONG" if t["long"] else "SHORT"
+        return (f"{LABEL}\n✅ Tutup {side} {t['symbol']} — {how}\n"
+                f"Hasil: {t['r']:+.2f}R kotor, {t['net_r']:+.2f}R setelah biaya\n"
+                f"Trade ke-{len(st['closed'])} · saldo paper {st['balance']:,.2f}")
+
+    # ── dashboard ───────────────────────────────────────────────────────
+    def summary(self, recent: int = 30) -> dict:
+        """Everything the Vercel "Strategi v2" tab shows, from the same ledger
+        the card reads. The curve compounds each closed trade at RISK_PCT, net
+        and gross, so the two lines differ by cost alone."""
+        st = self.state()
+        closed = st["closed"]
+        net_bal = gross_bal = 1.0
+        curve = []
+        for t in closed:
+            net_bal *= 1 + RISK_PCT / 100 * t["net_r"]
+            gross_bal *= 1 + RISK_PCT / 100 * t["r"]
+            ts = int(datetime.fromisoformat(t["exit_time"]).timestamp())
+            curve.append({"t": ts, "net": round((net_bal - 1) * 100, 3),
+                          "gross": round((gross_bal - 1) * 100, 3)})
+        nets = [t["net_r"] for t in closed]
+
+        def side(flag):
+            rs = [t["net_r"] for t in closed if t["long"] is flag]
+            return {"n": len(rs), "net_r": round(statistics.fmean(rs), 4) if rs else None}
+
+        return {
+            "label": LABEL, "started": st["started"], "start_balance": START_BALANCE,
+            "balance": round(st["balance"], 2),
+            "return_pct": round((st["balance"] / START_BALANCE - 1) * 100, 3),
+            "risk_pct": RISK_PCT, "cost_bps": self._cost_bps,
+            "n": len(closed), "wins": sum(1 for x in nets if x > 0),
+            "net_r": round(statistics.fmean(nets), 4) if nets else None,
+            "gross_r": round(statistics.fmean(t["r"] for t in closed), 4) if closed else None,
+            "long": side(True), "short": side(False),
+            "by_label": self._by_label(closed),
+            "kill_after": KILL_AFTER, "killed": st["killed"],
+            "rules": {"breakout_bars": BREAKOUT_BARS, "stop_atr": STOP_ATR,
+                      "trail_atr": STOP_ATR * TRAIL_MULT, "hold_days": HOLD_BARS // 6,
+                      "regime_bars": REGIME_BARS},
+            "open": [{"symbol": sym, "direction": "LONG" if p["long"] else "SHORT",
+                      "entry": p["entry"], "stop": p["stop"], "initial_stop":
+                      p["entry"] - p["risk"] if p["long"] else p["entry"] + p["risk"],
+                      "risk_pct": round(p["risk_pct"], 3), "level": p.get("level"),
+                      "opened": p["opened"], "signal_time": _iso(p["signal_time"]),
+                      "persist": p.get("persist")}
+                     for sym, p in sorted(st["open"].items())],
+            "closed": [{"symbol": t["symbol"], "direction": "LONG" if t["long"] else "SHORT",
+                        "entry": t["entry"], "r": t["r"], "net_r": t["net_r"], "how": t["how"],
+                        "opened": t["opened"], "exit_time": t["exit_time"],
+                        "label": (t.get("persist") or {}).get("label")}
+                       for t in reversed(closed[-recent:])],
+            "curve": curve,
+            "last_pass": st.get("last_pass"),
+        }
+
+    @staticmethod
+    def _by_label(closed: Sequence[dict]) -> dict:
+        out = {}
+        for name in ("PERSIST", "NOT"):
+            rs = [t["net_r"] for t in closed if (t.get("persist") or {}).get("label") == name]
+            out[name] = {"n": len(rs), "net_r": round(statistics.fmean(rs), 4) if rs else None}
+        return out
+
+    # ── card ────────────────────────────────────────────────────────────
+    def card(self) -> str:
+        st = self.state()
+        lines = [f"{LABEL}", f"mulai    {st['started'][:16].replace('T', ' ')} UTC · "
+                 f"risk {RISK_PCT:g}%/trade · biaya {self._cost_bps:g}bps"]
+        closed = st["closed"]
+        lines.append(f"saldo    {st['balance']:,.2f} (awal {START_BALANCE:,.0f}, "
+                     f"{(st['balance'] / START_BALANCE - 1) * 100:+.2f}%)")
+        if closed:
+            nets = [t["net_r"] for t in closed]
+            wins = sum(1 for x in nets if x > 0)
+            sd = statistics.stdev(nets) if len(nets) > 1 else 0.0
+            lines.append(f"selesai  {len(closed)} trade · menang {wins} ({wins / len(nets) * 100:.0f}%) · "
+                         f"rata-rata {statistics.fmean(nets):+.3f}R net (sd {sd:.2f}) · total {sum(nets):+.1f}R")
+            for side, flag in (("LONG", True), ("SHORT", False)):
+                rs = [t["net_r"] for t in closed if t["long"] is flag]
+                if rs:
+                    lines.append(f"  {side:<5} n={len(rs)} rata-rata {statistics.fmean(rs):+.3f}R")
+            lab = self._by_label(closed)
+            if lab["PERSIST"]["n"] or lab["NOT"]["n"]:
+                f = lambda d: f"n={d['n']} {d['net_r']:+.3f}R" if d["n"] else "n=0"  # noqa: E731
+                lines.append(f"  label  PERSIST {f(lab['PERSIST'])} · NOT {f(lab['NOT'])} "
+                             "(cuma dicatat; dibaca di 300 trade)")
+        else:
+            lines.append("selesai  belum ada trade yang tutup")
+        if st["open"]:
+            lines.append(f"terbuka  {len(st['open'])} posisi")
+            for sym, p in sorted(st["open"].items()):
+                lab = (p.get("persist") or {}).get("label", "n/a")
+                lines.append(f"  {'LONG ' if p['long'] else 'SHORT'} {sym:<9} entry {_fmt(p['entry'])} "
+                             f"stop {_fmt(p['stop'])} sejak {p['opened'][:16].replace('T', ' ')} [{lab}]")
+        else:
+            lines.append("terbuka  tidak ada posisi")
+        if st["killed"]:
+            k = st["killed"]
+            lines.append(f"STATUS   DIHENTIKAN setelah {k['trades']} trade (rata-rata {k['mean_net_r']:+.3f}R)")
+        else:
+            lines.append(f"aturan   cek mati di {KILL_AFTER} trade: rata-rata net < 0 → berhenti "
+                         f"({len(closed)}/{KILL_AFTER})")
+        lines.extend(self._pulse_lines(st.get("last_pass")))
+        lines.append("catatan  backtest-nya gagal tipis; ini cek di data baru, bukan bukti. "
+                     f"~1–2 trade/hari: {KILL_AFTER} trade cuma bisa nangkep kalau rusak, belum membuktikan bagus.")
+        return "\n".join(lines)
+
+    def _pulse_lines(self, lp: Optional[dict]) -> list[str]:
+        if not lp:
+            return ["mesin    belum ada pass tercatat (job v2 belum jalan sejak deploy ini)"]
+        age_h = (self._now() - datetime.fromisoformat(lp["at"]).timestamp() * 1000) / 3_600_000
+        out = [f"mesin    pass terakhir {lp['at'][:16].replace('T', ' ')} UTC ({age_h:.1f} jam lalu) · "
+               f"data {lp['fetched']}/{lp['of']} koin"
+               + (f" · GAGAL: {', '.join(lp['missing'])}" if lp.get("missing") else "")]
+        if lp.get("skipped"):
+            out.append(f"  pass dilewati: {lp['skipped']}")
+            return out
+        b = lp["btc"]
+        if b.get("sma"):
+            d = (b["close"] / b["sma"] - 1) * 100
+            word = "cuma LONG" if b["side"] == "LONG" else "cuma SHORT"
+            out.append(f"  BTC {_fmt(b['close'])} vs rata-rata 300 {_fmt(b['sma'])} ({d:+.1f}%) → {word}")
+        near = [c for c in lp["coins"] if not c["open"]][:5]
+        if near:
+            out.append("  jarak ke breakout (candle 4h terakhir, % yang masih kurang):")
+            for c in near:
+                out.append(f"    {c['symbol']:<9} {c['gap_pct']:+.2f}%  (level {_fmt(c['level'])})")
+        return out
+

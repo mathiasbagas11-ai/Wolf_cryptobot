@@ -33,8 +33,27 @@ _HELP = (
     "<code>/paper</code> — paper balance &amp; return\n"
     "<code>/bbtest</code> — backtest the Bollinger dip rule from the video "
     "(~1 min; add a coin, e.g. <code>/bbtest BTC</code>)\n"
+    "<code>/ewtest</code> — backtest an Elliott Wave 2→3 entry against random entries "
+    "(~1 min; add a coin, e.g. <code>/ewtest ETH</code>)\n"
+    "<code>/ichitest</code> — backtest Ichimoku TK cross &amp; cloud breakout against random entries "
+    "(~1 min; add a coin, e.g. <code>/ichitest BTC</code>)\n"
+    "<code>/ob BTC LONG &lt;SL&gt; &lt;TP&gt; [jam] [alasan]</code> — 🤖 catat call agent OpenBot (entry = harga pasar sekarang)\n"
+    "<code>/openbot</code> — 🤖 hasil agent OpenBot vs v2 vs bot lama\n"
+    "<code>/v2</code> — 🧪 strategi v2 (tren, paper, belum lolos tes): saldo, posisi, hasil\n"
+    "<code>/sweeptest</code> — tes strategi Threads: ikut tren, short/long di sweep H1, TP swing (~3 min)\n"
+    "<code>/zonetest</code> — tes zona high/low harian ala video: coverage vs win rate, dan fade-nya (~2 min)\n"
+    "<code>/addtest</code> — tes: averaging down (ADD + exit setengah gap) vs polos di entry yang sama (~2 min)\n"
+    "<code>/trendtest</code> — backtest the two candidates for a new strategy "
+    "(trend breakout, weekly relative momentum) against random baselines (~2 min); "
+    "<code>/trendtest 1h</code> / <code>/trendtest 15m</code> — aturan v2 di TF rendah (calon v3, ~3–5 min); "
+    "<code>/trendtest 1d</code> — aturan v2 di 1D, spot, long only saat BTC naik (~1 min)\n"
+    "<code>/holdtest</code> — spot: breakout v2 vs cuma pegang koin selama BTC di atas rata-rata 300 hari (~2 min)\n"
     "<code>/montecarlo</code> — how deep the losing run could get, net of costs "
     "(add a strategy, e.g. <code>/montecarlo MOMENTUM</code>)\n"
+    "<code>/mae</code> — how far trades went for and against them before closing "
+    "(add hours, e.g. <code>/mae 168</code>)\n"
+    "<code>/beta</code> — how much of each trade's R was BTC moving under it "
+    "(add hours, e.g. <code>/beta 168</code>)\n"
     "<code>/learning</code> — strategy edge &amp; blacklist\n"
     "<code>/active</code> — open signals\n"
     "<code>/rank</code> — AI ranking of the live signals, best first\n"
@@ -45,6 +64,7 @@ _HELP = (
     "<code>/whatif whale</code> — what each whale-veto policy would have kept\n"
     "<code>/whatif chase</code> — what the chase gate threw away, replayed\n"
     "<code>/whatif contest</code> — did the winner beat the candidate it displaced\n"
+    "<code>/whatif intrabar</code> — how much of the ledger rests on guessing bar order\n"
     "<code>/ai</code> — is the debate layer actually answering?\n"
     "<code>/tested</code> — what has already been tried, and what settled it\n"
     "<code>/rebank</code> — re-book timeouts that forgot a banked rung "
@@ -81,6 +101,30 @@ class CommandRouter:
             return self._paper()
         if cmd == "bbtest":
             return self._bbtest(arg)
+        if cmd == "ewtest":
+            return self._ewtest(arg)
+        if cmd == "ichitest":
+            return self._ichitest(arg)
+        if cmd == "v2":
+            return self._v2()
+        if cmd == "ob":
+            return self._ob(arg)
+        if cmd == "openbot":
+            return self._openbot()
+        if cmd == "sweeptest":
+            return self._sweeptest()
+        if cmd == "zonetest":
+            return self._zonetest()
+        if cmd == "addtest":
+            return self._addtest()
+        if cmd == "trendtest":
+            return self._lowtftest(arg) if arg else self._trendtest()
+        if cmd == "holdtest":
+            return self._holdtest()
+        if cmd in ("mae", "mfe", "excursion"):
+            return self._excursion(arg)
+        if cmd == "beta":
+            return self._beta(arg)
         if cmd in ("montecarlo", "mc"):
             return self._montecarlo(arg)
         if cmd == "learning":
@@ -189,6 +233,13 @@ class CommandRouter:
                     self._app.tracker, ladder=self._app.settings.ladder, overlap=overlap
                 )
                 return "<pre>" + esc(render_chase(report)) + "</pre>"
+            if arg.lower().startswith("intrabar"):
+                # Paired: the same trades graded with the bar order inferred
+                # and with the stop always first, so the gap is exactly how
+                # much of the ledger rests on that guess.
+                from wolf.whatif import compare_intrabar, render_intrabar
+
+                return "<pre>" + esc(render_intrabar(compare_intrabar(self._app.tracker))) + "</pre>"
             if arg.lower().startswith("ladder"):
                 return (
                     "<pre>"
@@ -486,6 +537,191 @@ class CommandRouter:
         except Exception:
             log.exception("Bollinger backtest failed")
             return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(render(report))}</pre>"
+
+    def _ewtest(self, arg: str) -> str:
+        """Backtest the Elliott Wave 2→3 entry offline (see wolf.ewtest)."""
+        from wolf import ewtest
+
+        symbols = ewtest.DEFAULT_SYMBOLS
+        if arg:
+            sym = arg.split()[0].upper()
+            symbols = (sym if sym.endswith("USDT") else f"{sym}USDT",)
+        try:
+            report = ewtest.backtest(symbols, client=getattr(self._app, "client", None),
+                                     cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Elliott Wave backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(ewtest.render(report))}</pre>"
+
+    def _ichitest(self, arg: str) -> str:
+        """Backtest the two textbook Ichimoku entries offline (see wolf.ichitest)."""
+        from wolf import ichitest
+
+        symbols = ichitest.DEFAULT_SYMBOLS
+        if arg:
+            sym = arg.split()[0].upper()
+            symbols = (sym if sym.endswith("USDT") else f"{sym}USDT",)
+        try:
+            report = ichitest.backtest(symbols, client=getattr(self._app, "client", None),
+                                       cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Ichimoku backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(ichitest.render(report))}</pre>"
+
+    def _ob(self, arg: str) -> str:
+        """Record one OpenBot agent call (see wolf.openbot)."""
+        ledger = getattr(self._app, "openbot", None)
+        if ledger is None:
+            return "OpenBot is off (OPENBOT_ENABLED=false)."
+        from wolf.openbot import parse_command
+        try:
+            kw = parse_command(arg)
+        except ValueError as exc:
+            return f"⚠️ {esc(str(exc))}"
+        try:
+            out = ledger.submit(source="telegram", **kw)
+        except Exception:
+            log.exception("openbot submit failed")
+            return "⚠️ OpenBot call failed — see logs."
+        if out.get("refused"):
+            return f"❌ Ditolak ({esc(out['refused'])}): {esc(out['detail'])}"
+        return (f"✅ Tercatat {esc(out['symbol'])} {'LONG' if out['long'] else 'SHORT'} "
+                f"entry {out['entry']:g} · SL {out['risk_pct']:.2f}% · {out['rr']:.2f}R")
+
+    def _openbot(self) -> str:
+        ledger = getattr(self._app, "openbot", None)
+        if ledger is None:
+            return "OpenBot is off (OPENBOT_ENABLED=false)."
+        try:
+            return f"<pre>{esc(ledger.card())}</pre>"
+        except Exception:
+            log.exception("openbot card failed")
+            return "⚠️ OpenBot card failed — see logs."
+
+    def _v2(self) -> str:
+        """The v2 forward paper run's card (see wolf.v2)."""
+        engine = getattr(self._app, "v2", None)
+        if engine is None:
+            return "v2 is off (V2_ENABLED=false)."
+        try:
+            return f"<pre>{esc(engine.card())}</pre>"
+        except Exception:
+            log.exception("v2 card failed")
+            return "⚠️ v2 card failed — see logs."
+
+    def _sweeptest(self) -> str:
+        """Trend-pullback sweep from a Threads screenshot (see wolf.sweeptest)."""
+        from wolf import sweeptest
+
+        try:
+            report = sweeptest.backtest(client=getattr(self._app, "client", None),
+                                        cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Sweep backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(sweeptest.render(report))}</pre>"
+
+    def _zonetest(self) -> str:
+        """Naive daily zones: coverage and the zone fade (see wolf.zonetest)."""
+        from wolf import zonetest
+
+        try:
+            report = zonetest.backtest(client=getattr(self._app, "client", None),
+                                       cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Zone backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(zonetest.render(report))}</pre>"
+
+    def _addtest(self) -> str:
+        """Paired test of averaging down on the trend entries (see wolf.addtest)."""
+        from wolf import addtest
+
+        try:
+            report = addtest.backtest(client=getattr(self._app, "client", None),
+                                      cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("ADD backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(addtest.render(report))}</pre>"
+
+    def _holdtest(self) -> str:
+        """v2's daily breakout vs holding while BTC is above its mean (see wolf.holdtest)."""
+        from wolf import holdtest
+
+        try:
+            report = holdtest.backtest(client=getattr(self._app, "client", None))
+        except Exception:
+            log.exception("Hold backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(holdtest.render(report))}</pre>"
+
+    def _lowtftest(self, arg: str) -> str:
+        """v2's rule bar for bar on 1h or 15m, offline (see wolf.lowtftest)."""
+        from wolf import lowtftest
+
+        tf = (arg or "").strip().lower()
+        if tf not in lowtftest.FRAMES:
+            return f"Pakai <code>/trendtest 1h</code>, <code>/trendtest 15m</code> atau <code>/trendtest 1d</code> (bukan {esc(tf)})."
+        try:
+            report = lowtftest.backtest(tf, client=getattr(self._app, "client", None),
+                                        cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Low-timeframe backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(lowtftest.render(report))}</pre>"
+
+    def _trendtest(self) -> str:
+        """Backtest the two new-strategy candidates offline (see wolf.trendtest).
+
+        Always the whole basket: relative momentum ranks coins against each
+        other, so a one-coin run has nothing to rank.
+        """
+        from wolf import trendtest
+
+        try:
+            report = trendtest.backtest(client=getattr(self._app, "client", None),
+                                        cost_bps=self._app.settings.round_trip_cost_bps)
+        except Exception:
+            log.exception("Trend backtest failed")
+            return "⚠️ Backtest failed — see logs."
+        return f"<pre>{esc(trendtest.render(report))}</pre>"
+
+    def _excursion(self, arg: str) -> str:
+        """Best and worst point of each resolved trade's path, in R."""
+        from wolf.excursion import excursions, render
+
+        try:
+            hours = float(arg) if arg else 0.0
+        except ValueError:
+            return "⚠️ Usage: <code>/mae</code> or <code>/mae 168</code>"
+        try:
+            report = excursions(self._app.tracker.outcomes(), window_hours=hours)
+        except Exception:
+            log.exception("Excursion card failed")
+            return "⚠️ MAE card failed — see logs."
+        return f"<pre>{esc(render(report))}</pre>"
+
+    def _beta(self, arg: str) -> str:
+        """Split each trade's R into BTC's move under it and the rest."""
+        from wolf.beta import beta_report, render
+
+        try:
+            hours = float(arg) if arg else 0.0
+        except ValueError:
+            return "⚠️ Usage: <code>/beta</code> or <code>/beta 168</code>"
+        try:
+            report = beta_report(
+                self._app.tracker.outcomes(), self._app.tracker._client,
+                round_trip_bps=self._app.settings.round_trip_cost_bps,
+                window_hours=hours,
+            )
+        except Exception:
+            log.exception("Beta card failed")
+            return "⚠️ Beta card failed — see logs."
         return f"<pre>{esc(render(report))}</pre>"
 
     def _montecarlo(self, arg: str) -> str:

@@ -74,6 +74,7 @@ def _trade_rows(outcomes: Iterable[Signal], round_trip_bps: float,
             "gross": gross,
             "net": gross - cost,
             "scale": getattr(o, "risk_scale", 1.0) or 1.0,
+            "strategy": (o.strategy or "?").upper(),
         })
     rows.sort(key=lambda r: r["at"])
     return rows

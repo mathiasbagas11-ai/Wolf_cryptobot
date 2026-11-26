@@ -212,6 +212,35 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
                         app.settings.conviction.interval_min,
                         lambda: app.notifier.notify_conviction(app.conviction.build()))
 
+    # 🧪 v2 forward paper run. A measurement job like the graders: it reads
+    # closed 4h bars, so a 15-minute cadence only decides how soon after a
+    # close the fill is announced, never what the rule sees.
+    v2 = getattr(app, "v2", None)
+    if v2 is not None:
+        scheduler.add_job(
+            _guarded(v2.run, "v2"),
+            "interval",
+            minutes=app.settings.v2.interval_min,
+            id="v2",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=_soon(),
+        )
+
+    # 🤖 OpenBot challenger grading. Reads closed 15m bars of open calls only;
+    # with nothing open a pass costs no request.
+    openbot = getattr(app, "openbot", None)
+    if openbot is not None:
+        scheduler.add_job(
+            _guarded(openbot.run, "openbot"),
+            "interval",
+            minutes=app.settings.openbot.interval_min,
+            id="openbot",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=_soon(),
+        )
+
     # Daily backfill of anomaly paper-log outcomes (7d/14d/30d % change).
     anomaly = getattr(app, "anomaly", None)
     if anomaly is not None:

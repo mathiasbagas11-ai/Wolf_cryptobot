@@ -29,6 +29,7 @@ from wolf.diagnose import diagnose, render_digest
 from wolf.logging_setup import setup_logging
 from wolf.chase_audit import grade_chase_drops, render as render_chase
 from wolf.contest_audit import audit_contests, render as render_contest
+from wolf.journal import journal
 from wolf.montecarlo import ledger_path, render as render_montecarlo, simulate
 from wolf.whatif import compare_stop_rules, render as render_whatif
 
@@ -69,6 +70,15 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
                 detail="Service has a public domain but API_KEY is not set — set it in Railway variables",
             )
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+    def require_openbot_key(x_api_key: str = Header(default="")) -> None:
+        """The OpenBot endpoints also accept OPENBOT_API_KEY, which opens
+        nothing else: the agent can submit calls and read its own card, not
+        the ledger, /scan or the replays."""
+        scoped = app_obj.settings.openbot_api_key
+        if scoped and x_api_key == scoped:
+            return
+        require_api_key(x_api_key)
 
     @api.get("/health")
     def health(probe_ai: bool = False, x_api_key: str = Header(default="")) -> dict:
@@ -122,6 +132,25 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             round_trip_bps=app_obj.settings.round_trip_cost_bps,
         )
         return {"enabled": True, **app_obj.account.summary(), "ledger": ledger}
+
+    @api.get("/v2", dependencies=[Depends(require_api_key)])
+    def v2_view() -> dict:
+        """🧪 v2's paper ledger for the dashboard's "Strategi v2" tab."""
+        engine = getattr(app_obj, "v2", None)
+        if engine is None:
+            return {"enabled": False}
+        return {"enabled": True, **engine.summary()}
+
+    @api.get("/journal", dependencies=[Depends(require_api_key)])
+    def journal_view() -> dict:
+        """The ledger as a journal: headline numbers, curve, calendar, setups."""
+        data = journal(
+            app_obj.tracker.outcomes(),
+            risk_pct=app_obj.settings.paper_risk_pct,
+            round_trip_bps=app_obj.settings.round_trip_cost_bps,
+            tz=app_obj.settings.timezone,
+        )
+        return data or {"empty": True}
 
     @api.get("/montecarlo", dependencies=[Depends(require_api_key)])
     def montecarlo(strategy: Optional[str] = None, format: str = "json"):
@@ -369,5 +398,28 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
         if signal is None:
             return {"recorded": False, "reason": "rejected_or_duplicate"}
         return {"recorded": True, "signal": signal.to_dict()}
+
+    @api.post("/openbot/signals", dependencies=[Depends(require_openbot_key)])
+    def openbot_submit(payload: dict = Body(...)) -> dict:
+        """One call from the OpenBot agent: symbol, direction, sl, tp, hours?, reason?.
+        Wolf sets the entry at the market price on arrival (see wolf.openbot)."""
+        ledger = getattr(app_obj, "openbot", None)
+        if ledger is None:
+            raise HTTPException(status_code=503, detail="OpenBot is off (OPENBOT_ENABLED=false)")
+        try:
+            return ledger.submit(symbol=payload["symbol"], direction=payload["direction"],
+                                 sl=payload["sl"], tp=payload["tp"], hours=payload.get("hours"),
+                                 reason=str(payload.get("reason", "")), source="api")
+        except KeyError as exc:
+            raise HTTPException(status_code=400, detail=f"missing field {exc}")
+
+    @api.get("/openbot", dependencies=[Depends(require_openbot_key)])
+    def openbot_view(format: str = "json"):
+        ledger = getattr(app_obj, "openbot", None)
+        if ledger is None:
+            raise HTTPException(status_code=503, detail="OpenBot is off (OPENBOT_ENABLED=false)")
+        if format == "text":
+            return PlainTextResponse(ledger.card())
+        return {"state": ledger.state(), "compare": ledger.compare()}
 
     return api

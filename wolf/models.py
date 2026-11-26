@@ -226,6 +226,15 @@ class Signal:
     # input the blend reads. Keeping the market price makes the booking
     # auditable and makes re-booking a no-op rather than a second helping.
     timeout_price: Optional[float] = None
+    # How far the position went for and against it while open, in R: the
+    # best and worst excursion (MFE/MAE) across the bars it was live for,
+    # through the bar that closed it. Recomputed from the bars on every
+    # tracker pass, so an open signal shows it so far. ``None`` on rows
+    # written before 2026-10-28 — an absence of data, never zero. Recorded,
+    # never acted on: it describes the path a trade took, which is what a
+    # stop or target argument has to be checked against.
+    mfe_r: Optional[float] = None
+    mae_r: Optional[float] = None
     exit_time: Optional[str] = None
     pnl_pct: Optional[float] = None
     # PnL in units of the trade's own risk (R = pnl_pct / distance to SL).

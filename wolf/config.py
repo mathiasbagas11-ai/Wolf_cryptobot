@@ -109,6 +109,31 @@ def volume_mount() -> str:
     return os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
 
 
+def instance_label() -> str:
+    """Which running copy of the bot this is, in words the owner can find.
+
+    Two copies once ran side by side for days, one on the volume with the
+    configured gates and one ephemeral on every default, both posting to the
+    same chat. Their cards looked alike and nothing on them said which
+    deployment wrote them, so the copy was found only because its cards
+    disagreed about ``max_cost_r``. Railway exports the project, service and
+    environment names and the commit to every deployment; printing them
+    makes a second copy visible on its first card.
+    """
+    env = os.environ
+    parts = [
+        env.get("RAILWAY_PROJECT_NAME", "").strip(),
+        env.get("RAILWAY_SERVICE_NAME", "").strip(),
+        env.get("RAILWAY_ENVIRONMENT_NAME", "").strip(),
+    ]
+    name = "/".join(p for p in parts if p)
+    commit = env.get("RAILWAY_GIT_COMMIT_SHA", "").strip()[:7]
+    if not name:
+        import socket
+        return f"not on Railway (host {socket.gethostname()})"
+    return f"railway {name}" + (f" @ {commit}" if commit else "")
+
+
 def state_is_persistent(state_dir: str) -> bool:
     """Whether ``state_dir`` looks like it survives a redeploy.
 
@@ -656,6 +681,32 @@ class ConvictionSettings:
 
 
 @dataclass(frozen=True)
+class V2Settings:
+    """🧪 v2 — the trend-breakout candidate run forward on paper (wolf.v2).
+
+    On by default since the owner chose it on 2026-11-22. While it is on it
+    owns the High-Conviction topic: the AI conviction ranking is not built and
+    TRAP signals are no longer diverted there, so the room carries v2 only.
+    """
+
+    enabled: bool = True
+    interval_min: int = 15
+
+
+@dataclass(frozen=True)
+class OpenBotSettings:
+    """🤖 OpenBot challenger — an outside LLM agent's calls, graded by Wolf
+    (wolf.openbot). Measurement only: its own ledger, nothing on the signal
+    path. ``notify`` off by default (owner, 2026-11-26: the agent runs inside
+    OpenBot, nothing goes to Telegram); ``thread_id`` empty → the system topic."""
+
+    enabled: bool = True
+    interval_min: int = 15
+    notify: bool = False
+    thread_id: str = ""
+
+
+@dataclass(frozen=True)
 class DebateRole:
     """One debate participant (bull / bear / arbiter) → a provider + model."""
 
@@ -955,6 +1006,10 @@ class Settings:
     # X-API-Key header. Empty leaves the API open for local dev only: once the
     # service has a public domain (below) an unset key refuses instead.
     api_key: str = ""
+    # A second key that opens only the OpenBot challenger's two endpoints
+    # (submit a call, read its card), so the outside agent never holds the
+    # key to the whole ledger. Empty → those endpoints take API_KEY only.
+    openbot_api_key: str = ""
     # Railway injects RAILWAY_PUBLIC_DOMAIN once a domain is generated for the
     # service. Its presence is the one reliable sign the API is reachable from
     # the internet, which is exactly when "no key means open" stops being a
@@ -996,6 +1051,8 @@ class Settings:
     news: NewsSettings = field(default_factory=NewsSettings)
     reports: ReportsSettings = field(default_factory=ReportsSettings)
     conviction: ConvictionSettings = field(default_factory=ConvictionSettings)
+    v2: V2Settings = field(default_factory=V2Settings)
+    openbot: OpenBotSettings = field(default_factory=OpenBotSettings)
     flow: FlowSettings = field(default_factory=FlowSettings)
     onchain: OnChainSettings = field(default_factory=OnChainSettings)
     anomaly: AnomalySettings = field(default_factory=AnomalySettings)
@@ -1055,6 +1112,16 @@ class Settings:
             min_conviction=_env_int("CONVICTION_MIN_CONVICTION", 60),
             lookback_hours=_env_float("CONVICTION_LOOKBACK_HOURS", 12.0),
             max_tokens=_env_int("CONVICTION_MAX_TOKENS", 1500),
+        )
+        v2 = V2Settings(
+            enabled=_env_bool("V2_ENABLED", True),
+            interval_min=_env_int("V2_INTERVAL_MIN", 15),
+        )
+        openbot = OpenBotSettings(
+            enabled=_env_bool("OPENBOT_ENABLED", True),
+            interval_min=_env_int("OPENBOT_INTERVAL_MIN", 15),
+            notify=_env_bool("OPENBOT_NOTIFY", False),
+            thread_id=os.getenv("OPENBOT_THREAD_ID", "").strip(),
         )
         flow = FlowSettings(
             enabled=_env_bool("FLOW_ENABLED", False),
@@ -1217,6 +1284,7 @@ class Settings:
             # wins when set, so an existing deployment keeps its port.
             api_port=_env_int("API_PORT", _env_int("PORT", 8000)),
             api_key=_env_str("API_KEY"),
+            openbot_api_key=_env_str("OPENBOT_API_KEY"),
             public_domain=_env_str("RAILWAY_PUBLIC_DOMAIN"),
             gemini_api_key=_env_str("GEMINI_API_KEY"),
             groq_api_key=_env_str("GROQ_API_KEY"),
@@ -1241,6 +1309,8 @@ class Settings:
             news=news,
             reports=reports,
             conviction=conviction,
+            v2=v2,
+            openbot=openbot,
             flow=flow,
             onchain=onchain,
             anomaly=anomaly,

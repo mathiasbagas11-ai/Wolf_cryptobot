@@ -234,6 +234,30 @@ split. The bias was real by mechanism; how much of the 37/87 it explained was
 never separated from the timeout. **Before calling two things identical,
 list every parameter, not the ones the argument needs.**
 
+**A random baseline must keep the dependence of what it is compared with.**
+The first `/ichitest` read passed TK-cross SHORT at "beats 100%". The
+baseline drew each random entry on its own, which spread them evenly through
+time, while the rule's trades arrive in clusters because ten coins move
+together — so the null was far narrower than the rule's own spread. The
+random-walk calibration passed because its walks were independent, the one
+property the real basket lacks. On walks sharing a common factor, 11% of null
+runs landed in tails meant to hold 2.5%. Moving the whole trade set by one
+random offset keeps the clustering and calibrates at 1.6%. **Calibrate a null
+on data that shares the real data's correlations, not on the simplest data
+that runs.** A narrow null only flatters passes; rejections read on it stand.
+
+**A synthetic bar drawn from a few points understates its own range.** The
+first `/holdtest` calibration said v2's breakout beat holding on pure noise
+two times in three. The cause was not the rule or the portfolio code but the
+fake data: bars built from four sub-steps have highs and lows much closer
+together than a continuous path, so trailing stops were touched too rarely
+and every trade drifted up — about +0.17R a trade on a martingale. Earlier
+calibrations hid it because each compared the rule against a baseline run
+through the same simulator, so the bias cancelled; a portfolio built another
+way does not share it. **When a null calibration leans, check the fake data
+before the method — and make bars from enough points that the range is
+real.**
+
 **Name the fault, not the symptom.** "The arbiter abstained", "bear is quiet",
 "the collector has 2 symbols" are each shared by several unrelated faults with
 unrelated remedies. The provider almost always already said which; the bug was
@@ -260,7 +284,7 @@ currently window on **resolution** time; that is a known, unfixed gap.
 
 ## Already tested — check before proposing anything
 
-`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty entries.
+`wolf/hypotheses.json`, readable in Telegram via `/tested`. Thirty-four entries.
 `OPEN` (not measured) is deliberately distinct from `INCONCLUSIVE` (measured,
 separated nothing). **Add an entry whenever something is settled, and never
 duplicate its content into this file** — one of them would go stale.
@@ -277,15 +301,22 @@ Six entries added 2026-09-08: `prepump-unsatisfiable-threshold`,
 INCONCLUSIVE on 2026-09-17 — the limit is not a lever; do not re-open it.**
 **`contest-max-score-self-blinding` moved OPEN → INCONCLUSIVE on 2026-10-20 —
 max(score) is not a lever either; the floor-bias worry is closed.**
+One added 2026-11-02: `btc-beta-explains-the-ledger` — **ADOPTED the same
+day** on its pre-registered read (material; see Status). One added
+2026-11-06: `elliott-wave2-entry` — **REJECTED the same day** on its
+pre-registered ten-coin read (see Status). One added 2026-11-08:
+`sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
+−0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` — **REJECTED 2026-11-25** (net +0.354R but random-day longs earn +0.194R; beats 90% against 98.33%). One added 2026-11-25: `breakout-vs-regime-hold` (OPEN, `/holdtest` read due; bar 98.75%). One added 2026-11-26: `openbot-llm-challenger` (OPEN, read at 100 closed trades).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-10-25, `/bbtest` (video strategy backtest)
+## Status — 2026-11-26, OpenBot LLM challenger referee built; `/holdtest` read still due
 
-1104 tests green. Working tree clean.
+1238 tests green. Working tree clean.
 
 ### Start here (handoff written 2026-10-20 for the next session)
 
@@ -440,8 +471,8 @@ tags COMBO / OTHER, **scored only on signals created after
 `COMBO_SINCE` (2026-10-24T00:00Z)** — earlier rows are dropped, not shown —
 with `combo:COMBO-OTHER` gap in the FDR family and each side's measured
 fee+spread. Until such trades resolve the card prints a one-line
-placeholder. Registry `combo-whale-liquid-primary` (OPEN) holds the success
-and kill criteria; **read with `/diag 720` around 2026-11-21, not before**,
+placeholder. Registry `combo-whale-liquid-primary` (**INCONCLUSIVE since 11-20**, see below) holds the success
+and kill criteria; read with `/diag 720` around 2026-11-21, not before,
 and do not touch the rule or date once readings start. No signal is
 filtered; nothing the bot emits changes.
 
@@ -485,6 +516,936 @@ balance 1,709.25 (−10.78% since 10-23 over 41 trades, gross −8.15% on the
 same trades); ledger 10-01 → 10-25 net −45.6% / gross −16.6%, max DD 47.0%;
 Monte Carlo 100% of paths lose, p95 DD 70%, meanR −0.031 / −0.117 net.
 
+**Overview redesigned as a trading journal (2026-10-26).** The owner did
+not like the first screen and pointed at Edgewonk as the reference. A new
+`/journal` endpoint (`wolf/journal.py`) turns the capped log into
+journal-shaped numbers: stat tiles (net balance, R per trade gross/net,
+win rate against the breakeven rate, profit factor, max DD), a net-and-gross
+equity curve, a profit calendar by WIB day with weekly totals, and a
+per-strategy table. All net of the assumed round trip, in the same
+arithmetic as `/montecarlo`. Two Edgewonk features were deliberately left
+out: the "best setup" highlight and the hour/weekday breakdowns. Both are
+a max over many cells, which is what the card's FDR exists to discount, and
+a calendar of green days invites reading the best day rather than the
+total. The page says that in a note. Lightweight Charts needs an explicit
+`locale`: the default came from the environment, a malformed tag threw,
+and the chart rendered blank.
+
+Edgewonk ideas worth keeping as **measurement** and offered, not built:
+recording MAE/MFE per trade (how far against and for each position went
+before resolving), which would make exit geometry a paired question rather
+than a replay; and a manual-trade journal for the owner's own real-money
+trades, separate from the bot's ledger.
+
+**Sinyal aktif explains each entry (2026-10-27).** The owner asked to see
+the entry point and why the bot entered there. Each card now has a "Kenapa
+masuk di sini" panel: the strategy's idea, entry rule and stop rule in
+plain Indonesian (`dashboard/lib/explain.js`, translated by hand from
+`wolf/detectors/`, so **when a detector changes, change that file too**),
+the recorded `score_parts` as chips sorted by points, and the raw
+`reasons`. The chart marks the bar the signal was taken on and, for a
+retest entry, the bar it filled. Every panel ends with a line saying it is
+the rule's reason and not evidence of an edge. Nothing on the bot changed.
+
+From `rsalianto/tradoor` (reviewed 2026-10-27, AGPL, so ideas only and
+no code): its grader counts a bar that touches both a take-profit and the
+stop as the stop. Ours infers the order from the bar's colour
+(`intrabar_tp_first`, on by default), and **how much of the ledger rests on
+that inference has never been measured**. A paired `/whatif intrabar`
+(same trades regraded stop-first) was offered and not built. Tradoor also
+records best and worst excursion per signal, which is the MAE/MFE offer.
+
+**Intrabar and MAE/MFE built (2026-10-28, "gas intrabar dan MAE").** Both
+are measurements; nothing the bot emits or grades changed.
+- `/whatif intrabar` (`whatif.compare_intrabar`): the same resolved trades
+  replayed twice on 15m bars, bar order inferred (live) vs stop always
+  first, paired, with ties printed. Stop-first is a floor, not the truth.
+  Each replay is **cut at the signal's own timeout** and valued at the last
+  close if still open, because the live tracker never saw later bars.
+  Registry `intrabar-order-inference` (OPEN) carries the read criteria,
+  written before any read. **First read due now**; the capped log covers
+  ~25 days, but `_history` refuses anything over 1000 15m bars (~10 days)
+  back, so expect most of the log to be skipped. Read the scored count.
+- MFE/MAE: `Signal.mfe_r` / `mae_r`, best and worst excursion in R across
+  the live bars through the closing bar, recomputed on every tracker pass
+  (open signals show it so far). `None` on rows before 2026-10-28, which
+  `/mae` leaves out by name. `/mae [hours]` (`wolf/excursion.py`) prints
+  medians per strategy, winners that dipped ≥0.8R and losers that were ≥0.5R
+  green. It is descriptive. Exit geometry is already settled as not a lever;
+  this card is what a stop/target argument has to be checked against, not a
+  reason to reopen one. Useful from about a week of resolved trades.
+
+**Two copies of the bot have been running since about 10-25 (found
+2026-10-29).** Seven 24h cards arrived in one paste and fell into two
+families that cannot be the same deployment:
+
+| | real (keep) | the copy |
+|---|---|---|
+| state | `/data/state_data [ok]` | `state_data [EPHEMERAL]`, no volume |
+| `max_cost_r` | 0.15 (env) | **0.5, the code default** — env unset |
+| AI | CONFIRM/NEUTRAL | ABSTAIN 100%, DeepSeek `HTTP 401: Missing Authentication header` |
+| whale / conv | present | whale collector never wrote; no `conv:` |
+| card stamp | ~06:55 / 07:30 UTC | 07:00 UTC |
+
+The copy has the Telegram token and almost nothing else, so it is a second
+service or project deployed from `main` during the 10-24/25 Railway
+troubleshooting without the env vars or the volume. It posts its signals
+and cards to the same chat, its ledger is wiped on every redeploy, and with
+the cost gate at 0.5 it admits stops the real bot rejects (SCALP 1R 0.64%,
+cost 0.31R). It also runs with no whale veto, because it has no whale data.
+**Never pool its cards with the real ledger.** Read them as noise, not as
+the natural experiment they look like: the state resets, and a whale-veto
+comparison needs its own pre-registration. The owner has been asked to find
+and delete the extra Railway service. Every card and the startup message
+now print an `instance` line (`config.instance_label`: Railway project,
+service, environment and commit) so a copy names itself on its first card.
+
+**The owner sees only one Railway service (2026-10-30)**, so the copy is
+probably not on Railway at all, or not in that project or environment. The
+cards point the same way. The digest fires at boot and then every 24h
+(`scheduler._soon`), so a card's time stamp is its process's boot time. The
+copy's stamps are 07:00:01–02 UTC every day, so **it has not restarted
+since it first came up**, through four days of pushes to `main`. It does not
+redeploy from GitHub, so it will never pick up the new `instance` line. No
+Telegram token was ever committed (git history checked). Two responses:
+- **Detection that does not need the copy's co-operation:** Telegram
+  serves `getUpdates` to one poller per token and answers a second with
+  409. The poller now records those (`poller.CONFLICT_KEY`, throttled to
+  one store write a minute, a WARNING in the log), and the card raises
+  `TELEGRAM_TOKEN_SHARED(xN)` plus a plain line saying a second copy is
+  polling. A command typed in the chat is answered by whichever copy won
+  that poll, which is why the owner may get either card back from `/diag`.
+- **The fix offered to the owner:** revoke the token in BotFather and set
+  the new one only on the real Railway service. That silences the copy
+  wherever it runs, without having to find it first.
+
+**Two replies to one `/diag`, a second apart (10-30 22:21:54/55 UTC).**
+Both copies answered the same command: an update stays on Telegram's side
+until a poll acknowledges it, so two pollers alternating can both receive
+it. **Neither reply carries the `instance` line**, which every build since
+`5fb7b2d` (10-29) prints unconditionally, so neither copy runs current code.
+Matching scheduled-card stamps to commit times dates both boots:
+- the real copy's 07:30:22 stamp is the deploy of `1264a9a` (pushed 10-26
+  07:28 UTC), which the owner deployed by hand. Nothing since has reached
+  it: not `/whatif intrabar`, not MAE/MFE, not the instance line, not the
+  409 flag. **Railway is not auto-deploying `main`.** Suspect the service's
+  source branch (an old `claude/…` branch was the repo default until
+  10-24) or auto-deploy being off.
+- the copy's 07:00:0x stamp is the build of `228f50e` (`/bbtest`, pushed
+  10-25 06:47 UTC), so it came up from that push and has not been touched
+  since. That points to something deployed from GitHub on 10-25 (another
+  Railway environment, project or workspace) rather than a laptop.
+The owner was asked to check the active deployment's commit and the Source
+branch, and still to revoke the token. MFE/MAE has recorded nothing yet,
+because the code is not deployed; its "useful from a week" clock starts at
+the deploy.
+
+**Railway reconnected (10-30 ~23:00 UTC).** Auto-deploy had stopped
+because the service's GitHub source was disconnected. The owner kept
+clicking "Configure GitHub App" in the Connect Repo menu instead of the repo
+row underneath it. Once reconnected, the first card read `instance railway
+keen-presence/Wolf_cryptobot/production @ 263f170` and **`TELEGRAM_TOKEN_SHARED(x21)`**,
+so the second copy is confirmed from the real bot's side: Telegram refused
+its poll 21 times within minutes of boot. The copy is not in this Railway
+project. The remedy left is the BotFather token revoke. MFE/MAE recording
+and `/whatif intrabar` are live from this deploy, so MAE's week runs to
+about 11-07. The 23:06 card overlaps the 22:21 card by ~23h, so it is the
+same window and is not pooled again.
+
+**`/whatif intrabar` read (10-30 23:42 UTC) → INCONCLUSIVE, not
+material.** 63 of 290 resolved signals scored (the rest beyond the 15m
+reach). Inferred and stop-first agreed on every trade: changed 0, tied 63,
+diff +0.0000R. That is under the pre-registered 0.02R line. Zero in 63
+bounds the straddle rate below ~4.8%, so the worst case is about 0.07R per
+trade. The ledger does not rest on the bar-order guess at any size worth
+acting on. **Correction:** the card and registry had called stop-first a
+floor. It is not. Taking the stop side first also skips the breakeven
+re-check on the bar that fills TP1, so either column can be higher. The
+wording is fixed. The same card showed `TELEGRAM_TOKEN_SHARED(x131)` with
+the last 409 at 23:18, about 24 minutes before a card issued after a
+redeploy, so the copy may have stopped. Read the flag again after 24h,
+when the record ages out of the window.
+
+**`/beta` built (2026-11-02, "gas cek beta") — first read due now.**
+The owner asked to learn from `tradermonty/claude-trading-skills` (MIT;
+mostly US-equity swing workflows). Its `residual-edge-analyzer` asks the one
+question no Wolf card had: how much of the ledger is the market moving under
+the positions. `/beta` measures, per resolved trade, BTC's move from
+activation to exit (1h bars, interpolated inside the hour), signed toward the
+trade and divided by the trade's own stop, clipped at ±3R; regresses gross R
+on it with errors clustered by UTC exit day; and prints `meanR = from BTC +
+rest`, a WITH/AGAINST count, ETH as the one sensitivity check, and LONG/SHORT
+and per-strategy rows (pooled slope, rest tested, `padj`). **A positive slope
+is expected by construction** — read `x̄` (did the bot sit on BTC's side) and
+the size of `from BTC`, never `rest` as alpha. Criteria are in the registry
+(`btc-beta-explains-the-ledger`), written before any read: material if
+|from BTC| ≥ 0.05R/trade with the slope's clustered t ≥ 2; ETH must agree;
+no outcome changes a gate. Not checked against real candles from here (the
+sandbox cannot reach an exchange) — read the `outside BTC history` count on
+the first card. Also reviewed and not taken from the same repo: its
+backtest sample rule ("5% edge needs 100+ trades" is about t≈0.5 at sd 1R),
+the crypto regime score (unvalidated by its own account; as a filter it
+would be a strategy change), and the circuit breaker / pre-trade gate, which
+belong to the owner's manual journal if that offer is ever taken. The earlier
+`Jakeschincariol/trader-skill` (US stocks, order plumbing, no measurement)
+was reviewed the same day; nothing taken. So was its sequel
+`Jakeschincariol/day-trader-skill` (US-equity opening-range day trading):
+its "Time Machine" resamples 5m bars independently, which erases any
+path memory, so its 10,000 replays are a random-walk baseline and cannot
+contain a setup's edge — the `/bbtest` baseline lesson again — and its
+history check (~33 fires) prints no interval. Nothing taken; Wolf's
+simulations already carry fixed seeds.
+
+**First `/beta` (2026-11-02) — a 13-day window, not the read.** 231 of
+497 trades priced; 266 fell outside the bars because the client's first
+answering venue (OKX) serves 300 hourly bars, ~12.5 days — the shrinking-
+reach lesson again, caught by the `outside BTC history` line the card was
+built to print. Fixed: Binance's data host first (1000 bars, ~41 days),
+bar source and reach printed, and a line when the skip count makes the card
+a recent window. Window figures: slope +1.06 (t +9.2 clustered, df 12),
+R² 0.14; **meanR +0.002 = from BTC +0.047 + rest −0.045** (net rest
+−0.132); BTC WITH the trade 118 at **+0.245**, AGAINST 113 at **−0.251**;
+ETH agrees (+0.042 / −0.040). SHORT +0.177 is mostly BTC falling (from BTC
++0.115); PREDUMP +0.482 has the largest rest (+0.322) at padj 0.457 —
+pattern, not finding. Plain reading for the owner: the bot sits on BTC's
+side about half the time, a trade's result swings ~±0.25R with BTC, and
+once BTC is taken out what remains is slightly negative before costs.
+**Pre-registered read still due: `/beta` again after the deploy**, whole
+log, expect `outside BTC history` near 0. Criterion (1) sits at its line
+(0.047 vs 0.05) on the window, so do not pre-judge it.
+
+**`/beta` read (2026-11-02, whole log, pre-registered) → MATERIAL.**
+497 of 497 trades, 26 days, Binance bars 41.6 days, 0 skipped. Slope +1.29
+(t +8.5 clustered, df 25), R² 0.17. **meanR −0.000 = from BTC +0.055 + rest
+−0.055; rest net −0.142.** WITH 251 at +0.337 vs AGAINST 246 at −0.344.
+ETH agrees (+0.061 / −0.061). Nothing per group at `padj` < 0.05 (LONG
+rest −0.180 and PREPUMP −0.463 lowest at 0.106; PREDUMP +0.183 at 0.308).
+**What it means:** the bot's flat gross was BTC's drift paying +0.055R a
+trade over a remainder that loses; strip the market out and it is worse
+(−0.142 net), not better. **The caveat that keeps it from being a lever:**
+the WITH rate is 50.5% — the bot does not pick BTC's side, BTC happened to
+drift with its book (shorts while BTC fell). That tailwind need not recur.
+Owner-facing rule from here: quote the rest beside every pooled meanR, and
+read any strategy's sign flip beside its `from BTC` column. Re-read once on
+a disjoint log (~4 weeks).
+
+**`/ewtest` built (2026-11-06, "1" = "gas tes EW") — first read due now.**
+The owner counts Elliott Waves by hand and asked to add EW to the bot. They
+were told a count is subjective and always right in hindsight, so it went in
+as an **offline backtest only** (`wolf/ewtest.py`), modelled on `/bbtest` and
+reusing its 4h basket and data path. Rules fixed before any read: causal
+zigzag at 3×ATR (a pivot usable only from the bar that confirmed it), wave 2
+in the 50–61.8% zone, entry on the next open after a close beyond the prior
+bar, stop at the wave-2 extreme, target 1.618×W1, 60-bar cap, stop-first on
+a straddling bar. Long and short read separately. The baseline keeps each
+trade's own stop %, target multiple and time cap and randomises only the
+entry moment, so drift and geometry cancel and what is left is timing — the
+one thing a count claims. Calibrated on random walks before any real read:
+3 of 80 null runs cleared the 97.5% bar (nominal 2.5%). Criteria in the
+registry (`elliott-wave2-entry`). Even a pass earns a forward paper read,
+never the live path (rule 1). Also reviewed the same week and not built:
+a BitPulse 1m dashboard (consensus of ~7 near-50% meters; 1m costs ≈
+0.3–0.5R), a NAS100 opening-range video (+982%, no drift baseline), a
+commodities room (too few symbols for a sample; PAXG offered as an offline
+gold test, declined), `learnharness` (a human tutoring app, not trading).
+
+**`/ichitest` built (2026-11-13, "Learn this and do backtest") — first
+read due after deploy.** The owner sent a @thequantbuilder video: Ichimoku
+9/26/52 on Nasdaq and gold M15, cloud breakout −289.6R, TK cross −549.9R,
+1,000 random versions (same direction, same hour) all lost; one variant beat
+97.1% of random with a 50.2R drawdown, and the version that looked best
+before 2024 made −6R after it. The video is our max-under-null lesson told
+by someone else. Built as an offline backtest in the `/ewtest` pattern on the
+same 4h basket: both textbook entries, next-open fill, stop 2×ATR, target
+2R, 60-bar cap (the video gives no exits, so these are a stated choice);
+baseline matches coin, side, stop, target, cap **and UTC hour**. Four tests,
+so the bar is 98.75%, plus net > 0 both before 2024 and from 2024 — the
+video's own cut, fixed in advance. Calibrated on random walks: 60 null runs,
+mean beats 45.9%, 1 over the bar. Criteria in the registry
+(`ichimoku-textbook-entries`). **The read is plain `/ichitest`**, not a
+one-coin run. Even a pass earns a forward paper read, never the live path.
+
+**Real-bot card 11-22 02:37 (24h, `@ f2d94b6`) — confirms the deploy.**
+n=27 `eff=9`: +0.313 gross / +0.222 net, ci95 [−0.41, +1.03], all `padj`
+1.000. A good day, and one card. The new `conv:UNRANKED` line printed as
+intended ("outcome-defined, not tested", no `padj`, 30-bucket family).
+`liq:` inverted for the day (TIGHT −0.285, WIDE +0.849 on n=5/6). That is
+noise against three multi-week reads, not a reversal. `sess:` gap −1.107
+(already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
+window.
+
+**OpenBot challenger built (2026-11-26, "b aja bro, kita lihat seberapa
+gacor").** The owner wants a second project in the OpenBot desktop app
+(openbot.run: a Mac workspace running Codex/Claude/Gemini/Grok agents) and a
+comparison with this repo. Offered A (agents *write* a bot) or B (the agent
+*is* the bot and decides trades); they chose **B, on a new Gemini model**.
+They were told the record: every LLM layer measured here added nothing; an
+LLM's calls cannot be backtested; a Mac app stops when the Mac sleeps; hand-
+relayed calls can be cherry-picked; and the agent must not share Wolf's
+Telegram token (the 10-29 copy-bot lesson). Built as a **referee only**,
+`wolf/openbot.py`:
+- calls arrive by `/ob BTC LONG <SL> <TP> [jam] [alasan]` or
+  `POST /openbot/signals` (X-API-Key); **Wolf sets the entry** at the live
+  15m price on arrival; refusals (coin outside the ten, wrong-side levels,
+  stop outside 0.2–15%, 1–72h, one per coin, five open) are counted by
+  reason on the card;
+- graded every 15 min on 15m bars opening after the entry: SL first on a
+  straddling bar, else TP, else the close at the limit; 20bps on its own
+  stop; 1% risk on 10,000; own key `openbot_paper`, never the tracker;
+- `/openbot` (and `GET /openbot`) prints the ledger and OpenBot / v2 / old
+  bot over the same window (level, not paired — context, not a contest);
+- **posts nothing to Telegram by default** (`OPENBOT_NOTIFY=false`; owner,
+  11-26: "gausah kirim ke telegram, jalan di openbotnya sendiri"). The agent
+  calls `POST /openbot/signals` itself and reads `GET /openbot?format=text`;
+  `/ob` and `/openbot` stay as a manual fallback. Both endpoints also take
+  **`OPENBOT_API_KEY`**, a scoped key that opens nothing else (not the
+  ledger, `/scan` or the replays); the agent is given that, never `API_KEY`. `OPENBOT_ENABLED` default
+  true; with nothing open a pass makes no request.
+Registry `openbot-llm-challenger` (OPEN): read at 100 closed trades; "gacor"
+only if net > 0 and day-level t ≥ 2. Whether OpenBot agents can make HTTP
+calls is unknown (openbot.run is unreachable from the sandbox), so `/ob` by
+hand is the default path.
+- **`OPENBOT_BRIEF.md`** (11-26, owner chose "2"): what the agent is
+  given instead of the repo — the experiment's rules and referee API, Wolf's
+  lessons in short, and the rejected-ideas table, with no strategy code.
+  The owner was told a whole-repo handoff would make it "Wolf v2" rather
+  than a challenger and would send the project notes to a third-party model.
+  **When a registry entry is settled, update the brief's table too.**
+
+**`/holdtest` built (2026-11-25, "gas tes hold").** This is the question the
+1d read pointed at: does the breakout add anything over plain holding while
+BTC is above its 300-day mean? Built in `wolf/holdtest.py`.
+- The two are not in one unit, so both run as **daily spot portfolios** over
+  the same days:
+  - **B** is `/trendtest 1d`'s own trades, sized at 1% risk, capped at 100%
+    of equity, marked open to open.
+  - **H** buys the coins equal-weight on the open after BTC closes above its
+    mean, lets them drift, and sells everything on the open after it closes
+    below.
+  - Both pay 10bps a side; no funding.
+- Test: Sharpe(B) − Sharpe(H), paired stationary block bootstrap (30-day
+  blocks, 2000 draws). This is the fifth look, so the bar is 98.75% and both
+  halves must agree. The mirror (≤1.25%, both halves) reads "hold beats the
+  breakout".
+- CAGR, max DD, exposure and BTC buy-and-hold are printed as context only.
+  `run_trend` now also records `exit_bar` (additive).
+- Arithmetic is pinned in tests: H equals the coin less one buy cost; B
+  equals the product of (1 + 1%·R − two costs) per trade.
+- **Calibration caught a fault in the calibration data itself.** On random
+  walks with only 4 points per bar, the trailing stop prints about +0.17R a
+  trade: the bars are too narrow, so stops are touched too rarely. That
+  biased B (mean share 67%, 3/60 false "adds"). With 32 points per bar the
+  bias is gone (+0.04R at 1.3 se): mean share 48%, 0 false "adds", 2 false
+  "hold wins" in 60.
+- The earlier `/trendtest`, `/lowtftest`, `/addtest` calibrations used
+  coarse walks, but each compared against a shift baseline run through the
+  same simulator, so the bias cancelled there. It does not cancel against a
+  portfolio built another way.
+- Prediction, written before the read: no difference shown. H will likely
+  show the higher total and the deeper drawdown. Registry
+  `breakout-vs-regime-hold`. **Read: `/holdtest` after the deploy.**
+
+**`/trendtest 1d` read (2026-11-25, pre-registered) → REJECTED; the
+timeframe question is closed.** Ten coins since 2018-09-09, spot, long only
+in BTC's UP regime: n=415, win 43%, **gross +0.374R, cost 0.020R, net
++0.354R** (total +146.7R), 1R 10.61%. Halves +0.536 / +0.172, nine of ten
+coins positive. **But the same trades on random days earn +0.194R**, and
+the rule beats only 90% against a 98.33% bar. The prediction held exactly.
+- Read: most of the +0.354R is being long spot crypto while it rose
+  2018–2026, not the breakout. The rule adds ~+0.16R over that, which 90%
+  cannot tell from luck.
+- The second half is a third of the first: the same decay as 4h.
+- The owner was told: a big positive net is not an edge when random entries
+  with the same exits earn half of it. Do not follow it with real money on
+  this read.
+- Built the same day as `/holdtest` (see above): the simpler benchmark the card points at. That is,
+  hold BTC (or the basket) whenever BTC is above its 300-day mean, sold
+  below. It asks whether the breakout adds anything over the regime alone.
+  It would be a new pre-registered test, counted as a fifth look.
+
+**`/trendtest 1d` built (2026-11-25, "gas tes 1D … spot only dan harus
+bullish").** The owner asked about a higher timeframe and set the terms
+themselves: spot, so long only, and only in a rising market. They were told:
+- at 1D cost per trade drops to ~0.02R, but trades last weeks;
+- on perpetuals, funding would eat ~0.3R a trade (spot removes that);
+- the sample is small;
+- even a pass cannot be confirmed forward, at ~1 trade a week;
+- this is the fourth clock the rule is read on, so the bar rises to 98.33%.
+Built in `wolf/lowtftest.py`:
+- a `1d` frame (up to 3,000 daily bars);
+- the DOWN side of BTC's regime dropped before any signal is read, so no
+  short fires;
+- 20bps, no funding;
+- the card says SPOT LONG-ONLY and needs 98.33%.
+Calibration: 0 of 40 correlated null baskets passed, median n 281, no short
+ever taken. Prediction, written before the read: gross at or above 4h, but
+too few independent trades to clear the bar. Registry
+`v2-rule-daily-spot-long`. A pass is recorded only; no paper run is built and
+v2 is not changed. After this read, no more timeframes of this rule.
+
+**`/trendtest 15m` read (2026-11-25) → REJECTED; the v3 question is closed.**
+Ten coins since 2025-11-25: n=7911, win 28%, **gross +0.039R, cost 0.309R,
+net −0.269R**, median 1R 0.77%, both halves negative, every coin negative,
+beats 64%. Cost came in worse than predicted (0.31 vs ~0.20R). Across the
+three clocks it is one line — gross +0.131 / +0.093 / +0.039 and cost
+~0.05 / 0.12 / 0.31 at 4h / 1h / 15m: the momentum fades as the bar
+shortens while the price of trading it rises. **No v3.** The owner was told
+4h is where this rule has any chance, and that the answer for scalping in
+general is the same cost wall. Do not try other timeframes on this data.
+
+**`/trendtest 1h` read (2026-11-25, pre-registered) → 1h REJECTED.** Ten
+coins since 2024-02-29: n=5358, win 34%, **gross +0.093R, cost 0.120R, net
+−0.028R** (total −148R), median 1R 1.95%; LONG −0.063 / SHORT +0.008;
+both halves negative (−0.022 / −0.033). Beats 92% of the same trades on
+random days (median −0.089). The prediction held: cost landed at 0.12R
+(predicted ~0.10) and gross shrank rather than grew. The useful part: gross
+stays positive and the timing beats random by ~0.06R, so the breakout still
+carries momentum on 1h — it is just smaller than what 1h stops pay to trade.
+The owner was told this is the cost lesson in one line, and that no v3 is
+built on 1h.
+
+**`/trendtest 1h` and `/trendtest 15m` built (2026-11-25, "bikin dulu tes
+tf rendah buat v3").** Two questions came first:
+- The owner asked to promote v2 by lowering its bar to the 95% it reached.
+  They were told no, because moving the line after the read changes the
+  verdict and not the evidence; with ~10 offline tests run, a 95% bar would
+  give roughly a 40% chance of one false pass (about 22% at 97.5%); and A's
+  2024+ half is only +0.026R. Options given: keep real money paused and let
+  the paper run speak (recommended), or follow v2 by hand at 0.25% risk as
+  the owner's own choice and not as a pass ("gas B" builds those rules, not
+  yet taken).
+- They then asked about v2 on a low timeframe "for scalping". They were told
+  cost in R grows as the stop shrinks (≈0.05R at 4h → ~0.10R at 1h → ~0.20R
+  at 15m → ~0.35R at 5m), and that this project's low-timeframe record shows
+  no gross edge that could pay it. They agreed to an offline test before any
+  v3 paper run.
+What was built:
+- `wolf/lowtftest.py` calls `trendtest`'s own `btc_regime`, `run_trend` and
+  `simulate_trail` unchanged, with the same bar counts on the shorter clock
+  (300-bar regime, 20-bar breakout, 2×/3×ATR, 90-bar cap).
+- History: 1h ~2.7 years, 15m ~1 year.
+- Baseline: the same trades shifted by whole random days, 200 draws.
+- Pass rule: 97.5%, n ≥ 100, net > 0, and both halves (split at the median
+  trade date) positive. The card prints gross, cost and net side by side,
+  and A's 4h line for comparison.
+- Calibration: 0 of 30 correlated null baskets passed on each timeframe. A
+  full-size 15m run takes about 6 s on synthetic data.
+- Plain `/trendtest` is unchanged. Registry: `v2-rule-on-lower-timeframes`
+  (OPEN), with the prediction written before any read: 15m fails, 1h most
+  likely fails.
+- A pass earns a separate v3 paper ledger outside the High-Conviction topic;
+  v2 is never changed. **Read: `/trendtest 1h` and `/trendtest 15m` after the
+  deploy.**
+
+**`/montecarlo MOMENTUM` (2026-11-25) — a second, near-disjoint read gives
+the same number.** Pool 10-29 → 11-24 (the capped log; the 10-23 read
+pooled 09-29 → 10-22): 125 trades over 27 days, **−0.016 gross / −0.098
+net**, against −0.025 / −0.098 last time. 30-day median −13.7% (gross
+−3.4%), 87% of paths lose, max DD p95 32.6%, p95 losing streak 11; lived
+path −12.2% net, DD 17.9%. Weeks W44 −0.179, W45 −0.083, W46 +0.117,
+W47 −0.288, W48 +0.710 gross (n=10, a part week; do not read it). Two
+month-long pools agreeing is still not a test (no FDR, overlap not
+discounted), but it is the number the real-money advice hangs on, and it
+has not moved: **the pause stands.** Next look at `/diag 720` ~12-20.
+
+**`/sweeptest` read (2026-11-25, pre-registered) → REJECTED.** Ten coins,
+1h since 2024-02-29: n=2613, win 29%, **gross −0.009R, net −0.314R**
+(total −821.5R), median 1R 0.82%, median target 2.56R; LONG −0.342 /
+SHORT −0.298, both halves negative, every coin negative. Beats 27% of the
+same trades on random days (needs 97.5%). Gross is zero and the real
+figures land almost exactly on the null calibration (win ~30%, target
+~2.6R, 1R ~0.9%): the trend filter plus the H1 sweep times nothing, and
+cost at H1 stop widths (~0.3R a trade) is the whole loss. The owner was
+told the screenshot's plan looks good because 1:5 geometry always does at
+a ~30% win rate, and that the next AI-sidebar plan should get the same
+answer without a new test. **Do not retune pivot width, stop buffer, EMAs
+or the 1R floor on this data.**
+
+**v2 has emitted nothing since it started (11-22 → 11-25), so each pass now
+records a pulse (2026-11-25, "gaada sinyal v2 dari hari minggu").** At
+~1.3 trades a day a Poisson count makes three empty days ~1–2% likely, but
+breakouts cluster in trends, so empty stretches are far commoner than that;
+the count alone cannot say. What it cannot do either is tell a quiet market
+from the TRAP-shaped fault: a job that never runs, or bars that never
+arrive, look identical from the chat. Code read: Candle times are ms
+(`from_binance` keeps the open time), the scheduler job and the app wiring
+are present, and the forming-bar check needs Binance's data host, which
+returns it. Nothing wrong was found, and the sandbox cannot reach an
+exchange to replay the four days. So `V2Engine.run` now writes
+`last_pass` (time, coins fetched / missing, BTC close vs SMA(300) and the
+side it allows, and each coin's % still to go to its own 20-bar level, held
+coins marked) — also when the pass is skipped for want of BTC bars. `/v2`
+prints it as `mesin` lines and the dashboard's v2 tab as "Status mesin",
+flagging a pass older than an hour. Measurement only; `_enter` reads none
+of it. **Read 2026-11-25 05:30 UTC (`@ 33b08b4`, PR #45) → the market,
+not a fault.** Pass 0.0h old, data 10/10, BTC 59,421.85 against its
+300-bar mean 75,853.52 (−21.7%), so shorts only; the five nearest coins
+still needed a further 0.86–1.23% fall to close below their 20-bar lows
+(AVAX, ETH, BTC, SOL, BNB). v2 is running; it is waiting for a breakdown
+after a fall that has already happened. Read the pulse again only if a
+later `/v2` shows a stale pass or a `GAGAL` list.
+
+**Vela charts on the v2 tab (2026-11-25, "copy repo LuxAlgo/Vela, terapkan,
+paper test di v2").** Vela (`@luxalgo/vela`, Apache-2.0 + a NOTICE that
+requires a visible attribution wherever a chart renders) is a TradingView-
+style chart library: a WebGL renderer plus ~100 built-in display indicators.
+It has no strategy engine of its own; Pine scripts need the separate
+`@luxalgo/vela-pinets` addon, which is **AGPL** and was deliberately not
+installed. What the owner was told:
+- Vela is a way to *look at* indicators, not a source of signals, so there
+  is nothing in it to paper-test as such.
+- v2's rules are locked for its forward run; adding a Vela indicator to v2's
+  entries would be a strategy change and would void the run's 300-trade
+  read. A Vela indicator idea goes through an offline `/xxtest` first, like
+  every other rule here.
+What was built (display only, nothing the bot decides changed):
+- `dashboard/app/v2/VelaChart.js`: v2's own rule drawn with Vela's native
+  indicators — BTC 4h + SMA(`regime_bars`=300) for the regime, and per open
+  position Donchian(`breakout_bars`) + ATR(14, SMA smoothing, matching
+  `bbtest._atr_series`), with hlines for entry / current stop / initial stop
+  / breakout level and timeline marks on the signal and entry bars. Lengths
+  come from the bot's `/v2` `rules`; `wolf/v2.py` now also returns
+  `regime_bars`. Vela's donchian band includes the current bar while
+  `breakout_side` uses the 20 bars before it, so the caption says "the
+  previous candle's band".
+- Pinned `@luxalgo/vela@0.10.6` (released 11-11; the package is three weeks
+  old and ships several versions a day). The built-in Vela logomark stays
+  on and a caption links velacharts.dev — **do not remove both**.
+- Checked with `next build` and a Playwright screenshot against a mock `/v2`
+  with intercepted synthetic klines (the sandbox cannot reach Binance).
+  hline labels were dropped because they pile on the price axis; colours are
+  named in the caption instead. `/signals` still uses Lightweight Charts.
+
+**`/sweeptest` built (2026-11-22, "Gue mau lu cek strateginya").** The
+owner sent a screenshot from someone else's Threads post. It shows an MT5
+terminal with an Opus sidebar planning a BTC short ("Plan #45": sweep of the
+H1 high, sell 60,900–61,080, SL 62,050, TP 55,250, about 1:5). What the
+owner was told:
+- The plan is sound in structure.
+- One chart proves nothing, and an LLM's plans cannot be backtested as
+  plans. The owner first thought of analysing its #1–#44 history; it is not
+  theirs.
+- `/sweeptest` (`wolf/sweeptest.py`) tests the mechanical core instead, on
+  ~2.7 years of 1h bars for the ten coins:
+  - trade only with the D1 (EMA50 and EMA200) and H4 (EMA50) trend;
+  - enter on an H1 sweep of the last counter-swing that closes back;
+  - stop at the sweep ±0.25 ATR, target the last opposite swing (≥1R),
+    5-day cap;
+  - compared with the same trades shifted to random days.
+- Calibrated: 0 of 30 correlated null baskets cleared 97.5%. Expect cost to
+  bite: 1R is ~0.9% at H1, so cost is ~0.2R a trade.
+- Registry: `trend-pullback-sweep`. **Read: plain `/sweeptest` after the
+  deploy.**
+
+**`/zonetest` read (2026-11-22, `@ de82f72`) → REJECTED.** Coverage
+of the naive zone over 21,190 coin-days: high 55%, low 53%, both 31%.
+Within ±0.10/0.25/0.50 ADR of the centre: 23/55/83% (high). That is above
+the random-walk 42–46%, because daily ranges cluster, and far below the
+video's ~88%, which needs a real forecast or look-ahead. **The fade won
+66% of trades and lost −0.078R net.** Gross was −0.004R, both halves were
+negative, and it beat zones on random days 89% of the time against a
+97.5% bar. The owner was told this is the clearest case yet of a high
+win rate on a losing trade. The same paste's 24h card confirmed the deploy
+`@ de82f72`: n=23 eff=10, +0.150 gross / +0.047 net, nothing separated.
+
+**`/zonetest` built (2026-11-22, "Gas tes zona").** The owner sent a
+TikTok (@chebito87) selling an indicator that "predicts the daily high and
+low", with a "90% winrate over 4 years". What the owner was told:
+- The 90% is **coverage** (the day's extreme fell inside the zone), not a
+  trade win rate.
+- Its claim of ~88% of days within ±0.25 ADR of a pre-session forecast is
+  implausible without look-ahead or repainting. The zones visibly step at
+  day boundaries.
+- The trade examples are picked.
+
+The formula is unpublished, so `/zonetest` (`wolf/zonetest.py`) tests a
+naive stand-in. The zone sits at the open plus the 60-day median
+(high−open)/ADR20, with a half-width of 0.25 ADR. The card prints:
+- **coverage**, plus the share of days within ±0.10/0.25/0.50 ADR, as a
+  yardstick for the video's numbers;
+- **the zone fade**: entry at the near edge, stop at the far edge, target
+  the open, out at day end.
+
+The fade is graded on 4h bars with the coarse order charged against it, and
+it is compared with zones placed on random days of the same coin. On
+correlated null baskets, naive coverage within ±0.25 ADR was 42–46%. The
+fade won 58% of trades at about −0.21R net, and 0 of 20 null runs cleared
+the 97.5% bar. Registry: `daily-zone-fade`. **Read: plain `/zonetest`
+after the deploy.**
+
+**`/addtest` read (2026-11-22, `@ 57fb3d1`) → REJECTED as registered.**
+2842 paired trades; ADD fired on 53%. Plain: win 36%, +0.079R, worst 1%
+−1.12R. ADD: win 38%, **+0.092R**, worst 1% **−1.67R**. Gap +0.013R, t
++1.82 against a bar of t ≥ 2. The added lot alone won 69% at +0.025R. All
+three predictions held: win rate up, mean not significantly up, tail deeper
+by half. Held but not acted on: against the null calibration (lot about
+−0.10R) the real lot ran about +0.1R better, which hints at short-horizon
+mean reversion inside breakout trades. That is post hoc and under the bar,
+and +0.013R a trade is not worth 50% more tail. The owner was told:
+averaging down did what it always does here — a prettier win rate and a
+worse worst day — and the Copilot machinery is not adopted.
+- Same paste: the 24h card at `@ 57fb3d1` confirms the deploy (n=22 eff=9,
+  +0.203 gross / +0.106 net, all `padj` 1.000, `liq:` inverted again on
+  n=4/5). `/v2` printed its empty card: started 04:39 UTC, 0 trades,
+  balance 10,000.
+
+**The Copilot "math atlas" (2026-11-22, "Pelajari soal ini, dan
+terapkan").** The owner sent nine slides and a snapshot of another live
+futures bot: $14 equity, +61% in 3 days, 70% win rate at a payoff of ~1.
+What the owner was told:
+- The snapshot proves nothing. It is 3 days, about $5 of profit, and the
+  episodes overlap. Averaging-down systems look smooth until the one event
+  that takes everything.
+- **ADD + half-gap recovery** (slide 05) is where the win rate comes from.
+  It reshapes outcomes and does not create an edge.
+- **Kelly on a 4h window** (slide 04) sizes from noise.
+- **The "entry lottery" with trauma/preference memory** (slide 06) is the
+  same kind of thing as our old learning layer, which fitted noise.
+- Slides 07–08 are live-execution plumbing and do not apply to a paper bot.
+- **The 7% halt** (slide 09) is good practice for real money, except that its
+  restart can lower the reference after a loss.
+- **The universe screen** (slide 02: liquidity plus ρ1 > 0 and VR > 1, a
+  "moves continue" test) is the one idea that fits what this project found.
+- Accepted ("1 + 2") and built, both measurement only:
+  - **`/addtest`** (`wolf/addtest.py`): paired, on `/trendtest` A's own
+    entries. The first unit is the plain trade unchanged. One lot is added
+    at 0.5R adverse and closed on its own at the half-gap target, which is
+    the atlas's per-lot recovery. A first version closed both units and was
+    corrected before any read. On correlated null baskets the gap is −0.03
+    to −0.06R (t −3 to −6), win rate +1–2 points, worst 1% −1.05R → −1.60R:
+    on no-edge data averaging down shows as a cost. Registry
+    `average-down-half-gap`. **Read: plain `/addtest` after the deploy.**
+  - **v2 persistence label** (`v2.persistence`): ρ1 and VR(q=6) over the
+    last 180 4h returns, recorded on every v2 entry as PERSIST / NOT. It
+    never filters. It shows on the entry message, `/v2` and the dashboard
+    (pill and label column). Registry `v2-persistence-label`, read once at
+    300 v2 trades; expect it to be underpowered.
+- The owner was told not to copy Copilot with real money until it has
+  months of record, including a sharp down market.
+
+**v2 built (2026-11-22, "gas paper A") — A runs forward on paper.**
+`wolf/v2.py` runs `/trendtest` candidate A unchanged on bars that did not
+exist when it was read. It calls `trendtest`'s own `btc_regime`,
+`breakout_side` and `walk_trail` (the stepper was factored out of
+`simulate_trail` for this), so forward and backtest cannot drift. Details:
+- Own ledger in store key `v2_paper`: start **10,000** (the owner asked for
+  10,000 over 1,000 before any trade; nothing reads the nominal, every
+  measurement is in R), 1% risk, 20bps charged on each trade's own stop.
+- Scheduler job `v2` runs every 15 min (`V2_INTERVAL_MIN`). It fetches
+  500 4h bars per coin from Binance's data host, falling back to the bot
+  client, including the forming bar, whose open is the fill.
+- Only the newest closed bar is read for entries, so a signal missed during
+  downtime is skipped, never filled late.
+- Entries and exits post to the **High-Conviction topic**
+  (`route_conviction`), labelled "paper · belum lolos tes".
+- While `V2_ENABLED` (default **true**) is on, the AI conviction ranker is
+  not built, and `TelegramNotifier.divert_high_conviction=False` keeps TRAP
+  off the room. **`conv:` therefore stops gaining rows from the deploy:**
+  that is the end of the room, not data.
+- `/v2` prints balance, closed trades by side, open positions and
+  kill-rule progress.
+- **Kill rule** (registry `trend-breakout-forward-paper`): at 300 closed
+  trades, a net mean below 0 stops new entries for good. There is **no
+  promotion rule**: about 1.3 trades a day cannot confirm +0.08R. Do not
+  change the rule while it runs.
+- **Vercel "Strategi v2" tab** (`dashboard/app/v2/page.js`) reads
+  `GET /v2` (`V2Engine.summary`). It shows the "belum lolos tes" note,
+  tiles (balance, net R/trade, win rate, trades n/300), a net and gross
+  equity curve, the locked rules, open positions with a 4h chart (entry,
+  current trailing stop, signal and entry markers), and recent closed
+  trades. Checked with `next build` and a screenshot against a mock API.
+- Not built: a `/diag v2` card. The old bot keeps running as the control.
+
+**`/trendtest` read (2026-11-22, `@ f2d94b6`, pre-registered) → both
+REJECTED.**
+- **A (trend breakout):** n=2842, gross +0.131, **net +0.080**, LONG
+  +0.071 / SHORT +0.092, before 2024 +0.135 / 2024+ +0.026, 8 of 10 coins
+  positive. Beats **95%** of the shifted null against a 97.5% bar →
+  rejected. It is the most consistent offline result the project has
+  produced, but the 2024+ half is thin and it shares data and idea with
+  the TK pass, so the two are not independent. **Do not retune it on this
+  data.**
+- **B (relative momentum):** +0.140%/wk, max DD 53%, before 2024 +0.683 /
+  2024+ −0.435 %/wk, beats 85% → rejected outright.
+- Consequence: **no replacement strategy is built**, the old bot keeps
+  running unchanged, and the High-Conviction room stays as it is. Offered
+  to the owner and not built: A forward in paper, unchanged, labelled
+  "did not pass", with a pre-registered kill rule. It can only catch a
+  break (about 1.3 trades a day), not confirm the edge. The manual journal
+  was also offered again.
+
+**The owner chose to replace the strategy (2026-11-21/22).** After the
+COMBO read the owner asked whether anything worked, was told nothing has a
+demonstrated edge (flat gross, about −0.1R net), and asked to rebuild from
+scratch. Agreed, with one distinction kept: **the strategy goes, the
+measurement stays** (diag, archive, honest baselines, pre-registration).
+The owner's own wish list (BTC correlation, "anomaly" coins, candle
+patterns, FvG, breakout vs fakeout, EMA, volume profile, many engines
+validating each other) was answered with the old bot's record: it already
+stacks six detectors and AI, whale, on-chain and learning layers, and none
+of the layers added anything measurable. The redesign is layered instead
+(market regime → coin selection → entry → exit). It starts with the
+plainest version, and **each extra component must win its own paired test
+before it stays.** Shorts are allowed. The owner's worry about shorting a
+top that keeps rising is handled by allowing shorts only in a BTC down
+regime, and only on a breakdown.
+- **`/trendtest` built (2026-11-22)** — offline, the `/ichitest` pattern.
+  - (A) BTC-regime 20-bar breakout, both directions, 2×ATR stop, 3×ATR
+    trail, 90-bar cap.
+  - (B) Weekly relative momentum, long top 3 / short bottom 3 by 28-day
+    return, which is the "anomaly coins" idea in testable form.
+  - TK-cross SHORT stays a comparator, not a candidate: the owner rightly
+    objected to a short-only strategy.
+  - Calibrated on correlated null baskets (A 1/60, B 3/60 over the 97.5%
+    bar). Criteria are in the registry (`trend-and-relative-momentum`).
+  - **Read: plain `/trendtest` after the deploy.**
+- **Old bot:** the owner said "dimatiin kali ya". They were advised to keep
+  it running until a candidate passes and its forward paper run is built,
+  because it costs nothing, keeps the COMBO read (~12-20) alive, and gives
+  the new era a control. Turning it off is the owner's Railway action;
+  nothing in code changes it.
+- **Where v2 will appear (owner's choice, 11-22; build only if a candidate
+  passes):** the same Telegram chat, in the **High-Conviction topic**
+  (`high_conviction_thread_id`). It replaces the AI conviction ranking
+  (`wolf/reports/conviction.py`), which has measured no edge and is an LLM
+  sitting near the signal path. When v2 goes live:
+  - the ranker is switched off, and `conv:` stops gaining rows (read that as
+    the end of the room, not as data);
+  - TRAP/SCALP "premium" signals (`HIGH_CONVICTION_TYPES` via
+    `TelegramNotifier._route_signal`) go back to their normal topics, so the
+    room carries v2 only;
+  - v2 gets its own paper ledger key, `/v2` and `/diag v2`, a v2-vs-old card
+    over the same window, and a "Strategi v2" tab on the Vercel dashboard.
+  The old bot keeps running as the control.
+- "Good entries to carry over": none of the old entries showed an edge.
+  What carries over is the liquidity lesson, the cost lesson and the
+  instruments, not any detector.
+
+**COMBO read (2026-11-20 17:48, `/diag 720`, window ~10-21 → 11-20, `@
+992d259`) → INCONCLUSIVE, keeps running.** 553 traded, `eff=94`: overall
+−0.019 gross / −0.107 net assumed. The archive held every COMBO-eligible row
+(`history 595 rows from 10-20`). COMBO n=100 +0.063 gross / **+0.003 net**;
+OTHER n=395 −0.059 / −0.126; gap +0.123R, **`padj` 1.000**. Success needed
+`padj` < 0.05 and net > 0, rejection needed gap ≤ 0, so neither is met.
+Taken ~6h before the nominal 11-21; one day cannot move `padj` from 1.000
+to under 0.05, so the outcome cannot depend on it. **COMBO does no better
+than its liquid-book part alone:** `liq:TIGHT` printed +0.106 gross / +0.049
+net, whale WITH +0.045 and PRIMARY −0.015. That is the "one effect counted
+three times" worry, visible on the same card. Next read: `/diag 720` on a
+disjoint window, from about 12-20. Rule and date untouched.
+- **`conv:UNRANKED` printed `padj 0.046*`**, the first starred row on any
+  card. It is the known artifact: its members are signals that resolved
+  before the hourly ranking first looked at them, mostly fast stops, so the
+  label is chosen by the outcome and will always "survive" a test of whether
+  it lost. **Fixed as a measurement fault:** it is still printed, with
+  "outcome-defined, not tested", but it is kept out of the BH-FDR family
+  (`diagnose.OUTCOME_DEFINED_CONV`). The owner was told not to read it as a
+  finding.
+- Strategies, all `padj` 1.000: PREDUMP n=64 **+0.402** (net +0.337),
+  TRAP −0.046, SCALP −0.055, MOMENTUM n=143 −0.079, PREPUMP −0.153,
+  SWING −0.326. `liq:` monotone again (TIGHT +0.106 / MID −0.075 / WIDE
+  −0.104); this overlaps the 11-18 read, so it is not a new replication.
+- **Seven rows carry no AI verdict, no spread and no score composition**
+  (`ai:NO_AI`, `liq:NO_SPREAD` and `evidence:UNRECORDED`, each n=7 at an
+  identical +0.719). They are the same seven trades. They were absent from
+  the 11-18 card, so they come from either the extra 10-21 → 10-24 edge of
+  this window or the last two days. The archive round-trip keeps all three
+  fields (checked). The likely sources are the two record paths that never
+  set them: the news scanner (`scheduler._post_news`) and the manual
+  `POST /signals` API. Not confirmed. Too few to matter; look at them if the
+  count grows.
+- `TELEGRAM_TOKEN_SHARED(x131)` is still the stale 10-30 record, and stays
+  inside 720h windows until ~11-29.
+
+**Third `/diag 600` (2026-11-18 21:06, window ~10-24 → 11-18, `@ 992d259`)
+— the clean `liq:` replication.** Disjoint from the first read (09-29 →
+10-23). 456 traded, `eff=80` (largest yet), `mean_open` 5.64: **−0.033
+gross / −0.121 net assumed** (measured fee+spread 0.066R → about −0.099).
+Same shape again. **The archive is live:** `history 560 resolved rows on
+record from 2026-10-20 (archive + capped log of 500)`.
+- **`liq:` replicated in direction:** TIGHT +0.065 / +0.008 net, MID −0.070
+  / −0.135, WIDE −0.092 / −0.171 — WIDE below TIGHT as predicted, monotone
+  for the third window running, gap +0.157R (first read +0.202). Still
+  `padj` 1.000 and each read is ~0.5 se, so a consistent shape, not a
+  finding. Dropping WIDE would leave about −0.074 net: it trims the loss and
+  the bot still loses; TIGHT alone is ~breakeven. Registry note's next step
+  (a pre-registered spread-gate `/whatif`) **offered, not built**.
+- Strategies, all `padj` 1.000: PREDUMP +0.195 (was +0.436 on 11-10),
+  TRAP −0.026, SCALP −0.044, MOMENTUM n=123 **−0.083** (still the worst
+  large row — pause stands), SWING −0.185, PREPUMP −0.241.
+- **COMBO shown, not read** (rule: `/diag 720` ~11-21): 93 vs 360, gap
+  +0.139, COMBO net +0.009, padj 1.000.
+- `whale:` WITH −0.007 vs AGAINST −0.097 — the gap shrank from ~+0.29 to
+  +0.09. `learn:PENALTY` (+0.061) above BOOST (−0.088) again. `ai:` still
+  adds nothing (CONFIRM +0.014, NEUTRAL −0.051). `conv:UNRANKED` −0.749 is
+  the known artifact. `sess:` gap −0.003 (already rejected). 225 chase drops
+  — settled. `TELEGRAM_TOKEN_SHARED(x131)` is the stale 10-30 record still
+  inside the window; it ages out after ~11-24.
+
+**`/ichitest` decided (2026-11-16, shift baseline, pre-registered).** TK
+cross SHORT n=1729 **net +0.072**, before 2024 +0.025 / 2024+ +0.121,
+**beats 99%** of the shifted null (p98.75 +0.070) → **passes** — the first
+external rule to clear any offline bar here. TK LONG +0.039, beats 98% but
+2024+ −0.015 → fails. Cloud breakout fails both sides (76% / 59%). The
+correction doubled the null's width and the short still cleared it. Hold it
+at arm's length: just over the line, thin early half, ~1-in-10 chance that
+one of the seven offline side-tests run so far passes by luck, funding not
+modelled. Its best argument is that both TK sides beat ~98–99%, the shape
+of time-series momentum. **The owner was told: not a signal, no real money,
+nothing on the live path (rule 1).** Offered, not built: a forward shadow
+ledger (TK shorts on the ten coins at each 4h close, separate key, no
+Telegram signal) — honest arithmetic says ~0.8 trades/day can only catch a
+rule that breaks out of sample, not confirm +0.07R (that needs ~1,000 trades).
+
+**`/ichitest` first read (2026-11-15) — a pass withdrawn before acting on
+it; re-read due.** Ten coins, 4h, since 2020-11. TK cross LONG net +0.038
+(beats 99%, but the 2024+ half was −0.014 → fail); **TK cross SHORT net
++0.069, both halves positive, beats 100% → passed as registered**; cloud
+breakout fails both sides (beats 79% / 57%). Before telling the owner it
+passed, the baseline was found to ignore that the coins move together (see
+the lesson), which inflates "beats". The decisive baseline is now
+`shift_baseline` (whole trade set moved by one random number of days),
+calibrated on correlated null baskets. The rule for the re-read was written
+into the registry before it: same criteria, shift baseline decides, and the
+first pass does not count. Worth holding: both TK sides earned about
++0.1R gross over the baseline, which is what crypto time-series momentum
+would look like — and also what a clustered null can print. **Read: plain
+`/ichitest` after the deploy.**
+
+**Outcome archive (2026-11-13, "gas arsip").** The owner asked whether the
+bot is "learning and collecting data" so the best rule can be picked later.
+They were told picking the best of many after the fact is the max-under-null
+trap, that the process is pre-register → test → replicate, and that the
+data was not actually accumulating: the outcome log is capped
+(`max_outcomes`; the live deployment holds ~500 rows, ~25 days) and drops
+its oldest rows, so **any window longer than the log silently read only the
+survivors** — the 11-21 `/diag 720` COMBO read would have lost its first
+days (rule date 10-24). Fixed as a measurement fault: every resolved
+outcome is also appended to `signal_outcomes_archive.jsonl` on the same
+volume (append-only, one JSON per line, never trimmed; a failed archive
+write never blocks the ledger), seeded once from whatever the log still
+holds. `Tracker.history()` merges archive + log (log wins on a shared id;
+id-less archive rows are dropped rather than risked twice). **Only `/diag`
+reads the history**; `/beta`, `/montecarlo`, `/mae`, the journal and the
+whatif replays still read the capped log, so their "whole log" readings
+stay comparable with earlier ones. The card prints a `history` line with
+the row count, earliest date and log size. Rows trimmed before the deploy
+are gone for good. **Merged 2026-11-15 (PR #39), ahead of ~11-18** when the
+10-24 rows start to leave the log; the first card after the deploy should
+print the `history` line.
+
+**Second `/diag 600` (2026-11-10 13:28, window 10-16 → 11-10, `@ 1230684`).**
+447 traded, `eff=69`, `mean_open` 6.44: **+0.013 gross / −0.074 net**
+(measured fee+spread 0.064R → about −0.051). Same shape as every pool:
+flat gross, negative net. Strategies, all `padj` 1.000: PREDUMP n=50
+**+0.436** (net +0.370; was +0.071 on the first `/diag 600`), TRAP +0.113,
+SCALP −0.011, SWING −0.219, PREPUMP −0.294, **MOMENTUM n=118 −0.152** (net
+−0.233) — the one strategy the old real-money advice leaned on is now the
+worst large row, so the pause stands. Ladder needs WR 50.5%. Results:
+- **`sess:` → REJECTED** (pre-registered rule: read 1 gap ≤ 0).
+  `LDN+NY-ASIA+LATE` −0.018R, padj 1.000; ASIA +0.104, LONDON +0.089,
+  NEWYORK +0.014, LATE −0.076. The session part of the SMC method does not
+  improve the bot's sweeps. Do not read ASIA's top row as a lead.
+- **`liq:` shape holds, but this is not the clean replication** — the
+  window overlaps the first read by ~7 days. TIGHT +0.103 / +0.046 net,
+  MID +0.004 / −0.059, WIDE −0.121 / −0.196; monotone again, TIGHT
+  net-positive this time. **Clean disjoint read: `/diag 600` from ~11-18.**
+- **COMBO shown, not read** (rule: 11-21): 59 vs 237, gap +0.146,
+  padj 1.000.
+- `whale:` WITH +0.189 vs AGAINST −0.067 again (first read +0.185 /
+  −0.111); `wxs` WITH positive for SCALP, TRAP, PREDUMP. Pattern only.
+- `conv:UNRANKED` −0.739 (padj 0.320, lowest) is the known first-look
+  artifact. `TELEGRAM_TOKEN_SHARED(x131)` is the 10-30 record still inside
+  a 600h window (last 409 at 10-30 23:18); the copy has not polled since.
+- 261 chase drops (SCALP 131) over 447 traded — settled, not re-argued.
+
+**`sess:` split built (2026-11-08, "gas tambahin label sesi").** The owner
+sent a manual SMC trader's 5m charts and journal (session AMD boxes, sweep →
+CHoCH/MSS → OB/IDM retest entry, fixed 2R, 5–10x at ~$10 risk; 5 of 5 wins,
+all on 11-07). Told: 5 trades on one day is ~1–2 observations; their own
+journal shows cost eating up to 0.36R on a 0.31% stop (ETHFI 1.64R booked
+against 2R planned); session labels may be drawn after the fact. Asked
+whether the bot already does it: **partly** — TRAP and SCALP are the same
+sweep-and-reclaim on 15m, but take it at any hour, without a retest, with a
+ladder instead of a single 2R. The session part is testable on existing
+data, so `/diag` now splits TRAP+SCALP by the UTC hour of creation (ASIA
+00–07, LONDON 07–13, NEWYORK 13–21, LATE 21–24, fixed before any read) and
+prints one named contrast, `sess:LDN+NY-ASIA+LATE`, in the FDR family; each
+session row carries its measured fee+spread. Registry
+`sweep-session-context` (OPEN) holds the criteria: read 1 is `/diag 600`
+on the whole capped log now, read 2 on a disjoint log ~4 weeks later, both
+needed. **Nothing filters on a session.** Offered for the trader's journal:
+planned-vs-booked R, a session column, skipped setups, and analysing its
+CSV once it holds 50+ trades.
+
+**Real-bot card 11-08 02:55 (24h, `@ e899519`).** n=8 `eff=4`, +0.338
+gross / +0.271 net, ci95 [−0.687, +1.363]; MOMENTUM 4/5 (+0.680). No
+`TELEGRAM_TOKEN_SHARED` flag on a current build, so the copy has likely
+stopped. `combo:COMBO-OTHER` printed +1.816R at t +4.27 on **two** COMBO
+trades — the same two rows as `whale:WITH` and `liq:TIGHT` (identical
++1.700), one event through three labels, `padj` 1.000; the owner was told it
+is read on 11-21 and not before. 9 chase drops (MOMENTUM 7) outnumbered the
+8 traded — noted, settled, not re-argued. 5 of 8 traded rows `whale:NO_DATA`.
+Cards 10-31 → 11-07 not sent; `/diag 720` on 11-21 covers them.
+
+**First `/mae` (2026-11-07, whole log) — descriptive, nothing to act on.**
+136 resolved trades with a recorded path (361 earlier rows left out by
+name). Medians: MFE 0.96R, MAE 0.74R. Winners (72) dipped a median 0.28R;
+only 7 went ≥0.8R against before winning. **Losers (64): 23 (36%) were
+≥0.5R green before stopping out**, median MFE 0.29R. By strategy MFE:
+SCALP 1.31, PREDUMP 1.11, TRAP 0.99, **MOMENTUM 0.66** (consistent with
+late breakout entries; pattern only), SWING 0.48 and PREPUMP 0.58 on n=5.
+The owner was told the obvious move (breakeven at +0.5R) also closes
+winners that dip, that exit geometry and stop rules are settled as not a
+lever, and that this card checks a stop/target argument rather than
+starting one. Note for anyone tempted: the settled stop-rule replays did not
+cut at the timeout (Broken #3), so a re-test would have to fix that first
+and be pre-registered — it is not queued.
+
+**`/ewtest` read (2026-11-06, ten coins, pre-registered) → REJECTED both
+sides.** LONG n=543 net −0.037 (random same geometry +0.024), beats 24%;
+SHORT n=490 net −0.115 (random −0.066), beats 28%. The wave-2 entry times
+the market no better than random with identical stop, target and cap —
+slightly worse. LINK +0.295 and LTC +0.217 are the best of ten under a
+null, not a lead; years swing 2023 +41.9R / 2024 −56.6R. The rejection
+covers this rigid rule set only; the owner was told the wave-2 setup alone
+is not an entry signal and EW is context at most. **Do not re-open by
+retuning zone, target or timeframe on this data.**
+
+**`/ewtest BTC` (2026-11-06) — one coin, not the read.** LONG n=49 net
++0.127, beats 73% of same-geometry random entries; SHORT n=44 net −0.459,
+beats 22%. Both under the 100-trade minimum → INCONCLUSIVE. Win rates of
+16–20% are what a 1.618×W1 target implies, so years swing ±15R and the
+random p97.5 sits far above the median. **The pre-registered read is the
+plain `/ewtest` (ten coins); still due.**
+
+**Notifications stop giving advice (10-31, "gas rapihin semua notif").**
+The owner asked why the Telegram balance (2,006.26) differed from the
+dashboard (1,755.38). One is gross and the other net, and the trade report
+only ever printed the gross one. The same report ended with "PREDUMP: 64% win
+over 63 — edge holding — keep taking these", which is gross, untested for
+chance, and contradicts the real-money advice. Changed, wording only:
+- the trade report leads with the net balance and puts gross beside it;
+- `Tracker._lesson` states the record with "before costs, not tested for
+  luck — see /diag" and gives no verdict;
+- the stats card's expectancy says "before costs", and its veto and
+  risk-gate lines lose their "consider veto mode" and "enable *_HARD_BLOCK"
+  hints, which asked for strategy changes on daily win-rate gaps;
+- `/analyze`'s memory line says "before costs".
+No signal, gate or grade changed.
+
+**Real-bot card 10-30 22:21** (on demand; window 10-29 22:21 → 10-30 22:21;
+10-28 07:30 → 10-29 22:21 is missing): n=30, +0.173 gross / +0.071 net.
+COMBO 5 of 5 (+0.740) is the first COMBO block of any size: five trades,
+`padj` 1.000, read on 11-21 and not before. **Real-bot pool, four cards
+10-26 → 10-30:** 78 trades, **+0.025R gross, −0.073R net**. The same shape:
+flat gross, negative net.
+
+**Real-bot cards 10-26 → 10-28** (06:55, 07:30, 07:30; contiguous and
+disjoint; 10-29 not yet sent): 48 trades, **−0.068R gross, −0.163R net**.
+The same shape as before, flat gross and negative net. The copy's four
+cards (142 trades, +0.133 gross / −0.043 net) are excluded.
+
 **Open, offered, not built:** (a) **stop width has no ceiling outside
 TRAP.** `IRYSUSDT` SWING 4h printed **1R = 65.74%** (entry 0.0467, SL
 0.0160). Read from the code, not yet checked against candles: SWING's stop
@@ -508,14 +1469,17 @@ baseline**: BTC's tenfold rise flatters any long rule. The first baseline
 drew from every bar and was itself biased (tiny stops → huge R; the rule
 "beat" 96% on a random walk); then a synthetic walk built from single jumps
 biased stops the other way. Both are now tested against continuous-path
-random walks, where the rule lands mid-distribution as it must. **First
-read due: `/bbtest`.**
+random walks, where the rule lands mid-distribution as it must. **Read
+2026-10-26 → REJECTED:** 1,220 trades on 10 majors since 2020-10, +0.030R
+net, but the matched random baseline earned +0.148R (p95 +0.292) — the rule
+beats only 6% of random long-green-candle entries. 2020–21 alone made
++83R; 2022–26 lost −47R. The video's +52R is the bull market plus fitting to
+BTC. The baseline's own +0.148R was noticed and deliberately not chased.
 
-**Next read:** `/diag 600` again once the capped log has rolled over to a
-disjoint sample (~3–4 weeks) — the `liq:` replication — and `/diag 720`
-around 11-21 for COMBO; meanwhile
-`/montecarlo MOMENTUM` again in a week — not to chase the
-streak, but because it is the only number the real-money advice hangs on.
+**Next read:** COMBO again with `/diag 720` from about 12-20 (disjoint
+window); `/beta` re-read on a disjoint log (~12-01); meanwhile
+`/montecarlo MOMENTUM` read 11-25 (−0.098 net again; pause stands) — next
+look only with the 12-20 `/diag 720`.
 Nothing paired is left queued. The level question keeps
 landing card by card; the two open offers below are what would sharpen it.
 
@@ -954,6 +1918,14 @@ ask about PREDUMP, because the comparison is paired *inside* a strategy.
    `record_signal`. Every day it runs, the evidence needed to judge it is
    discarded. The only queued item whose cost grows while it waits.
 3. **Windowing uses resolution time** where era hygiene wants creation time.
+   **Related, found 2026-10-28:** `compare_stop_rules` and
+   `compare_ladder_geometry` replay every bar from the entry to *now*, not to
+   the signal's timeout, so they grade stops and targets the live position
+   was closed before reaching. Both sides of each comparison see the same
+   bars, so the paired gaps stay internally consistent, but the trades they
+   grade are not the ledger's trades. The settled readings (exit geometry,
+   stop rules) were taken this way. `compare_intrabar` cuts at the timeout
+   (`whatif._within_timeout`); the other two do not yet.
 4. **High-Conviction room — now recorded, not yet measured.**
    `wolf/reports/conviction.py` arrived via PR #32 and could not be measured:
    the pick lived only in one overwritten key. Since 2026-09-24 picks are
@@ -1032,7 +2004,7 @@ its trial counter); splitting `sentiment` from `materiality` in
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 1104 tests, ~15s
+python -m pytest            # 1238 tests, ~15s
 ```
 
 Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
@@ -1041,12 +2013,25 @@ Entry point `python -m wolf.main` (Procfile worker). Wiring lives only in
 | Path | What it holds |
 |---|---|
 | `wolf/diagnose.py` | the diagnostic card — the project's centre of gravity |
+| `wolf/diagnose.py` `sess:` | TRAP+SCALP split by UTC session of creation; one pre-registered London/NY vs Asia/late contrast |
 | `wolf/stats.py` | BH-FDR, Student-t, Welch gap with the overlap discount |
 | `wolf/whatif.py` | paired re-scoring: stop rules, ladder geometry, whale policies |
 | `wolf/chase_audit.py` | grades what the chase gate dropped (settled: not a lever) |
 | `wolf/contest_audit.py` | pairs each displaced candidate against the winner that beat it |
+| `wolf/beta.py` | each trade's R split into BTC's move under it and the rest, clustered by day (`/beta [hours]`) |
 | `wolf/montecarlo.py` | day-block bootstrap of the ledger, net of cost: the losing run to size against (`/montecarlo [STRATEGY]`) |
 | `wolf/bbtest.py` | offline backtest of a Bollinger dip rule from a video, vs a shape-matched random baseline (`/bbtest [COIN]`) |
+| `wolf/ichitest.py` | offline Ichimoku TK-cross and cloud-breakout backtest; decisive baseline shifts the whole trade set by random days (keeps cross-coin clustering), fixed 2024 cut (`/ichitest [COIN]`) |
+| `wolf/trendtest.py` | offline backtest of the two replacement candidates: BTC-regime trend breakout (shift baseline) and weekly relative momentum (random-book baseline), 2024 cut (`/trendtest`) |
+| `wolf/lowtftest.py` | v2's rule bar for bar on 1h / 15m (rejected) and 1d spot long-only vs the same trades on random days (`/trendtest 1h`, `/trendtest 15m`, `/trendtest 1d`) |
+| `wolf/holdtest.py` | spot daily portfolios: v2's breakout vs holding the basket while BTC > its 300-day mean, paired block-bootstrap Sharpe (`/holdtest`) |
+| `wolf/openbot.py` | 🤖 referee for an outside LLM agent's calls (`/ob`, `POST /openbot/signals`): Wolf sets the entry, grades on 15m, own ledger `openbot_paper`, `/openbot` vs v2 vs old bot |
+| `wolf/v2.py` | 🧪 v2: trendtest candidate A run forward on paper (own ledger `v2_paper`, High-Conviction topic, `/v2`, 300-trade kill rule) |
+| `wolf/addtest.py` | paired offline test of averaging down (one lot at 0.5R adverse, closed alone at the half-gap target) on `/trendtest` A's entries (`/addtest`) |
+| `wolf/zonetest.py` | offline test of naive daily high/low zones: coverage (≠ win rate) and the zone fade vs zones on random days (`/zonetest`) |
+| `wolf/sweeptest.py` | offline 1h trend-pullback sweep test (D1/H4 trend, H1 sweep-and-reject, TP opposite swing) vs the same trades on random days (`/sweeptest`) |
+| `wolf/ewtest.py` | offline Elliott Wave 2→3 entry backtest vs random entries with the same stop/target/time cap (`/ewtest [COIN]`) |
+| `wolf/tracker.py` `history()` | capped outcome log + permanent `signal_outcomes_archive.jsonl`; what `/diag` windows read |
 | `wolf/rebank.py` | one-shot re-booking of timeout rows that forgot a banked rung (`/rebank`, `python -m wolf.rebank`) |
 | `wolf/screener.py` | the gate order — cheap disqualifiers before expensive ones |
 | `wolf/hypotheses.json` | what has been settled, and what settled it |

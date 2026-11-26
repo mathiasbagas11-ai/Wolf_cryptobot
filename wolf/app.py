@@ -77,6 +77,8 @@ class Application:
     whale: Optional[WhaleTracker] = None
     flow: Optional[FlowIntelReporter] = None
     conviction: Optional[ConvictionRanker] = None
+    v2: object = None                 # wolf.v2.V2Engine (paper forward run)
+    openbot: object = None            # wolf.openbot.OpenBotLedger (LLM challenger, paper)
     deepdive: Optional[TokenDeepDive] = None
     # On-chain collectors. Each is None when disabled; the scheduler only adds a
     # job for the ones that exist, so a disabled collector costs nothing.
@@ -380,7 +382,29 @@ def build_application(settings: Settings | None = None) -> Application:
         lookback_hours=c.lookback_hours,
         max_tokens=c.max_tokens,
         tz=tz,
-    ) if c.enabled else None
+    ) if c.enabled and not settings.v2.enabled else None
+
+    # 🧪 v2 owns the High-Conviction topic while it runs (owner's choice,
+    # 2026-11-22): the AI ranking above is not built, and TRAP is no longer
+    # diverted into the room.
+    v2 = None
+    if settings.v2.enabled:
+        from wolf.v2 import V2Engine
+        v2 = V2Engine(store, notifier=notifier, client=client,
+                      cost_bps=settings.round_trip_cost_bps,
+                      thread_id=settings.telegram.route_conviction())
+        notifier.divert_high_conviction = False
+
+    # 🤖 OpenBot challenger: an outside LLM agent's calls, refereed here on
+    # their own ledger. Measurement only; nothing it records reaches the tracker.
+    openbot = None
+    if settings.openbot.enabled:
+        from wolf.openbot import OpenBotLedger
+        openbot = OpenBotLedger(store, notifier=notifier if settings.openbot.notify else None,
+                                client=client,
+                                cost_bps=settings.round_trip_cost_bps,
+                                thread_id=settings.openbot.thread_id or settings.telegram.route_system(),
+                                tracker=tracker, v2=v2)
 
     anomaly = build_anomaly_scanner(settings) if settings.anomaly.enabled else None
     flow = (
@@ -410,6 +434,8 @@ def build_application(settings: Settings | None = None) -> Application:
         whale=whale,
         flow=flow,
         conviction=conviction,
+        v2=v2,
+        openbot=openbot,
         deepdive=deepdive,
         anomaly=anomaly,
         **collectors,
