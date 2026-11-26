@@ -227,6 +227,20 @@ def build_scheduler(app: Application) -> BackgroundScheduler:
             next_run_time=_soon(),
         )
 
+    # 🤖 OpenBot challenger grading. Reads closed 15m bars of open calls only;
+    # with nothing open a pass costs no request.
+    openbot = getattr(app, "openbot", None)
+    if openbot is not None:
+        scheduler.add_job(
+            _guarded(openbot.run, "openbot"),
+            "interval",
+            minutes=app.settings.openbot.interval_min,
+            id="openbot",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=_soon(),
+        )
+
     # Daily backfill of anomaly paper-log outcomes (7d/14d/30d % change).
     anomaly = getattr(app, "anomaly", None)
     if anomaly is not None:

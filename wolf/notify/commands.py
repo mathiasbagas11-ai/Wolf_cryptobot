@@ -37,6 +37,8 @@ _HELP = (
     "(~1 min; add a coin, e.g. <code>/ewtest ETH</code>)\n"
     "<code>/ichitest</code> — backtest Ichimoku TK cross &amp; cloud breakout against random entries "
     "(~1 min; add a coin, e.g. <code>/ichitest BTC</code>)\n"
+    "<code>/ob BTC LONG &lt;SL&gt; &lt;TP&gt; [jam] [alasan]</code> — 🤖 catat call agent OpenBot (entry = harga pasar sekarang)\n"
+    "<code>/openbot</code> — 🤖 hasil agent OpenBot vs v2 vs bot lama\n"
     "<code>/v2</code> — 🧪 strategi v2 (tren, paper, belum lolos tes): saldo, posisi, hasil\n"
     "<code>/sweeptest</code> — tes strategi Threads: ikut tren, short/long di sweep H1, TP swing (~3 min)\n"
     "<code>/zonetest</code> — tes zona high/low harian ala video: coverage vs win rate, dan fade-nya (~2 min)\n"
@@ -105,6 +107,10 @@ class CommandRouter:
             return self._ichitest(arg)
         if cmd == "v2":
             return self._v2()
+        if cmd == "ob":
+            return self._ob(arg)
+        if cmd == "openbot":
+            return self._openbot()
         if cmd == "sweeptest":
             return self._sweeptest()
         if cmd == "zonetest":
@@ -564,6 +570,36 @@ class CommandRouter:
             log.exception("Ichimoku backtest failed")
             return "⚠️ Backtest failed — see logs."
         return f"<pre>{esc(ichitest.render(report))}</pre>"
+
+    def _ob(self, arg: str) -> str:
+        """Record one OpenBot agent call (see wolf.openbot)."""
+        ledger = getattr(self._app, "openbot", None)
+        if ledger is None:
+            return "OpenBot is off (OPENBOT_ENABLED=false)."
+        from wolf.openbot import parse_command
+        try:
+            kw = parse_command(arg)
+        except ValueError as exc:
+            return f"⚠️ {esc(str(exc))}"
+        try:
+            out = ledger.submit(source="telegram", **kw)
+        except Exception:
+            log.exception("openbot submit failed")
+            return "⚠️ OpenBot call failed — see logs."
+        if out.get("refused"):
+            return f"❌ Ditolak ({esc(out['refused'])}): {esc(out['detail'])}"
+        return (f"✅ Tercatat {esc(out['symbol'])} {'LONG' if out['long'] else 'SHORT'} "
+                f"entry {out['entry']:g} · SL {out['risk_pct']:.2f}% · {out['rr']:.2f}R")
+
+    def _openbot(self) -> str:
+        ledger = getattr(self._app, "openbot", None)
+        if ledger is None:
+            return "OpenBot is off (OPENBOT_ENABLED=false)."
+        try:
+            return f"<pre>{esc(ledger.card())}</pre>"
+        except Exception:
+            log.exception("openbot card failed")
+            return "⚠️ OpenBot card failed — see logs."
 
     def _v2(self) -> str:
         """The v2 forward paper run's card (see wolf.v2)."""

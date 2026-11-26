@@ -694,6 +694,17 @@ class V2Settings:
 
 
 @dataclass(frozen=True)
+class OpenBotSettings:
+    """🤖 OpenBot challenger — an outside LLM agent's calls, graded by Wolf
+    (wolf.openbot). Measurement only: its own ledger, nothing on the signal
+    path. ``thread_id`` empty → the system topic."""
+
+    enabled: bool = True
+    interval_min: int = 15
+    thread_id: str = ""
+
+
+@dataclass(frozen=True)
 class DebateRole:
     """One debate participant (bull / bear / arbiter) → a provider + model."""
 
@@ -1035,6 +1046,7 @@ class Settings:
     reports: ReportsSettings = field(default_factory=ReportsSettings)
     conviction: ConvictionSettings = field(default_factory=ConvictionSettings)
     v2: V2Settings = field(default_factory=V2Settings)
+    openbot: OpenBotSettings = field(default_factory=OpenBotSettings)
     flow: FlowSettings = field(default_factory=FlowSettings)
     onchain: OnChainSettings = field(default_factory=OnChainSettings)
     anomaly: AnomalySettings = field(default_factory=AnomalySettings)
@@ -1098,6 +1110,11 @@ class Settings:
         v2 = V2Settings(
             enabled=_env_bool("V2_ENABLED", True),
             interval_min=_env_int("V2_INTERVAL_MIN", 15),
+        )
+        openbot = OpenBotSettings(
+            enabled=_env_bool("OPENBOT_ENABLED", True),
+            interval_min=_env_int("OPENBOT_INTERVAL_MIN", 15),
+            thread_id=os.getenv("OPENBOT_THREAD_ID", "").strip(),
         )
         flow = FlowSettings(
             enabled=_env_bool("FLOW_ENABLED", False),
@@ -1285,6 +1302,7 @@ class Settings:
             reports=reports,
             conviction=conviction,
             v2=v2,
+            openbot=openbot,
             flow=flow,
             onchain=onchain,
             anomaly=anomaly,

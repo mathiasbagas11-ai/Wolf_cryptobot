@@ -390,4 +390,27 @@ def create_app(application: Optional[Application] = None) -> FastAPI:
             return {"recorded": False, "reason": "rejected_or_duplicate"}
         return {"recorded": True, "signal": signal.to_dict()}
 
+    @api.post("/openbot/signals", dependencies=[Depends(require_api_key)])
+    def openbot_submit(payload: dict = Body(...)) -> dict:
+        """One call from the OpenBot agent: symbol, direction, sl, tp, hours?, reason?.
+        Wolf sets the entry at the market price on arrival (see wolf.openbot)."""
+        ledger = getattr(app_obj, "openbot", None)
+        if ledger is None:
+            raise HTTPException(status_code=503, detail="OpenBot is off (OPENBOT_ENABLED=false)")
+        try:
+            return ledger.submit(symbol=payload["symbol"], direction=payload["direction"],
+                                 sl=payload["sl"], tp=payload["tp"], hours=payload.get("hours"),
+                                 reason=str(payload.get("reason", "")), source="api")
+        except KeyError as exc:
+            raise HTTPException(status_code=400, detail=f"missing field {exc}")
+
+    @api.get("/openbot", dependencies=[Depends(require_api_key)])
+    def openbot_view(format: str = "json"):
+        ledger = getattr(app_obj, "openbot", None)
+        if ledger is None:
+            raise HTTPException(status_code=503, detail="OpenBot is off (OPENBOT_ENABLED=false)")
+        if format == "text":
+            return PlainTextResponse(ledger.card())
+        return {"state": ledger.state(), "compare": ledger.compare()}
+
     return api
