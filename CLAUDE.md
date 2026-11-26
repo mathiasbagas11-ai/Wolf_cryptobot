@@ -307,14 +307,14 @@ day** on its pre-registered read (material; see Status). One added
 pre-registered ten-coin read (see Status). One added 2026-11-08:
 `sweep-session-context` — **REJECTED 2026-11-10** on its first read (gap
 −0.018R; see Status). One added 2026-11-13: `ichimoku-textbook-entries`
-(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` — **REJECTED 2026-11-25** (net +0.354R but random-day longs earn +0.194R; beats 90% against 98.33%). One added 2026-11-25: `breakout-vs-regime-hold` (OPEN, `/holdtest` read due; bar 98.75%).
+(OPEN; decided 11-16 on the corrected baseline: TK-cross SHORT passes offline, TK LONG and cloud breakout rejected; a forward paper read is offered, not built). One added 2026-11-22: `trend-and-relative-momentum` — **REJECTED the same day** (A beats 95% against a 97.5% bar; B 85% and negative 2024+). One added 2026-11-22: `trend-breakout-forward-paper` (OPEN, A run forward on paper with a 300-trade kill rule). Two added 2026-11-22: `average-down-half-gap` (**REJECTED the same day**, gap +0.013R at t 1.82 against t ≥ 2; tail 50% deeper) and `v2-persistence-label` (OPEN, read at 300 v2 trades). One added 2026-11-22: `daily-zone-fade` — **REJECTED the same day** (naive coverage 55% at ±0.25 ADR vs the video's ~88%; fade 66% win, −0.078R net, beats 89%). One added 2026-11-22: `trend-pullback-sweep` — **REJECTED 2026-11-25** (gross −0.009R, net −0.314R, beats 27%; see Status). One added 2026-11-25: `v2-rule-on-lower-timeframes` — **REJECTED 2026-11-25** (1h net −0.028, beats 92%; 15m net −0.269, beats 64%; no v3). One added 2026-11-25: `v2-rule-daily-spot-long` — **REJECTED 2026-11-25** (net +0.354R but random-day longs earn +0.194R; beats 90% against 98.33%). One added 2026-11-25: `breakout-vs-regime-hold` — **INCONCLUSIVE 2026-11-26** (Sharpe B +0.97 = H +0.97, share 48.4%; the breakout does not earn its complexity; H's +2354% is survivorship-flattered).
 
 Large rejections worth knowing without opening it: exit-geometry re-cut (was
 believed the biggest lever; measured across 6 variants, does not move),
 tighter entries for win rate, cost-model refinement, LLM in the signal path,
 and the 350-trade sample target.
 
-## Status — 2026-11-25, `/holdtest` built (breakout vs regime hold, read due); v2's rule on 15m / 1h / 1d REJECTED
+## Status — 2026-11-26, `/holdtest` read: breakout = regime hold (no difference); v2's rule on 15m / 1h / 1d REJECTED
 
 1224 tests green. Working tree clean.
 
@@ -774,6 +774,32 @@ noise against three multi-week reads, not a reversal. `sess:` gap −1.107
 (already rejected). History 628 rows. No `TELEGRAM_TOKEN_SHARED` in a 24h
 window.
 
+**`/holdtest` read (2026-11-26, pre-registered) → no difference shown.**
+2019-07 → 2026-11, 2697 days:
+
+| | Sharpe | CAGR | total | max DD | in market |
+|---|---|---|---|---|---|
+| B breakout (416 trades) | +0.97 | +18.1% | +242% | 27.3% | 14% |
+| H regime hold | +0.97 | +54.2% | +2354% | 68.6% | 68% |
+| BTC buy&hold (context) | +0.68 | +25.1% | +424% | 76.6% | 100% |
+
+- Halves: B +1.49 / +0.36, H +1.19 / +0.70. Share 48.4%, so the
+  prediction held exactly. At equal Sharpe, B is a scaled-down H.
+- **Survivorship binds every H figure:** the ten coins are today's majors
+  (SOL, AVAX, DOGE…), so "hold the basket since 2019" uses hindsight, and
+  +2354% is not earnable. B shares the bias at lower exposure.
+- What the owner was told:
+  - the breakout does not earn its complexity;
+  - H's headline is inflated by coin choice, and its real cost is a 69%
+    drawdown;
+  - both Sharpes halved in the second half;
+  - real money stays paused.
+- Offered, not built: **BTC-only regime hold vs BTC buy-and-hold**.
+  - It is the one version with no survivorship, and the question a spot
+    holder actually has.
+  - Honest limit: ~7 years hold only a handful of regime switches, so it
+    can describe drawdown, but it can hardly prove anything.
+
 **`/holdtest` built (2026-11-25, "gas tes hold").** This is the question the
 1d read pointed at: does the breakout add anything over plain holding while
 BTC is above its 300-day mean? Built in `wolf/holdtest.py`.
@@ -805,7 +831,7 @@ BTC is above its 300-day mean? Built in `wolf/holdtest.py`.
   portfolio built another way.
 - Prediction, written before the read: no difference shown. H will likely
   show the higher total and the deeper drawdown. Registry
-  `breakout-vs-regime-hold`. **Read: `/holdtest` after the deploy.**
+  `breakout-vs-regime-hold`.
 
 **`/trendtest 1d` read (2026-11-25, pre-registered) → REJECTED; the
 timeframe question is closed.** Ten coins since 2018-09-09, spot, long only
